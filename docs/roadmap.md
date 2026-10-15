@@ -103,12 +103,16 @@
 
 ## M4 归类和看板
 
-### [~] M4-1 归类树、档号、条目、著录、定稿
+### [x] M4-1 归类树、档号、条目、著录、定稿（commit e32f44b）
 - **范围：** requirements 5.9 里不涉及文件的部分：节点（增删改移、编码和类型、按需加载）、档号和件号（含撞号规则、按新模板重新生成、空档号原因）、条目（增删改移、状态、著录校验、旧值规则、定稿和解锁、批量定稿）、`catalog-settings`；`catalog.changed` 事件（7）。删除条目、定稿前置里"≥ 1 页""全部页通过"先按"没有挂接行"处理（挂接在 M4-2）。
 - **完成标志：** API 测试覆盖条目状态表、档号生成和撞号、著录校验；截图脚本 `m3-catalog.mjs` 里不涉及挂接的部分通过（有挂接的步骤 M4-2 再跑）。
 - **前置：** M1-3（和 M2-1 并行）。
 - **先读：** requirements 3.6、5.9、7。
 
+- **结果：** 三项检查通过；API 测试 8 个（权限表、节点、条目状态表 8 × 3、定稿和批量定稿、档号生成/撞号含分档和互换/缺级、著录校验 17 例和旧值规则）+ 分档分配单元测试 1 个。正式的 `m3-catalog.mjs` 因为要先建文件夹、上传（M2-1）在准备数据时全部失败；用不涉及文件的脚本变体验证了 21 张（树、表单校验、400 定位、旧值、定稿只读、解锁、改编码、撞号、同步、批量定稿、节点操作、重连、事件合并、顶层条目、移动、换项目确认、虚拟滚动 1200 条）全部通过。这次运行往 DEMO-A 写了著录项，并把 demo_cataloger 加进了 DEMO-A 的授权。
+- **自定细节：** 新的咨询锁类别 **6005（档号）**：共享归类锁下写档号（新建、移动、改件号）先按（项目, 档号）拿 `pg_advisory_xact_lock(6005, …)` 再查占用，后到的等前一个提交，不会撞 `ux_archive_items_no`（排在节点行、条目行之后，每个事务最多一个；批量重算拿归类树排他锁，不用它）；批量重算在应用里分档，先把"旧号正好是别人新号"的置空，再一条 `UPDATE … FROM unnest`；审计按条批量写；件号到 999999999 之后 409 `invalid_state`。条目列表 limit 默认 500（1–2000），cursor `<件号>_<id>`；删除可带 `?row_version=`。
+- **临时处理（M4-2 替换）：** 有页的条目删除返回 409 `invalid_state`（`TODO(M4-2)`）；新建条目带非空 `file_ids` 返回 400。
+- **须知（给 M4-2）：** 锁顺序 `project.LockCatalogTree(ctx, tx, pid, false)` → 分配件号时锁节点行（`lockCategories`）→ 条目行（`lockItem`、`lockItems`，`FOR NO KEY UPDATE`，id 升序）→ 之后才拿文件树锁和 files 行；锁住后依次查 已删除 404 → 状态（`errLockedEdit`）→ `row_version`（`staleVersion`）。定稿判断 `item_state.go` 的 `lockBlocker`，页数和审核状态来自 `itemPageStats`（读 `archive_item_files`、`folder_files`，不锁文件），挂接做好后不用改。档号：单个 `assignArchiveNo`（撞号留空、返回撞了谁），子树 `renumberSubtree`（要排他锁），空档号原因 `emptyReason`。`readItem`、`itemPages` 已能读页（文件名、路径、版本、"定稿后有新版本"），`page_counts`、`locked_at` 已算好。测试里的 `addPage` 直接写库造页，M4-2 后改走 `PUT /files`。
 ### [ ] M4-2 挂接、页序、归类信息、看板
 - **范围：** requirements 5.9 的"挂接"（PUT files、新建条目带 file_ids、删除条目一并移出、日志、reorder 审计）、"归类信息"（placements、`files/{fid}/catalog`）、定稿前置里和页相关的条件、5.10 看板。
 - **完成标志：** API 测试覆盖挂接的主要错误码；**并发**：两个条目抢同一个文件只有一个成功、审核和挂接同时进行不互相等（加锁顺序见 3.6）；截图脚本 `m3-catalog.mjs`、`m3-workbench.mjs`、`m3-dashboard.mjs`、`m3-catalog-info.mjs`、`m3-catalog-settings.mjs` 通过。
