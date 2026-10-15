@@ -191,10 +191,14 @@
   - **会话：** 上传队列、取图和页面共用 `proxy` 的同一个 `Jar` 和 `addShellHeaders` 那套请求头，401、426 时暂停；`Proxy.Observe(func(req, status, body))` 能看到每个 api_fetch 的响应（M6-3 从 batch、snapshots 记来源，在 SetServer、退出、登录成功时清空）。
   - **能力开关：** 托盘统计在 `tray.go` 的 `lines()`；做完把自检的 `SmokeCapabilities` 里 UploadQueue、Images、CSP 改成 true。
   - **取图（M6-3）：** 建议在资产服务器上挂 `/shell/img/<cover|original>/<file_id>/<snapshot_id>`（和页面同源，不需要 CORS，CSP 用 `'self'`；图片和切块是完整响应，Windows 上整块缓冲也没关系）；`web/src/lib/image-url.ts` 已预留 `SHELL_IMAGE_BASE`，做完把 `client.ts` 的 `SHELL_IMAGE_PROTOCOL` 改成 true；**`spaHandler` 会把没扩展名的路径回退到 index.html，取图路径要在它之前处理**。
-### [~] M6-2 上传队列、热文件夹、重扫
+### [x] M6-2 上传队列、热文件夹、重扫（commit 8a0e78c）
 - **范围：** requirements 第 6 节的上传队列（本机库，纯 Go）、热文件夹（写完判定、忽略规则、同子文件夹串行、≤ 2 个并行、断网重试、401/426 暂停）、封面生成（Go 解码 JPEG、PNG、TIFF，长边 400 的 JPEG，方向用 `shared/imagehdr` 读，和 server 一致）、`files:check` 预检、`pick_and_enqueue_upload`、`pick_and_rescan` 和 `rescan:progress`、/scan 页的状态；`--smoke` 的 rescan 步骤。
 - **前置：** M6-1。
 
+- **结果：** 检查通过（含 `GOOS=windows go vet`、`go build`）、`npm run build`、`wails3 package`；客户端单元测试 8 个（自然顺序、忽略规则、写完判定、文件尾、重试间隔、multipart 顺序、封面 10 个样本、8 种方向）+ 集成测试 1 个（`DOCLITE_IT_SERVER=… go test ./internal/upload/ -run Integration`）；`--smoke` 19 步通过（rescan 一步 278 ms，v1→v2、轮次 1→2、自动分回、封面 included；不完整的文件被拒绝）。**热文件夹实测**（打包的客户端后台模式）：自然顺序入库、忽略隐藏/临时/符号链接、运行中新建子文件夹、两层子文件夹、多页 TIFF 永久失败、写了一半的等写完、杀掉重启自动恢复不重传、停掉 server 后退避重试恢复后按顺序入库；JPEG 压缩的 TIFF 不带封面，EXIF 方向 6 的封面方向正。没有抢焦点（自检和后台模式下进程是 UIElement）。依赖：`modernc.org/sqlite v1.59.0`（v1.60 要 Go 1.26）、`fsnotify v1.10.1`、`x/image v0.44.0`。
+- **结构：** `client/internal/upload/`（纯 Go，不依赖 Wails）：`store.go`（本机库 SQLite，按状态计数、按"服务器 + 目标 + 子路径"分组取自然顺序队首）、`engine.go`、`process.go`、`hotfolder.go`、`settle.go`、`cover.go`、`multipart.go`、`api.go`、`rescan.go`，`lock_*`（`upload-queue.lock`，flock/LockFileEx，一个数据目录一个进程）、`attr_*`（隐藏、系统属性，独占打开）；`client/internal/shell/{upload,hotfolder,rescan,upload_tray}.go`；`proxy/attach.go`（壳自己发的请求和页面共用 Jar、请求头）。
+- **遗留（Windows 上验证，M7）：** 独占打开的判断对扫描软件写入的影响；隐藏和系统属性；LockFileEx；fsnotify 的目录句柄对删除、改名的影响；对话框的文件类型筛选；中文用户名和长路径；托盘提示 127 字上限和菜单改文字后刷新。**其他：** macOS kqueue 每个文件一个句柄，几千个文件以上可能用完；426 暂停没实测；被拒绝的子文件夹不记账；换服务器后热文件夹最多 15 秒内停下；封面一次一张、解码内存上限 512 MiB；对话框相关的路径和托盘"暂停 / 继续"没有自动化测试。
+- **须知（给 M6-4）：** smoke 重扫件用 `DOCLITE_SMOKE_RESCAN_PATH`、`DOCLITE_SMOKE_RESCAN_FILE_ID`、`DOCLITE_SMOKE_RESCAN_PROJECT`、`DOCLITE_SMOKE_RESCAN_EXPECT=incomplete`（重扫件内容在项目里不能重复，可往 JPEG 里插 COM 注释区分；每跑一次 done 用掉一页已驳回的文件，「M2-7 重扫演示/盒 003/IMG_0001.png」已用掉）；不点界面跑热文件夹：在数据目录的 `upload-queue.db` 写入热文件夹配置（running=1）并放好 `cookies.json`、`settings.json`；删掉 `upload-queue.db` 就是重置队列。
 ### [~] M6-3 本机图片缓存、大图切块
 - **范围：** 取图协议（Wails 下的写法实现者定，页面里的地址形式随之改 `lib/image-url.ts`）：先查本机缓存，没有用预签名 URL 下载并存下；按 snapshot_id 存；LRU（默认 2 GB）；只认来源记录；`cache_*`；大图切块 `prepare_tiles`（DZI 512、重叠 1，转正后原尺寸，JPEG 质量 90 / 1 位 PNG）；`--smoke` 的 img、img_cache、tiles、viewer 步骤。
 - **前置：** M6-1（和 M6-2 并行）。
