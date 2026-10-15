@@ -186,3 +186,21 @@ func (s *Service) LockForReuse(ctx context.Context, tx pgx.Tx, profileID uuid.UU
 	}
 	return nil
 }
+
+// PresignDownload 给导出物生成下载地址（requirements 5.11"下载"）：按存储的 public_endpoint 签，签名时间按天取整
+// （UTC+8），有效期按这个存储的 url_expire_hours，带 response-content-disposition（disposition 为空时不带）。
+// 存储已停用或不存在 409 `storage_unavailable`；密钥解不开 500 `secret_unreadable`。
+func (s *Service) PresignDownload(ctx context.Context, profileID uuid.UUID, key, disposition string) (s3.Presigned, error) {
+	r, err := getRow(ctx, s.pool, profileID)
+	if err != nil {
+		return s3.Presigned{}, err
+	}
+	if r == nil || r.Status == StatusDisabled {
+		return s3.Presigned{}, httpx.Conflict(CodeStorageUnavailable, "导出物所在的存储已停用，不能下载")
+	}
+	secret, err := openSecret(s.mk, r.ID, r.SecretKeyEnc)
+	if err != nil {
+		return s3.Presigned{}, errSecretUnreadable(r, err)
+	}
+	return s3.PresignGetWith(s3Config(r, secret), key, r.URLExpireHours, s.now(), s3.PresignOptions{ContentDisposition: disposition})
+}

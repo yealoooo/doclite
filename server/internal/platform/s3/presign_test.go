@@ -57,6 +57,17 @@ func TestPresignGet(t *testing.T) {
 	if p5, _ := PresignGet(other, "doclite/WS2025/0199c3/v1.jpg", 24, now); p5.URL == p.URL {
 		t.Fatal("换了 secret_key，签名没变")
 	}
+	// 带 response-content-disposition：参数在 URL 里（空格编码成 %20），算进签名。
+	disp := `attachment; filename="WS_export_20261016.zip"; filename*=UTF-8''WS_%E5%85%A8%E9%83%A8_20261016.zip`
+	pd, err := PresignGetWith(cfg, "doclite/WS2025/0199c3/v1.jpg", 24, now, PresignOptions{ContentDisposition: disp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ud, _ := url.Parse(pd.URL)
+	if ud.Query().Get("response-content-disposition") != disp || strings.Contains(ud.RawQuery, "+") ||
+		ud.Query().Get("X-Amz-Signature") == q.Get("X-Amz-Signature") {
+		t.Fatalf("带 content-disposition 的 URL：%s", pd.URL)
+	}
 	// 虚拟主机方式；key 里的特殊字符按 S3 的规则编码。
 	cfg.ForcePathStyle = false
 	cfg.PublicEndpoint = ""

@@ -13,7 +13,7 @@ import (
 )
 
 // 清单.csv：每页一行，是每页能反查的依据。UTF-8 带 BOM、CRLF 换行。
-var manifestHeader = []string{"档号", "页号", "zip 内文件名", "file_id", "snapshot_id", "版本", "sha256", "原文件名", "审核状态"}
+var manifestHeader = []string{"档号", "页号", "zip 内文件名", "file_id", "snapshot_id", "版本号", "sha256", "原文件名", "审核状态"}
 
 func (g *generator) writeManifest() error {
 	fw, err := g.create(manifestName)

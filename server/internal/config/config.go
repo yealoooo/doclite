@@ -25,6 +25,11 @@ const (
 	DefaultAdminName       = "系统管理员"
 	DefaultMaxUploadBytes  = 512 << 20
 	DefaultMaxImagePixels  = 300_000_000
+
+	DefaultJobConcurrency      = 2
+	DefaultJobHeartbeatSecs    = 10
+	DefaultJobRetryBackoffSecs = 30
+	DefaultExportCleanupSecs   = 600
 )
 
 // Config 是 server 的全部配置。
@@ -56,6 +61,15 @@ type Config struct {
 	MaxUploadBytes int64
 	// MaxImagePixels 是原图像素总数的上限（MAX_IMAGE_PIXELS，默认 3 亿），超过 400 invalid_image。
 	MaxImagePixels int64
+	// JobConcurrency 是后台任务同时最多执行几个（JOB_CONCURRENCY，0–16，默认 2；0 表示这个进程不执行后台任务，
+	// 也不做导出物的到期清理）。
+	JobConcurrency int
+	// JobHeartbeat 是后台任务的心跳间隔（JOB_HEARTBEAT_SECS，1–300 秒，默认 10）。
+	JobHeartbeat time.Duration
+	// JobRetryBackoff 是第一次重试前等多久（JOB_RETRY_BACKOFF_SECS，1–3600 秒，默认 30），之后每次 × 4，最多 1 小时。
+	JobRetryBackoff time.Duration
+	// ExportCleanupInterval 是导出物到期清理的间隔（EXPORT_CLEANUP_INTERVAL_SECS，10–86400 秒，默认 600）。
+	ExportCleanupInterval time.Duration
 }
 
 // InitAdmin 是初始管理员。
@@ -179,6 +193,22 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 		return nil, err
 	}
 	if c.MaxImagePixels, err = int64InRange("MAX_IMAGE_PIXELS", get("MAX_IMAGE_PIXELS"), DefaultMaxImagePixels, 1, 1<<40); err != nil {
+		return nil, err
+	}
+	if c.JobConcurrency, err = intInRange("JOB_CONCURRENCY", get("JOB_CONCURRENCY"), DefaultJobConcurrency, 0, 16); err != nil {
+		return nil, err
+	}
+	secs := func(key string, def, min, max int) (time.Duration, error) {
+		n, err := intInRange(key, get(key), def, min, max)
+		return time.Duration(n) * time.Second, err
+	}
+	if c.JobHeartbeat, err = secs("JOB_HEARTBEAT_SECS", DefaultJobHeartbeatSecs, 1, 300); err != nil {
+		return nil, err
+	}
+	if c.JobRetryBackoff, err = secs("JOB_RETRY_BACKOFF_SECS", DefaultJobRetryBackoffSecs, 1, 3600); err != nil {
+		return nil, err
+	}
+	if c.ExportCleanupInterval, err = secs("EXPORT_CLEANUP_INTERVAL_SECS", DefaultExportCleanupSecs, 10, 86400); err != nil {
 		return nil, err
 	}
 	return c, nil

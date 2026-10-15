@@ -315,7 +315,7 @@ func checkPublicEndpoint(ctx context.Context, cfg Config, public, pathPrefix str
 	out := &PublicCheck{}
 	defer func() { out.ElapsedMS = time.Since(start).Milliseconds() }()
 	key := pathPrefix + probeDir + randomName() + ".txt"
-	p, err := presign(public, cfg, key, time.Now().UTC(), 5*time.Minute)
+	p, err := presign(public, cfg, key, time.Now().UTC(), 5*time.Minute, PresignOptions{})
 	if err != nil {
 		out.Result, out.Message = PublicRejected, "public_endpoint "+public+" 不能用来签名："+err.Error()
 		return out

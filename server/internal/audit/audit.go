@@ -28,6 +28,8 @@ const (
 	TargetArchiveCategory = "archive_category"
 	TargetArchiveItem     = "archive_item"
 	TargetFolder          = "folder"
+	// M5-2：导出任务（create、cancel、download）。
+	TargetExportTask = "export_task"
 )
 
 // Entry 是一条审计记录。

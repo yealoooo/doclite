@@ -62,11 +62,23 @@ func newSigner() *v4.Signer {
 // PresignGet 给 key 生成预签名的 GET URL：按 cfg 的 public_endpoint 签，签名时间 SignTime(now)，
 // 有效期 PresignExpiry(urlExpireHours)。只做本地计算，不访问存储。
 func PresignGet(cfg Config, key string, urlExpireHours int, now time.Time) (Presigned, error) {
-	return presign(cfg.publicEndpoint(), cfg, key, SignTime(now), PresignExpiry(urlExpireHours))
+	return presign(cfg.publicEndpoint(), cfg, key, SignTime(now), PresignExpiry(urlExpireHours), PresignOptions{})
+}
+
+// PresignOptions 是预签名 GET 的可选项。
+type PresignOptions struct {
+	// ContentDisposition 不为空时加查询参数 response-content-disposition：S3 按它返回 Content-Disposition 响应头
+	// （下载导出物时浏览器用它当文件名）。这个参数算在签名里，改了签名就不对。
+	ContentDisposition string
+}
+
+// PresignGetWith 同 [PresignGet]，另外可以带 [PresignOptions]。
+func PresignGetWith(cfg Config, key string, urlExpireHours int, now time.Time, opts PresignOptions) (Presigned, error) {
+	return presign(cfg.publicEndpoint(), cfg, key, SignTime(now), PresignExpiry(urlExpireHours), opts)
 }
 
 // presign 按 endpoint 签一个 GET。
-func presign(endpoint string, cfg Config, key string, signTime time.Time, expiry time.Duration) (Presigned, error) {
+func presign(endpoint string, cfg Config, key string, signTime time.Time, expiry time.Duration, opts PresignOptions) (Presigned, error) {
 	if key == "" {
 		return Presigned{}, fmt.Errorf("s3: 预签名的 key 不能为空")
 	}
@@ -80,6 +92,9 @@ func presign(endpoint string, cfg Config, key string, signTime time.Time, expiry
 	}
 	q := u.Query()
 	q.Set("X-Amz-Expires", strconv.FormatInt(int64(expiry/time.Second), 10))
+	if opts.ContentDisposition != "" {
+		q.Set("response-content-disposition", opts.ContentDisposition)
+	}
 	u.RawQuery = q.Encode()
 	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
 	if err != nil {

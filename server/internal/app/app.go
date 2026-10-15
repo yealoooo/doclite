@@ -15,10 +15,12 @@ import (
 	"doclite/server/internal/auth"
 	"doclite/server/internal/catalog"
 	"doclite/server/internal/config"
+	"doclite/server/internal/export"
 	"doclite/server/internal/file"
 	"doclite/server/internal/folder"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/jobs"
 	"doclite/server/internal/project"
 	"doclite/server/internal/review"
 	"doclite/server/internal/role"
@@ -41,8 +43,15 @@ type Options struct {
 	MasterKey config.MasterKey
 	// Stream 是实时通道的保活、复核间隔；零值用默认的 15 秒、60 秒（测试里调短）。
 	Stream project.StreamOptions
-	// Upload 是上传的配置（TMP_DIR、MAX_UPLOAD_BYTES、MAX_IMAGE_PIXELS）；零值用默认值。
+	// Upload 是上传的配置（TMP_DIR、MAX_UPLOAD_BYTES、MAX_IMAGE_PIXELS）；零值用默认值。导出的临时目录也在 TMP_DIR 下。
 	Upload file.Options
+	// Jobs 是后台任务执行器的配置（JOB_CONCURRENCY、JOB_HEARTBEAT_SECS、JOB_RETRY_BACKOFF_SECS）。Concurrency 为 0 时
+	// StartBackground 什么都不启动（测试默认如此，要执行导出的测试自己设）。
+	Jobs jobs.Options
+	// ExportCleanupInterval 是导出物到期清理的间隔（EXPORT_CLEANUP_INTERVAL_SECS）；零值 10 分钟。
+	ExportCleanupInterval time.Duration
+	// ExportPartSize 是导出物分片上传每片的大小，只给测试调小；零值按导出物的预计大小算（至少 8 MiB）。
+	ExportPartSize int64
 }
 
 // App 是组装好的 server。
@@ -62,6 +71,13 @@ type App struct {
 	Files   *file.Service
 	// Reviews 是审核分配、审核、重扫（M3-1）。
 	Reviews *review.Service
+	// Exports 是导出（M5-2）；Jobs 是后台任务执行器（导出在里面执行）。
+	Exports *export.Service
+	Jobs    *jobs.Executor
+
+	cleanupEvery time.Duration
+	stopCleanup  context.CancelFunc
+	cleanupDone  chan struct{}
 }
 
 // New 组装各模块。数据库迁移要在这之前执行（Run 里先迁移）。
@@ -85,6 +101,11 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	folderSvc := folder.NewService(pool, bus, authSvc, storageSvc)
 	fileSvc := file.NewService(pool, bus, authSvc, storageSvc, folderSvc, opts.Upload)
 	reviewSvc := review.NewService(pool, bus, authSvc, storageSvc, folderSvc, fileSvc)
+	executor := jobs.New(pool, opts.Jobs, log)
+	exportSvc := export.NewService(pool, bus, storageSvc, executor, export.Options{TmpDir: opts.Upload.TmpDir, PartSize: opts.ExportPartSize}, log)
+	executor.Register(export.JobType, exportSvc.JobHandler())
+	// 导出的临时目录只有拿到单实例锁的进程才能清（别的进程可能正在用）。
+	executor.OnStart(func() { export.SweepTmp(opts.Upload.TmpDir, log) })
 
 	gate := auth.NewGate(authSvc)
 	api := httpx.NewRouter()
@@ -98,6 +119,7 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	folder.NewHandler(folderSvc).Routes(api, gate)
 	file.NewHandler(fileSvc).Routes(api, gate)
 	review.NewHandler(reviewSvc).Routes(api, gate)
+	export.NewHandler(exportSvc).Routes(api, gate)
 
 	// /api 的最外层是客户端版本检查（先于鉴权）；/api 以外是网页。
 	apiHandler := auth.ClientVersionCheck(opts.ClientVersions)(api)
@@ -110,19 +132,65 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 		root.Handle("/", http.NotFoundHandler())
 	}
 
+	cleanupEvery := opts.ExportCleanupInterval
+	if cleanupEvery <= 0 {
+		cleanupEvery = 10 * time.Minute
+	}
 	return &App{
-		log:      log,
-		handler:  httpx.Logging(log)(root),
-		Auth:     authSvc,
-		Users:    userSvc,
-		Roles:    roleSvc,
-		Projects: projectSvc,
-		Storage:  storageSvc,
-		Events:   bus,
-		Folders:  folderSvc,
-		Files:    fileSvc,
-		Reviews:  reviewSvc,
+		log:          log,
+		handler:      httpx.Logging(log)(root),
+		Auth:         authSvc,
+		Users:        userSvc,
+		Roles:        roleSvc,
+		Projects:     projectSvc,
+		Storage:      storageSvc,
+		Events:       bus,
+		Folders:      folderSvc,
+		Files:        fileSvc,
+		Reviews:      reviewSvc,
+		Exports:      exportSvc,
+		Jobs:         executor,
+		cleanupEvery: cleanupEvery,
 	}, nil
+}
+
+// StartBackground 启动后台任务执行器（拿单实例锁 → 清导出的临时目录 → 回收上次执行中的）和导出物的到期清理。
+// JOB_CONCURRENCY 为 0 时都不启动（导出一直排队，过期的导出物也不删）；同一个库上另一个 server 进程拿着锁时也不启动
+// （打一条 warn），HTTP 照常，下载和查询不受影响。
+func (a *App) StartBackground(ctx context.Context) error {
+	if !a.Jobs.Enabled() {
+		a.log.Warn("JOB_CONCURRENCY=0：这个进程不执行后台任务（导出会一直排队），也不做导出物的到期清理")
+		return nil
+	}
+	if err := a.Jobs.Start(ctx); err != nil {
+		if errors.Is(err, jobs.ErrBusy) {
+			a.log.Warn("另一个 server 进程正在执行后台任务：这个进程不执行导出、不做到期清理（HTTP 照常）")
+			return nil
+		}
+		return err
+	}
+	cctx, cancel := context.WithCancel(context.Background())
+	a.stopCleanup = cancel
+	a.cleanupDone = make(chan struct{})
+	go func() {
+		defer close(a.cleanupDone)
+		a.Exports.RunCleanup(cctx, a.cleanupEvery)
+	}()
+	return nil
+}
+
+// StopBackground 优雅退出后台任务：不再领取，执行中的导出停下、放回队列（不算一次尝试）；停止到期清理。最多等到 ctx
+// 结束。
+func (a *App) StopBackground(ctx context.Context) {
+	a.Jobs.Stop(ctx)
+	if a.stopCleanup != nil {
+		a.stopCleanup()
+		select {
+		case <-a.cleanupDone:
+		case <-ctx.Done():
+		}
+		a.stopCleanup = nil
+	}
 }
 
 // Handler 是整个 server 的 http.Handler（含请求日志）。
