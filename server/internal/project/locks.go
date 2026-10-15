@@ -1,0 +1,51 @@
+package project
+
+import (
+	"context"
+	"hash/fnv"
+
+	"github.com/google/uuid"
+
+	"doclite/server/internal/platform/db"
+)
+
+// 项目的两把树锁（requirements 3.6），用 PostgreSQL 的事务级咨询锁实现：事务结束自动释放，死锁由 PG 检测。
+//
+//   - 文件树锁（每项目一把）：共享 = 建或改名文件夹、上传、复制、移动文件、重扫、删单个文件、审核写、改项目；
+//     排他 = 移动文件夹、删子树、删项目；
+//   - 归类树锁（每项目一把）：共享 = 建或改名节点、条目增改移删和状态、挂接、项目改名；
+//     排他 = 移动或删节点子树、改 category_code/type、批量重算档号。
+//   - 顺序：归类树锁 → 节点行 → 条目行（id 升序）→ 文件树锁 → 项目行 → files 行（id 升序）→ folders 行
+//     → 存储配置行 → 内容锁。审核不拿归类锁；两棵树都要的操作先拿归类锁和归类行，最后拿文件树锁。
+//
+// 咨询锁的键是 (类别, 项目 id 的 32 位哈希)：不同项目哈希相同只会多等一会儿，不影响正确性。
+// 类别 6000 已被迁移执行器（6000,1）和测试的模板库（6000,2）用了。
+const (
+	lockClassFileTree    = 6001
+	lockClassCatalogTree = 6002
+)
+
+func lockKey(projectID uuid.UUID) int32 {
+	h := fnv.New32a()
+	h.Write(projectID[:])
+	return int32(h.Sum32())
+}
+
+func advisoryLock(ctx context.Context, tx db.Querier, class int32, projectID uuid.UUID, exclusive bool) error {
+	fn := "pg_advisory_xact_lock_shared"
+	if exclusive {
+		fn = "pg_advisory_xact_lock"
+	}
+	_, err := tx.Exec(ctx, `SELECT `+fn+`($1::int4, $2::int4)`, class, lockKey(projectID))
+	return err
+}
+
+// LockFileTree 在事务 tx 里拿项目的文件树锁（exclusive 为 false 是共享锁），到事务结束为止。
+func LockFileTree(ctx context.Context, tx db.Querier, projectID uuid.UUID, exclusive bool) error {
+	return advisoryLock(ctx, tx, lockClassFileTree, projectID, exclusive)
+}
+
+// LockCatalogTree 在事务 tx 里拿项目的归类树锁（exclusive 为 false 是共享锁），到事务结束为止。
+func LockCatalogTree(ctx context.Context, tx db.Querier, projectID uuid.UUID, exclusive bool) error {
+	return advisoryLock(ctx, tx, lockClassCatalogTree, projectID, exclusive)
+}

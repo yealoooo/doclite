@@ -17,7 +17,8 @@ import (
 
 const shutdownTimeout = 15 * time.Second
 
-// Run 启动 server：连数据库 → 执行迁移 → 建初始管理员 → 监听 HTTP；ctx 取消（收到 SIGINT、SIGTERM）后优雅退出。
+// Run 启动 server：连数据库 → 执行迁移 → 建初始管理员 → 登记默认存储（库里没有存储配置时按 S3_*）→ 监听 HTTP；
+// ctx 取消（收到 SIGINT、SIGTERM）后优雅退出（先结束 SSE 连接）。
 func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	log.Info("doclite server 启动", "version", Version, "listen", cfg.ListenAddr,
 		"master_key_id", cfg.MasterKey.KeyID(), "session_ttl", cfg.SessionTTL.String())
@@ -41,11 +42,15 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		CookieSecure:   cfg.CookieSecure,
 		ClientVersions: cfg.ClientVersions,
 		WebDir:         cfg.WebDir,
+		MasterKey:      cfg.MasterKey,
 	}, log)
 	if err != nil {
 		return err
 	}
 	if err := a.EnsureInitialAdmin(ctx, cfg.InitAdmin); err != nil {
+		return err
+	}
+	if err := a.EnsureInitialStorage(ctx, cfg.InitialStorage); err != nil {
 		return err
 	}
 
@@ -57,10 +62,6 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 			log.Warn("WEB_DIR 目录不存在，网页暂时打不开（build 之后不用重启）", "web_dir", cfg.WebDir)
 		}
 	}
-	if cfg.InitialStorage == nil {
-		log.Debug("没有设置 S3_*（首次启动登记默认存储在 M1-3）")
-	}
-
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           a.Handler(),
@@ -68,6 +69,8 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		IdleTimeout:       120 * time.Second,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
+	// 退出时先结束 SSE 连接（它们不会自己结束，Shutdown 会一直等到超时）。
+	srv.RegisterOnShutdown(a.Events.Close)
 	ln, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("监听 %s 失败：%w", cfg.ListenAddr, err)

@@ -57,6 +57,18 @@ func ReadJSON(r *http.Request, dst any) error {
 	return nil
 }
 
+// ReadOptionalJSON 同 [ReadJSON]，但请求体可以没有（前端不带请求体的 POST：没有 Content-Type、长度为 0）：
+// 这时返回 false，dst 不变。有请求体时规则和 ReadJSON 一样。
+func ReadOptionalJSON(r *http.Request, dst any) (bool, error) {
+	if r.ContentLength == 0 && r.Header.Get("Content-Type") == "" {
+		return false, nil
+	}
+	if err := ReadJSON(r, dst); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func describeJSONError(err error) string {
 	var typeErr *json.UnmarshalTypeError
 	if errors.As(err, &typeErr) {

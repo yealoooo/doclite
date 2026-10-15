@@ -20,8 +20,10 @@ import (
 
 // target_type 的取值。
 const (
-	TargetUser = "user"
-	TargetRole = "role"
+	TargetUser           = "user"
+	TargetRole           = "role"
+	TargetProject        = "project"
+	TargetStorageProfile = "storage_profile"
 )
 
 // Entry 是一条审计记录。

@@ -1,4 +1,4 @@
-// Package auth 是登录、会话、菜单权限（以后还有项目授权检查）。
+// Package auth 是登录、会话、菜单权限、项目授权检查（project.go）。
 //
 // 会话规则（requirements 5.1）：
 //   - HttpOnly Cookie `doclite_session`（SameSite=Lax、Path=/，Secure 可配），值是 32 字节随机数的 base64url；

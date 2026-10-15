@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -13,9 +14,11 @@ import (
 
 	"doclite/server/internal/auth"
 	"doclite/server/internal/config"
+	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
 	"doclite/server/internal/project"
 	"doclite/server/internal/role"
+	"doclite/server/internal/storage"
 	"doclite/server/internal/user"
 )
 
@@ -30,6 +33,10 @@ type Options struct {
 	ClientVersions config.ClientVersions
 	// WebDir 是网页构建产物目录；为空时不托管网页（`/api` 以外的路径一律 404）。
 	WebDir string
+	// MasterKey 是主密钥（加密存储配置的 secret_key），必填。
+	MasterKey config.MasterKey
+	// Stream 是实时通道的保活、复核间隔；零值用默认的 15 秒、60 秒（测试里调短）。
+	Stream project.StreamOptions
 }
 
 // App 是组装好的 server。
@@ -41,10 +48,16 @@ type App struct {
 	Users    *user.Service
 	Roles    *role.Service
 	Projects *project.Service
+	Storage  *storage.Service
+	// Events 是项目的实时事件总线（server 退出时 Close，结束所有 SSE 连接）。
+	Events *events.Bus
 }
 
 // New 组装各模块。数据库迁移要在这之前执行（Run 里先迁移）。
 func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
+	if opts.MasterKey == (config.MasterKey{}) {
+		return nil, errors.New("app: 没有设置主密钥（MASTER_KEY）")
+	}
 	authSvc, err := auth.NewService(pool, auth.Options{
 		SessionTTL:   opts.SessionTTL,
 		CookieSecure: opts.CookieSecure,
@@ -55,7 +68,9 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	}
 	roleSvc := role.NewService(pool, authSvc)
 	userSvc := user.NewService(pool, authSvc, roleSvc)
-	projectSvc := project.NewService(pool)
+	bus := events.NewBus()
+	projectSvc := project.NewService(pool, bus, authSvc)
+	storageSvc := storage.NewService(pool, opts.MasterKey)
 
 	gate := auth.NewGate(authSvc)
 	api := httpx.NewRouter()
@@ -63,7 +78,8 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	auth.NewHandler(authSvc).Routes(api, gate)
 	user.NewHandler(userSvc).Routes(api, gate)
 	role.NewHandler(roleSvc).Routes(api, gate)
-	project.NewHandler(projectSvc).Routes(api, gate)
+	project.NewHandler(projectSvc, opts.Stream).Routes(api, gate)
+	storage.NewHandler(storageSvc).Routes(api, gate)
 
 	// /api 的最外层是客户端版本检查（先于鉴权）；/api 以外是网页。
 	apiHandler := auth.ClientVersionCheck(opts.ClientVersions)(api)
@@ -83,6 +99,8 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 		Users:    userSvc,
 		Roles:    roleSvc,
 		Projects: projectSvc,
+		Storage:  storageSvc,
+		Events:   bus,
 	}, nil
 }
 
@@ -95,6 +113,11 @@ func (a *App) EnsureInitialAdmin(ctx context.Context, admin *config.InitAdmin) e
 		return a.Users.EnsureInitialAdmin(ctx, "", "", "", false, a.log)
 	}
 	return a.Users.EnsureInitialAdmin(ctx, admin.Username, admin.DisplayName, admin.Password, true, a.log)
+}
+
+// EnsureInitialStorage 首次启动时按 S3_* 登记默认存储（库里没有存储配置时）。
+func (a *App) EnsureInitialStorage(ctx context.Context, init *config.InitialStorage) error {
+	return a.Storage.EnsureInitial(ctx, init, a.log)
 }
 
 type healthResponse struct {

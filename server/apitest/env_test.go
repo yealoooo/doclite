@@ -22,6 +22,7 @@ package apitest
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -215,7 +216,7 @@ func NewEnv(t *testing.T, opts ...func(*app.Options)) *Env {
 	if _, err := db.Migrate(ctx, pool, migrations.FS, nil); err != nil {
 		t.Fatal(err)
 	}
-	options := app.Options{SessionTTL: 12 * time.Hour, Password: fastPassword}
+	options := app.Options{SessionTTL: 12 * time.Hour, Password: fastPassword, MasterKey: testMasterKey()}
 	for _, o := range opts {
 		o(&options)
 	}
@@ -231,6 +232,19 @@ func NewEnv(t *testing.T, opts ...func(*app.Options)) *Env {
 	srv := httptest.NewServer(a.Handler())
 	t.Cleanup(srv.Close)
 	return &Env{t: t, URL: srv.URL, Pool: pool, App: a, personas: map[string]*persona{}}
+}
+
+// testMasterKey 是每个测试自己的随机主密钥。
+func testMasterKey() config.MasterKey {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	mk, err := config.ParseMasterKey(base64.StdEncoding.EncodeToString(b))
+	if err != nil {
+		panic(err)
+	}
+	return mk
 }
 
 // Exec 直接在测试库上执行 SQL（造数据、改时间）。

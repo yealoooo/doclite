@@ -21,7 +21,7 @@ const SessionCookie = "doclite_session"
 //
 // 没登录或会话失效 401 `unauthorized`；菜单不够 403 `forbidden`。菜单检查在解析参数之前
 // （requirements 第 4 节的检查顺序：菜单 403 → 项目 404/403 → 参数 400 → …）。
-// 项目授权（能不能进这个项目）由 M1-3 加在 handler 里。
+// 项目授权（能不能进这个项目）用 [Gate.InProject] 套在菜单检查外面，见 project.go。
 type Gate struct {
 	svc *Service
 }
