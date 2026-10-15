@@ -9,7 +9,7 @@ import (
 	"doclite/server/internal/platform/db"
 )
 
-// 条目的 SQL。条目的页（archive_item_files）在 M4-2 才有接口，这里只读。
+// 条目的 SQL。条目的页（archive_item_files）的写在 pages_store.go。
 
 // itemRow 是 archive_items 的一行（加上所在节点的 path_code）。
 type itemRow struct {

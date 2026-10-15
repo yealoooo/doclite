@@ -10,28 +10,33 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestPermsCatalog 是归类接口的菜单权限（解锁要 catalog 和 review_assign 两个都有）。
+// TestPermsCatalog 是归类接口的菜单权限（解锁要 catalog 和 review_assign 两个都有；归类信息、设置能进项目即可；
+// 看板要 dashboard）。
 func TestPermsCatalog(t *testing.T) {
 	t.Parallel()
 	env := NewEnv(t)
 	CheckPerms(t, env, `
-	                                                   admin  manager  cataloger  review_assign  catalog+review_assign  reviewer  none
-	GET    /api/projects/{pid}/catalog-settings          Y      Y         Y           Y               Y                    Y        Y
-	GET    /api/projects/{pid}/archive-categories        Y      Y         Y           -               Y                    -        -
-	POST   /api/projects/{pid}/archive-categories        Y      Y         Y           -               Y                    -        -
-	PATCH  /api/projects/{pid}/archive-categories/{id}   Y      Y         Y           -               Y                    -        -
-	DELETE /api/projects/{pid}/archive-categories/{id}   Y      Y         Y           -               Y                    -        -
-	GET    /api/archive-categories/{id}/items            Y      Y         Y           -               Y                    -        -
-	POST   /api/archive-categories/{id}/items            Y      Y         Y           -               Y                    -        -
-	GET    /api/archive-items/{id}                       Y      Y         Y           -               Y                    -        -
-	PATCH  /api/archive-items/{id}                       Y      Y         Y           -               Y                    -        -
-	DELETE /api/archive-items/{id}                       Y      Y         Y           -               Y                    -        -
-	POST   /api/archive-items/{id}/mark-done             Y      Y         Y           -               Y                    -        -
-	POST   /api/archive-items/{id}/back-to-draft         Y      Y         Y           -               Y                    -        -
-	POST   /api/archive-items/{id}/lock                  Y      Y         Y           -               Y                    -        -
-	POST   /api/archive-items/{id}/unlock                Y      Y         -           -               Y                    -        -
-	POST   /api/projects/{pid}/archive-items:lock        Y      Y         Y           -               Y                    -        -
-	POST   /api/projects/{pid}/archive-items:renumber    Y      Y         Y           -               Y                    -        -
+	                                                   admin  manager  cataloger  review_assign  catalog+review_assign  reviewer  dashboard  none
+	GET    /api/projects/{pid}/catalog-settings          Y      Y         Y           Y               Y                    Y        Y          Y
+	POST   /api/projects/{pid}/catalog-placements        Y      Y         Y           Y               Y                    Y        Y          Y
+	GET    /api/files/{fid}/catalog                      Y      Y         Y           Y               Y                    Y        Y          Y
+	GET    /api/projects/{pid}/catalog-summary           Y      Y         -           -               -                    -        Y          -
+	GET    /api/projects/{pid}/archive-categories        Y      Y         Y           -               Y                    -        -          -
+	POST   /api/projects/{pid}/archive-categories        Y      Y         Y           -               Y                    -        -          -
+	PATCH  /api/projects/{pid}/archive-categories/{id}   Y      Y         Y           -               Y                    -        -          -
+	DELETE /api/projects/{pid}/archive-categories/{id}   Y      Y         Y           -               Y                    -        -          -
+	GET    /api/archive-categories/{id}/items            Y      Y         Y           -               Y                    -        -          -
+	POST   /api/archive-categories/{id}/items            Y      Y         Y           -               Y                    -        -          -
+	GET    /api/archive-items/{id}                       Y      Y         Y           -               Y                    -        -          -
+	PATCH  /api/archive-items/{id}                       Y      Y         Y           -               Y                    -        -          -
+	DELETE /api/archive-items/{id}                       Y      Y         Y           -               Y                    -        -          -
+	PUT    /api/archive-items/{id}/files                 Y      Y         Y           -               Y                    -        -          -
+	POST   /api/archive-items/{id}/mark-done             Y      Y         Y           -               Y                    -        -          -
+	POST   /api/archive-items/{id}/back-to-draft         Y      Y         Y           -               Y                    -        -          -
+	POST   /api/archive-items/{id}/lock                  Y      Y         Y           -               Y                    -        -          -
+	POST   /api/archive-items/{id}/unlock                Y      Y         -           -               Y                    -        -          -
+	POST   /api/projects/{pid}/archive-items:lock        Y      Y         Y           -               Y                    -        -          -
+	POST   /api/projects/{pid}/archive-items:renumber    Y      Y         Y           -               Y                    -        -          -
 	`)
 
 	// 项目授权：有菜单但进不了项目 403（以资源 id 为参数的接口也一样），授权后放行。
@@ -169,15 +174,14 @@ func TestItemStatusTable(t *testing.T) {
 	other := c.mkCat(&ret, "org", "RSC", "人事处")
 	admin := c.admin
 
-	// newItem 造一个处在 status 的条目（定稿要有页、有档号、页都通过）。
+	// newItem 造一个处在 status 的条目，都有一页审核通过的（定稿要有页、有档号、页都通过）。
 	newItem := func(status string) itemView {
 		it := c.mkItem(org.ID, map[string]any{"title": "条目"})
-		if status == "draft" {
-			return it
+		c.addPage(it.ID, "approved")
+		if status != "draft" {
+			c.act(it.ID, "mark-done").Expect(200)
 		}
-		c.act(it.ID, "mark-done").Expect(200)
 		if status == "locked" {
-			c.addPage(it.ID, "approved")
 			c.act(it.ID, "lock").Expect(200)
 		}
 		return c.item(it.ID)
@@ -204,6 +208,11 @@ func TestItemStatusTable(t *testing.T) {
 			map[string]outcome{"draft": ok("draft"), "done": ok("done"), "locked": fail(409, "item_locked")}},
 		{"改件号", func(it itemView) *Response { return edit(it, map[string]any{"item_no": 100 + it.ItemNo}) },
 			map[string]outcome{"draft": ok("draft"), "done": ok("done"), "locked": fail(409, "item_locked")}},
+		{"改页序", func(it itemView) *Response {
+			// 前面插一页（挂上新文件，原来的页顺延）。
+			ids := append([]uuid.UUID{c.mkFile(uuid.Nil, "approved")}, it.pageIDs()...)
+			return admin.Put(filesPath(it.ID), map[string]any{"row_version": it.RowVersion, "file_ids": ids})
+		}, map[string]outcome{"draft": ok("draft"), "done": ok("done"), "locked": fail(409, "item_locked")}},
 		{"删除", func(it itemView) *Response {
 			return admin.Delete("/api/archive-items/" + it.ID.String() + "?row_version=" + strconv.Itoa(it.RowVersion))
 		}, map[string]outcome{"draft": {status: 204}, "done": {status: 204}, "locked": fail(409, "item_locked")}},
@@ -211,12 +220,7 @@ func TestItemStatusTable(t *testing.T) {
 			map[string]outcome{"draft": ok("done"), "done": fail(409, "invalid_state"), "locked": fail(409, "item_locked")}},
 		{"退回草稿", func(it itemView) *Response { return c.act(it.ID, "back-to-draft") },
 			map[string]outcome{"draft": fail(409, "invalid_state"), "done": ok("draft"), "locked": fail(409, "item_locked")}},
-		{"定稿", func(it itemView) *Response {
-			if it.PageCount == 0 {
-				c.addPage(it.ID, "approved") // 定稿要有页（直接写库，不改 row_version）
-			}
-			return c.act(it.ID, "lock")
-		},
+		{"定稿", func(it itemView) *Response { return c.act(it.ID, "lock") },
 			map[string]outcome{"draft": fail(409, "invalid_state"), "done": ok("locked"), "locked": fail(409, "invalid_state")}},
 		{"解锁", func(it itemView) *Response { return c.act(it.ID, "unlock") },
 			map[string]outcome{"draft": fail(409, "invalid_state"), "done": fail(409, "invalid_state"), "locked": ok("done")}},
@@ -246,13 +250,8 @@ func TestItemStatusTable(t *testing.T) {
 			}
 		}
 	}
-	// M4-1 还没有挂接：有页的条目先不让删（409 invalid_state），M4-2 改成一并移出。
-	it := c.mkItem(org.ID, map[string]any{"title": "有页"})
-	c.addPage(it.ID, "approved")
-	admin.Delete("/api/archive-items/"+it.ID.String()).ExpectError(409, "invalid_state")
-
 	// row_version 过期 409 conflict（状态先于版本）；缺 row_version 400；没有变化的 PATCH 不加版本。
-	it = c.mkItem(org.ID, map[string]any{"title": "版本"})
+	it := c.mkItem(org.ID, map[string]any{"title": "版本"})
 	admin.Patch("/api/archive-items/"+it.ID.String(), map[string]any{"row_version": it.RowVersion + 1, "title": "x"}).ExpectError(409, "conflict")
 	admin.Post("/api/archive-items/"+it.ID.String()+"/mark-done", map[string]any{"row_version": 99}).ExpectError(409, "conflict")
 	admin.Post("/api/archive-items/"+it.ID.String()+"/unlock", map[string]any{"row_version": 99}).ExpectError(409, "invalid_state")

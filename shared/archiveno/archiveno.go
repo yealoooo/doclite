@@ -115,6 +115,38 @@ func invalidf(format string, args ...any) error {
 	return errors.New("档号模板不对：" + fmt.Sprintf(format, args...))
 }
 
+// debugQuote 引用模板片段：和 Rust 的 `format!("{s:?}")`（str 的 Debug）一样加双引号、转义 `\0 \t \r \n \\ \"`，
+// 其他控制字符写成 `\u{hex}`。前端（web/src/lib/catalog.ts 的 rustDebugStr）照这个写法在本地预览同样的说明，
+// 两边要一字不差。
+func debugQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case 0:
+			b.WriteString(`\0`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		default:
+			if unicode.IsControl(r) {
+				b.WriteString(`\u{` + strconv.FormatInt(int64(r), 16) + `}`)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
 // Parse 解析并校验模板，规则见包说明。不合规则返回的 error 写明是哪一条（server 按 400 invalid_input）。
 func Parse(source string) (*Template, error) {
 	if !utf8.ValidString(source) {
@@ -137,10 +169,10 @@ func Parse(source string) (*Template, error) {
 		case c == '{':
 			end := strings.IndexByte(rest, '}')
 			if end < 0 {
-				return nil, invalidf("%s 里的 { 没有对应的 }", rest)
+				return nil, invalidf("%s 里的 { 没有对应的 }", debugQuote(rest))
 			}
 			if strings.ContainsRune(rest[1:end], '{') {
-				return nil, invalidf("%s 里的 { 没有对应的 }", rest[:end+1])
+				return nil, invalidf("%s 里的 { 没有对应的 }", debugQuote(rest[:end+1]))
 			}
 			seg, err := parsePlaceholder(rest[1:end])
 			if err != nil {

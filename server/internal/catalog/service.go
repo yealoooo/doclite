@@ -1,12 +1,14 @@
-// Package catalog 是归类（requirements 5.9）：归类树（节点）、档号和件号、档案条目（著录、状态、定稿）、归类设置。
-// 挂接、页序、归类信息（placements）、看板在 M4-2。
+// Package catalog 是归类（requirements 5.9、5.10）：归类树（节点）、档号和件号、档案条目（著录、状态、定稿）、
+// 归类设置；挂接和页序（pages.go）、归类信息（placement.go）、项目看板（summary.go）。
 //
 // 加锁（requirements 3.6）：
-//   - 归类树锁（project.LockCatalogTree）共享：建节点、改名节点，条目的增删改移和状态动作、批量定稿；
+//   - 归类树锁（project.LockCatalogTree）共享：建节点、改名节点，条目的增删改移和状态动作、批量定稿、挂接；
 //     排他：移动或删除节点子树、改 category_code、category_type，按新模板重新生成档号；
 //   - 然后锁节点行（新建子节点锁父节点；新建条目、分配或改件号锁所在节点，移动条目锁目标节点；移动节点锁自己、
-//     原父节点、新父节点，按 id 升序），再锁条目行（按 id 升序），最后（共享锁下写档号时）拿档号的咨询锁
-//     （numbering.go 的 lockArchiveNo）。这里的操作都不拿文件树锁；审核不拿归类锁，归类也不等审核。
+//     原父节点、新父节点，按 id 升序），再锁条目行（按 id 升序），（共享锁下写档号时）拿档号的咨询锁
+//     （numbering.go 的 lockArchiveNo）；
+//   - 只有挂上、移出文件（PUT 页、带 file_ids 新建、删除有页的条目）在归类的锁和行之后再拿文件树锁（共享）和这些
+//     文件的 files 行（见 pages.go）。审核不拿归类锁、不锁条目；拿着文件树锁的事务从不等归类的锁和行，归类也不等审核。
 //
 // 检查顺序：菜单 403 → 项目 404/403 → 参数 400 → 资源 404 → 状态 409（item_locked / invalid_state）→
 // row_version 409 `conflict` → 著录 400 → 前置条件 409。

@@ -11,10 +11,12 @@ import (
 	"doclite/server/internal/platform/db"
 )
 
-// catalog 的 SQL：archive_categories、archive_items（以及 M4-2 的 archive_item_files）。
+// catalog 的 SQL：archive_categories、archive_items、archive_item_files（pages_store.go）。
 //
 // 跨模块的读（只读）：projects.settings（归类设置）；folder_files、folders、file_snapshots（条目的页：文件名、
-// 文件夹路径、审核状态、当前版本）；audit_logs 里 archive_item / lock 的时间（定稿时间）。
+// 文件夹路径、审核状态、当前版本；挂接时锁住 files 行之后重读；归类信息、看板）；audit_logs 里 archive_item / lock
+// 的时间（定稿时间）。
+// 跨模块的写：file_logs 经 file.WriteLogs，files 行锁经 file.LockFiles（挂接、移出）。
 // 跨模块的写：audit_logs 的批量插入（[insertAudits]，格式同 audit.Write，重算档号时一次写很多条）。
 
 // readSnapshot 在一个只读的 REPEATABLE READ 事务里执行 fn（列表、详情的几条查询看到同一个快照）。

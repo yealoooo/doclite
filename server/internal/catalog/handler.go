@@ -11,11 +11,17 @@ import (
 	"doclite/server/internal/platform/httpx"
 )
 
-// Handler 是归类的接口（M4-1；挂接、归类信息、看板在 M4-2）：
+// Handler 是归类的接口（M4-1 的归类树、条目、著录、定稿；M4-2 的挂接、归类信息、看板）：
 //
 // 能进项目即可：
 //
 //	GET    /api/projects/{pid}/catalog-settings                         → 200 SettingsResponse
+//	POST   /api/projects/{pid}/catalog-placements  {file_ids}           → 200 Placements（0–500 个）
+//	GET    /api/files/{fid}/catalog                                     → 200 FileCatalog
+//
+// dashboard：
+//
+//	GET    /api/projects/{pid}/catalog-summary?folder_id=               → 200 Summary
 //
 // catalog：
 //
@@ -25,10 +31,11 @@ import (
 //	                                                                    → 200 UpdatedCategory
 //	DELETE /api/projects/{pid}/archive-categories/{id}                  → 204
 //	GET    /api/archive-categories/{id}/items?limit=&cursor=            → 200 ItemList
-//	POST   /api/archive-categories/{id}/items  {title?, extra_fields?}  → 201 Item（可以没有请求体）
+//	POST   /api/archive-categories/{id}/items  {title?, extra_fields?, file_ids?} → 201 Item（可以没有请求体）
 //	GET    /api/archive-items/{id}                                      → 200 Item
 //	PATCH  /api/archive-items/{id}  {row_version, title?, extra_fields?, category_id?, item_no?} → 200 Item
-//	DELETE /api/archive-items/{id}?row_version=                         → 204
+//	DELETE /api/archive-items/{id}?row_version=                         → 204（有页时一并移出）
+//	PUT    /api/archive-items/{id}/files  {row_version, file_ids}       → 200 Item（整体替换页，页号 1..n）
 //	POST   /api/archive-items/{id}/mark-done | back-to-draft | lock  {row_version} → 200 Item
 //	POST   /api/projects/{pid}/archive-items:lock  {item_ids}           → 200 LockResult
 //	POST   /api/projects/{pid}/archive-items:renumber  {category_id?}   → 200 RenumberResult（可以没有请求体）
@@ -47,6 +54,9 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 func (h *Handler) Routes(r *httpx.Router, g *auth.Gate) {
 	inProject := auth.PathProject("pid")
 	r.Handle("GET /api/projects/{pid}/catalog-settings", g.InProject(g.Login(), inProject), h.settings)
+	r.Handle("POST /api/projects/{pid}/catalog-placements", g.InProject(g.Login(), inProject), h.placements)
+	r.Handle("GET /api/files/{fid}/catalog", g.InProject(g.Login(), h.fileProject), h.fileCatalog)
+	r.Handle("GET /api/projects/{pid}/catalog-summary", g.InProject(g.AnyMenu(auth.MenuDashboard), inProject), h.summary)
 
 	cat := g.AnyMenu(auth.MenuCatalog)
 	r.Handle("GET /api/projects/{pid}/archive-categories", g.InProject(cat, inProject), h.listCategories)
@@ -62,6 +72,7 @@ func (h *Handler) Routes(r *httpx.Router, g *auth.Gate) {
 	r.Handle("GET /api/archive-items/{id}", inItem, h.getItem)
 	r.Handle("PATCH /api/archive-items/{id}", inItem, h.updateItem)
 	r.Handle("DELETE /api/archive-items/{id}", inItem, h.deleteItem)
+	r.Handle("PUT /api/archive-items/{id}/files", inItem, h.putFiles)
 	r.Handle("POST /api/archive-items/{id}/mark-done", inItem, h.action(ActionMarkDone))
 	r.Handle("POST /api/archive-items/{id}/back-to-draft", inItem, h.action(ActionBackToDraft))
 	r.Handle("POST /api/archive-items/{id}/lock", inItem, h.action(ActionLock))
@@ -87,6 +98,14 @@ func (h *Handler) itemProject(r *http.Request) (uuid.UUID, error) {
 		return uuid.Nil, err
 	}
 	return h.svc.ProjectOfItem(r.Context(), id)
+}
+
+func (h *Handler) fileProject(r *http.Request) (uuid.UUID, error) {
+	id, err := httpx.PathUUID(r, "fid")
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return h.svc.ProjectOfFile(r.Context(), id)
 }
 
 func (h *Handler) settings(w http.ResponseWriter, r *http.Request) error {
@@ -219,12 +238,8 @@ func (h *Handler) createItem(w http.ResponseWriter, r *http.Request) error {
 	if _, err := httpx.ReadOptionalJSON(r, &req); err != nil {
 		return err
 	}
-	if len(req.FileIDs) > 0 {
-		// TODO(M4-2)：带 file_ids 新建并挂上。
-		return httpx.Invalid("新建条目时挂接文件（file_ids）还没有实现")
-	}
 	out, err := h.svc.CreateItem(r.Context(), auth.Current(r.Context()).UserID, auth.ProjectID(r.Context()), id,
-		ItemInput{Title: req.Title, Fields: req.ExtraFields})
+		ItemInput{Title: req.Title, Fields: req.ExtraFields, FileIDs: req.FileIDs})
 	if err != nil {
 		return err
 	}
@@ -350,6 +365,89 @@ func (h *Handler) renumber(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	out, err := h.svc.Renumber(r.Context(), auth.Current(r.Context()).UserID, auth.ProjectID(r.Context()), req.CategoryID)
+	if err != nil {
+		return err
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// 挂接、归类信息、看板
+// ---------------------------------------------------------------------------
+
+type putFilesRequest struct {
+	RowVersion *int         `json:"row_version"`
+	FileIDs    *[]uuid.UUID `json:"file_ids"`
+}
+
+func (h *Handler) putFiles(w http.ResponseWriter, r *http.Request) error {
+	id, err := httpx.PathUUID(r, "id")
+	if err != nil {
+		return err
+	}
+	var req putFilesRequest
+	if err := httpx.ReadJSON(r, &req); err != nil {
+		return err
+	}
+	if req.RowVersion == nil {
+		return errMissingRowVersion
+	}
+	if req.FileIDs == nil {
+		return httpx.Invalid("缺少 file_ids（条目的全部页，按页序；空列表是清空）")
+	}
+	out, err := h.svc.ReplacePages(r.Context(), auth.Current(r.Context()).UserID, id,
+		PageInput{RowVersion: *req.RowVersion, FileIDs: *req.FileIDs})
+	if err != nil {
+		return err
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+	return nil
+}
+
+type placementsRequest struct {
+	FileIDs *[]uuid.UUID `json:"file_ids"`
+}
+
+func (h *Handler) placements(w http.ResponseWriter, r *http.Request) error {
+	var req placementsRequest
+	if err := httpx.ReadJSON(r, &req); err != nil {
+		return err
+	}
+	if req.FileIDs == nil {
+		return httpx.Invalid("缺少 file_ids")
+	}
+	out, err := h.svc.Placements(r.Context(), auth.ProjectID(r.Context()), *req.FileIDs)
+	if err != nil {
+		return err
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+	return nil
+}
+
+func (h *Handler) fileCatalog(w http.ResponseWriter, r *http.Request) error {
+	id, err := httpx.PathUUID(r, "fid")
+	if err != nil {
+		return err
+	}
+	out, err := h.svc.FileCatalog(r.Context(), auth.ProjectID(r.Context()), id)
+	if err != nil {
+		return err
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+	return nil
+}
+
+func (h *Handler) summary(w http.ResponseWriter, r *http.Request) error {
+	var folderID *uuid.UUID
+	if v := strings.TrimSpace(r.URL.Query().Get("folder_id")); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			return httpx.Invalid("folder_id 不是合法的 UUID")
+		}
+		folderID = &id
+	}
+	out, err := h.svc.Summary(r.Context(), auth.ProjectID(r.Context()), folderID)
 	if err != nil {
 		return err
 	}

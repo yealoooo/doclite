@@ -23,7 +23,8 @@ import (
 //   - PATCH：改题名、著录（按 key 合并）、移到别的节点（件号取目标的 max+1，同时带 item_no 就用它）、改件号
 //     （1–999999999，节点里已占，含已删除的，409 `conflict`）；移动、改件号时用当前模板重算档号，只有显式改件号时
 //     撞号 409；没有实际变化不写库；
-//   - 删除：软删除，件号不回收（M4-1 还没有挂接：有页的先 409，M4-2 改成一并移出）；
+//   - 删除：软删除，件号不回收；有页时一并移出（每页一条 unlink，带 item_deleted，见 pages.go）；
+//   - 新建可以带 file_ids：建条目并按顺序挂上（第 1..n 页，row_version 仍是 1），失败整体回滚、条目也不建；
 //   - 定稿的条目改著录、移动、改件号、删除 409 `item_locked`；每个成功的动作 row_version + 1 并审计；
 //     PATCH、状态动作带 row_version，不一致 409 `conflict`；删除可以在查询参数里带。
 //   - 审计 archive_item：create、update、move、delete，detail {before, after} 只放变了的（title、extra_fields 里变了
@@ -167,6 +168,8 @@ func (s *Service) ListItems(ctx context.Context, projectID, categoryID uuid.UUID
 type ItemInput struct {
 	Title  *string
 	Fields map[string]any
+	// FileIDs 是要挂上的页（按页序，0–2000 个，不能重复）。
+	FileIDs []uuid.UUID
 }
 
 // CreateItem 在节点里新建条目（draft）。
@@ -187,6 +190,9 @@ func (s *Service) CreateItem(ctx context.Context, operatorID, projectID, categor
 	title, extra, issues := st.applyEdits("", map[string]any{}, edits{Title: in.Title, Fields: fields})
 	if len(issues) > 0 {
 		return nil, fieldsError(issues)
+	}
+	if err := checkPageList(in.FileIDs); err != nil {
+		return nil, err
 	}
 	var out *Item
 	err = s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
@@ -229,6 +235,14 @@ func (s *Service) CreateItem(ctx context.Context, operatorID, projectID, categor
 		if conflict != nil {
 			after["archive_no_conflict"] = conflict
 		}
+		// 带 file_ids：插入条目之后挂上（有页时才拿文件树锁），失败整个事务回滚、条目也不建。
+		var pages *pageChange
+		if len(in.FileIDs) > 0 {
+			if pages, err = applyPages(ctx, tx, projectID, operatorID, r, in.FileIDs, false); err != nil {
+				return err
+			}
+			after["page_count"] = len(in.FileIDs)
+		}
 		if err := audit.Write(ctx, tx, audit.Entry{ProjectID: &projectID, OperatorID: audit.Operator(operatorID),
 			TargetType: audit.TargetArchiveItem, TargetID: r.ID, Action: "create",
 			Detail: map[string]any{"after": after}}); err != nil {
@@ -236,6 +250,9 @@ func (s *Service) CreateItem(ctx context.Context, operatorID, projectID, categor
 		}
 		if out, err = readItem(ctx, tx, st, r.ID); err != nil {
 			return err
+		}
+		if pages != nil {
+			ev.Add(pages.filesEvent(projectID)...)
 		}
 		ev.Add(events.CatalogChanged(projectID, []uuid.UUID{cat.ID}, []uuid.UUID{r.ID}))
 		return nil
@@ -487,7 +504,7 @@ func (s *Service) UpdateItem(ctx context.Context, operatorID, id uuid.UUID, in I
 	return out, nil
 }
 
-// DeleteItem 软删除条目。rowVersion 为 nil 时不核对版本。
+// DeleteItem 软删除条目，有页时一并移出（每页一条 unlink，带 item_deleted）。rowVersion 为 nil 时不核对版本。
 func (s *Service) DeleteItem(ctx context.Context, operatorID, id uuid.UUID, rowVersion *int) error {
 	if rowVersion != nil {
 		if err := checkRowVersion(*rowVersion); err != nil {
@@ -519,13 +536,10 @@ func (s *Service) DeleteItem(ctx context.Context, operatorID, id uuid.UUID, rowV
 		if rowVersion != nil && r.RowVersion != *rowVersion {
 			return staleVersion(r.RowVersion)
 		}
-		stats, err := itemPageStats(ctx, tx, []uuid.UUID{id})
+		// 一并移出（不变量：已删除的条目没有挂接行）；没有页时不拿文件树锁。
+		pages, err := applyPages(ctx, tx, projectID, operatorID, r, nil, true)
 		if err != nil {
 			return err
-		}
-		// TODO(M4-2)：有页时一并移出（每页一条 unlink，带 item_deleted），而不是拒绝。
-		if n := stats[id].Pages; n > 0 {
-			return httpx.Conflict(httpx.CodeInvalidState, fmt.Sprintf("条目里还有 %d 页，先把页移出再删除", n))
 		}
 		ch, err := categoryChain(ctx, tx, projectID, r.CategoryPath)
 		if err != nil {
@@ -538,9 +552,10 @@ func (s *Service) DeleteItem(ctx context.Context, operatorID, id uuid.UUID, rowV
 			TargetType: audit.TargetArchiveItem, TargetID: id, Action: "delete",
 			Detail: map[string]any{"before": map[string]any{"category_id": r.CategoryID, "category_path": ch.path(),
 				"item_no": r.ItemNo, "archive_no": r.ArchiveNo, "title": r.Title, "status": r.Status,
-				"page_count": stats[id].Pages}}}); err != nil {
+				"page_count": len(pages.Plan.Unlinked)}}}); err != nil {
 			return err
 		}
+		ev.Add(pages.filesEvent(projectID)...)
 		ev.Add(events.CatalogChanged(projectID, []uuid.UUID{r.CategoryID}, []uuid.UUID{id}))
 		return nil
 	})

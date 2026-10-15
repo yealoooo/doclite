@@ -142,6 +142,21 @@ func TestParseInvalid(t *testing.T) {
 	}
 }
 
+// TestUnclosedBraceQuote：没闭合的 { 引用片段时加引号、转义（和前端 rustDebugStr 一字不差）。
+func TestUnclosedBraceQuote(t *testing.T) {
+	for tpl, want := range map[string]string{
+		"{fonds-{item_no}":   `"{fonds-{item_no}" 里的 { 没有对应的 }`,
+		"{fonds\t-{item_no":  `"{fonds\t-{item_no" 里的 { 没有对应的 }`,
+		`{fo"n\ds-{item_no}`: `"{fo\"n\\ds-{item_no}" 里的 { 没有对应的 }`,
+		"{a\x01b":            `"{a\u{1}b" 里的 { 没有对应的 }`,
+	} {
+		_, err := Parse(tpl)
+		if err == nil || err.Error() != "档号模板不对："+want {
+			t.Errorf("%q：%v，期望 %s", tpl, err, want)
+		}
+	}
+}
+
 func TestCategoryTypes(t *testing.T) {
 	if slices.Contains(AssignableTypes, Root) || len(AssignableTypes) != 6 {
 		t.Errorf("AssignableTypes = %v", AssignableTypes)

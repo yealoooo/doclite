@@ -1,7 +1,6 @@
 package apitest
 
 import (
-	"fmt"
 	"net/http"
 	"testing"
 
@@ -160,17 +159,53 @@ func (c *catalogEnv) setSettings(settings map[string]any) {
 	c.admin.Patch("/api/system/projects/"+c.pid.String(), map[string]any{"settings": settings}).Expect(http.StatusOK)
 }
 
-// addPage 给条目造一页（文件和挂接行直接写库）。
-// M4-1 还没有挂接接口；M4-2 之后改走 PUT /api/archive-items/{id}/files。
+// mkFileIn 造一个文件（files、folder_files 直接写库，没有快照、版本号按 0；上传要 S3，这里只要 file_id 和审核状态），
+// 放在 folder 里，返回 file_id。
+func (e *Env) mkFileIn(pid, folder uuid.UUID, reviewStatus string) uuid.UUID {
+	e.t.Helper()
+	fid := uuid.Must(uuid.NewV7())
+	e.Exec(`INSERT INTO files (id) VALUES ($1)`, fid)
+	e.Exec(`INSERT INTO folder_files (id, project_id, folder_id, file_id, file_name, sort_no, review_status, created_by)
+SELECT gen_random_uuid(), $1, $2, $3, $4,
+  (SELECT coalesce(max(sort_no), 0) + 1 FROM folder_files WHERE folder_id = $2), $5, u.id
+FROM users u WHERE u.username = 'admin'`, pid, folder, fid, "IMG-"+fid.String()[24:]+".jpg", reviewStatus)
+	return fid
+}
+
+// mkFile 在这个项目的 folder（uuid.Nil 是根文件夹）里造一个文件。
+func (c *catalogEnv) mkFile(folder uuid.UUID, reviewStatus string) uuid.UUID {
+	c.t.Helper()
+	if folder == uuid.Nil {
+		folder = c.folder
+	}
+	return c.mkFileIn(c.pid, folder, reviewStatus)
+}
+
+func filesPath(itemID uuid.UUID) string { return "/api/archive-items/" + itemID.String() + "/files" }
+
+// putPages 用条目现在的 row_version 整体替换页。
+func (c *catalogEnv) putPages(itemID uuid.UUID, fileIDs ...uuid.UUID) *Response {
+	c.t.Helper()
+	if fileIDs == nil {
+		fileIDs = []uuid.UUID{}
+	}
+	return c.admin.Put(filesPath(itemID), map[string]any{"row_version": c.item(itemID).RowVersion, "file_ids": fileIDs})
+}
+
+// pageIDs 是条目详情里的页（按页号）。
+func (v itemView) pageIDs() []uuid.UUID {
+	out := []uuid.UUID{}
+	for _, p := range v.Pages {
+		out = append(out, p.FileID)
+	}
+	return out
+}
+
+// addPage 给条目末尾挂一页：文件直接写库（审核状态 reviewStatus），挂接走 PUT /api/archive-items/{id}/files。
 func (c *catalogEnv) addPage(itemID uuid.UUID, reviewStatus string) uuid.UUID {
 	c.t.Helper()
-	fid := uuid.Must(uuid.NewV7())
-	n := QueryValue[int](c.Env, "SELECT count(*) FROM archive_item_files WHERE archive_item_id = $1", itemID) + 1
-	c.Exec(`INSERT INTO files (id) VALUES ($1)`, fid)
-	c.Exec(`INSERT INTO folder_files (id, project_id, folder_id, file_id, file_name, review_status, created_by)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)`, c.pid, c.folder, fid, fmt.Sprintf("P%04d-%s.jpg", n, fid.String()[24:]), reviewStatus, c.adminID)
-	c.Exec(`INSERT INTO archive_item_files (project_id, archive_item_id, file_id, page_no, linked_by) VALUES ($1, $2, $3, $4, $5)`,
-		c.pid, itemID, fid, n, c.adminID)
+	fid := c.mkFile(uuid.Nil, reviewStatus)
+	c.putPages(itemID, append(c.item(itemID).pageIDs(), fid)...).Expect(http.StatusOK)
 	return fid
 }
 
