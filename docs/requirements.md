@@ -1,0 +1,450 @@
+# Doclite 需求说明（Go + Wails 重写用）
+
+> 依据 Doclite v3（Rust 版）的 design.md（最权威）、roadmap.md、CLAUDE.md、迁移 SQL、M1–M3 报告，截至 2026-10-15。只写做什么、规则、用户定过什么，不写原版实现。
+> 标记：**【用户 日期】** 用户决定；**【总控】** 开发中代定、用户确认里程碑时没反对；**（可简化：…）** 原版为多实例、罕见格式、极端故障做的处理，重写按单台服务器、常见图片格式可简化，规则保留；**（待确认）** 开工前问用户。
+
+## 1. 总览
+
+### 1.1 用途和核心流程
+
+纸质档案数字化，对照 DA/T 31（"归类"即"数据挂接"）。全新系统，不兼容旧版、不迁移旧数据。
+
+1. **上传**：扫描员经客户端热文件夹或浏览器上传，进文件目录，状态"待分配"。
+2. **分配审核**：负责人按文件夹或选中的文件分给审核员，可改派。
+3. **审核**：逐页看原图，通过或驳回（带原因）。驳回 → 重扫（同一 file_id 追加版本，轮次 +1）→ 自动回原审核员 → 对比上一轮再审。
+4. **归类挂接**（和审核并行，互不限制）：建归类树和条目、著录、生成档号、挂文件排页序、定稿。
+5. **导出**：只从归类树发起；预检 → 后台生成 zip（每件一个 PDF 或原图包）→ 浏览器直连 S3 下载；之后的变化列为"交付后变更"，可只补交变了的件。
+
+两棵树只靠 file_id 相连：**文件目录**按物理来源组织（"2025 文书档案 / 盒 WS-2025-003"），像电脑文件夹一样整理；**归类树**是档案逻辑（全宗 → 门类 → 年度 → 保管期限 → 机构 → 条目（件）→ 页序），决定档号和著录。整理文件目录不影响归类。两棵树同一结构（parent_id + path_code），共用树组件。
+
+### 1.2 部署
+
+- 客户：Windows 服务器，WSL2 + Docker Engine，内网不联网，离线交付包。
+- 容器：server（9080，同时托管界面）、PostgreSQL 18、SeaweedFS（`weed mini`，S3 8333，工作站直连看图）、可选 Portainer（只绑 127.0.0.1）。卷 pg、s3、tmp（磁盘，不用 tmpfs）；PG 18 镜像数据目录挂 `/var/lib/postgresql`。
+- 启动时自动迁移；升级 = `docker load` + `docker compose up -d`。
+- 只支持 S3 兼容存储（SeaweedFS 生产 4.45、开发 4.15）。数据库只用 PG 16 也有的特性，主键由应用生成 UUIDv7。
+- 重写按**单台服务器、单个 server 进程**设计。
+
+### 1.3 客户端
+
+- 同一份界面两种用法：桌面客户端（壳，WebView2）和浏览器；界面打包进客户端，server 也托管同一份【用户 2026-09-27，决策 5】。
+- 只有壳有：热文件夹、上传队列、本机图片缓存、大图切块、托盘。
+- 浏览器经内网 http 访问不是安全上下文，不能用 `crypto.subtle`、`crypto.randomUUID`。
+- 前端技术栈由重写会话定（原版 Vue 3 + TS）。
+
+### 1.4 进度和性能目标
+
+- M0–M3 用户已确认；M4 开发完、M4-6 验收没做完；M5 未开始；M6 插件和二期不排期【用户 2026-10-14】。
+- 审核和归类同时处理同一文件夹：不互相拒绝、不死锁、等待 < 1 秒【用户 2026-10-14】。
+- 10 万文件：审核读接口 < 200 ms，看板矩阵 < 200 ms，500 个文件的"挂在哪" < 100 ms。导出 2000 件 / 5 万页：预检、建任务、交付后变更各 < 1 秒；单任务 ≤ 20 万页。
+- 另一个窗口 3 秒内看到变化。server 内存不随文件大小、页数增长。
+
+## 2. 硬性规则（违反就是 bug）
+
+1. **file_id 是锚。** files 只有 id，其他模块都用 file_id 引用文件，终生不变。
+2. **快照只追加。** file_snapshots 不改不删，当前版本 = max(version_no)。恢复旧版 = 追加快照、复用旧 key，不复制字节。
+3. **文件目录只管位置和名字。** 移动、改名只改 folders、folder_files；对象、快照、审核、归类不动。
+4. **归类只存 file_id。** 挂接不存快照和文件夹；归类员永远看到最新快照。
+5. **审核记下审的快照，但不锁定。** 审后仍可编辑（插件阶段），状态不变。
+6. **导出只从归类发起。** 范围是归类节点或条目，只含已归类文件；"只导出审核通过的"每次勾选。
+7. **S3 key 按 ID。** `<path_prefix><project_code>/<file_id>/v<no>.<jpg|png|tif>`（按文件头格式），封面 `v<no>.cover.jpg`；移动时 key 不变。
+8. **树用 parent_id + path_code。** 每层 5 位数字加点（`00001.00003.`），字节序比较；编码由父节点 last_child_no 原子分配、不回收；移动前按前缀判环。
+9. **软删除。** 只写 deleted_at，不做回收站；文件操作写 file_logs，其他写 audit_logs。
+10. **权限只到菜单级。** 接口声明菜单码，中间件校验，无权 403；角色全局，进项目靠项目授权，admin 进所有项目。
+11. **server 不做图像处理。** 只读文件头，不解码、不修改、不 OCR、不分析；封面由客户端生成（长边 400 的 JPEG），server 只校验。只约束 server，壳可以解码。
+    - **唯一例外**【用户 2026-10-15】：导出 PDF 时，能原样嵌入的页原样嵌入；放不进的（带透明的 PNG、隔行 PNG、TIFF 分平面、少见压缩）由 server 无损转换，像素不变。只在导出模块。
+12. **server 不缓存图片。** 工作站用预签名 URL 直连 S3，签名时间按天取整；本机缓存由壳按 file_id + snapshot_id 存。
+13. **后台任务在 server 进程内**，background_jobs + `FOR UPDATE SKIP LOCKED` 领取；v1 只有导出。
+14. **大文件流式。** 上传边写临时文件边算 sha256，不把请求体读进内存。
+15. **命名**：表名英文复数、关联表两实体拼接；主键 id、外键 `单数表名_id`；名称带前缀（folder_name）；`status`、`xxx_type`、`xxx_no`、`xxx_at`。
+16. **改设计先问用户**（改表、改接口约定、冲突本节规则、装软件）。改表只新增迁移 `000N_xxx.sql`。
+
+## 3. 数据模型
+
+### 3.1 建表 SQL 直接沿用
+
+- `/Users/yanlong/project/doclite-project/bak/doclite-v3/server/migrations/0001_init.sql`：25 张表 + 菜单和内置角色初始数据，约束在 PG 16 验证过，字段注释即说明；需要 `pg_trgm`。
+- 同目录 `0002_review_indexes.sql`（我的审核的部分索引）、`0003_item_no_index.sql`（已删除条目的件号索引）。
+- 参考 SQL：`/Users/yanlong/project/doclite-project/bak/doclite-v3/docs/sql/key-queries.sql`（查重、path_code 分配、移动、分配、通过、软删除、导出预检、任务领取等）。
+- 0001 中 `cover_key` 注释"WebP、server 生成"已过时。预留不写：快照类型 auto/edit/restore、案卷（volume）、page_label、pdf_ocr/ofd、ocr_results。
+
+### 3.2 25 张表
+
+| 表 | 用途 |
+|---|---|
+| users | 用户；登录名不分大小写唯一；只停用不删 |
+| roles | 角色；5 个内置，可自建；role_code 不可改 |
+| menus / role_menus / user_roles | 菜单（迁移写入）、角色的菜单、用户的角色 |
+| user_sessions | 会话：令牌 sha256、client_type、到期、撤销 |
+| system_settings | 许可证、install_id 等（M5） |
+| storage_profiles | S3 存储配置，一个默认，密钥加密 |
+| projects | 项目：编码、名称、settings JSON、active/archived |
+| project_members / project_roles | 项目授权给人、给角色 |
+| folders | 文件夹树，remark 记原件位置 |
+| files | 只有 id = file_id |
+| folder_files | 界面上的"文件"：文件夹、名字、sort_no、审核状态、轮次；file_id 唯一 |
+| file_snapshots | 版本：存储、key、封面 key、sha256、大小、mime、宽高、DPI、颜色、upload_name、类型 |
+| file_reviews | 一次分配和结果：审核人、分配人、open/done/cancelled、结果、所审快照、原因、说明 |
+| archive_categories | 归类树：类型、业务编码、名称 |
+| archive_items | 条目（件）：节点、件号、档号、题名、extra_fields、draft/done/locked、row_version |
+| archive_item_files | 挂接：条目、file_id（唯一）、页号 |
+| export_tasks / export_task_files | 导出任务；每页当时的快照和页号 |
+| background_jobs | 任务队列：payload、状态、尝试、心跳、进度 |
+| ocr_results | 二期 |
+| file_logs / audit_logs | 文件日志；其他变更审计 |
+
+### 3.3 原则
+
+- **path_code**：根文件夹和归类根都是 `00001.`，每项目一个根；子编码 = 父编码 + 父 last_child_no 原子 +1 的 5 位数 + 点；不回收；每层 ≤ 99999（超出 409 `tree_full`）；子树按前缀区间查，按 path_code 排序即先序。移动：拿锁 → 目标以自己编码开头 409 `tree_cycle` → 新父下领编码 → 一条 UPDATE 换子树前缀。归类的 `category_code`（拼档号）和 path_code 无关。
+- **软删除**：文件、文件夹、项目、节点、条目；删文件夹时子树一起；重名和唯一只看未删除的。
+- **两种状态独立**：审核状态 = `folder_files.review_status`（unassigned/pending/approved/rejected）；归类状态 = 有无挂接行（条目 locked = 已定稿）。不变量：已删除的条目没有挂接行。
+- 一个文件同时只有一行 open 分配，只在一个条目里；项目内未删除条目档号唯一。
+- 日志 detail 存当时的名字和从项目根起的文件夹路径，只看日志能还原一个文件的全过程。
+- 乐观锁：条目 row_version；项目 updated_at。
+
+### 3.4 projects.settings（读时补默认；写时整体替换，只校验已知键，保留未知键，≤ 64 KiB）
+
+| 键 | 含义 |
+|---|---|
+| `review.reject_reasons` | 默认 blur 模糊、skew 倾斜、cut 裁切过度、stain 污渍、missing 缺页、dup 重页、orient 方向、other 其他；内置存代码、界面译中文，自定义的存中文；至少一个，空列表按默认 |
+| `review.rescan_reassign` | 只有 `same_reviewer` |
+| `archive_no.template` | 如 `{fonds}-{category}·{year}-{retention}-{org}-{item_no:04}` |
+| `item_fields` | `[{key, label, type: text/date/enum, required, options, max_length, default}]` |
+| `catalog.lock_requires_approved` | 定稿要求全部页通过，默认 true |
+| `export.require_locked_item` | 导出要求已定稿，默认 true |
+| `export.retention_days` | 导出物保留天数，默认 7，1–365 |
+
+### 3.5 日志
+
+- file_logs action：upload、rescan、rename、move、copy、delete、assign_review、reassign_review、approve、reject、reopen、link、unlink、export（edit、restore 留给插件）；审核动作带 version_no、review_round。
+- 改名、移动文件夹只写审计；删文件夹每个文件记 delete【用户 2026-09-27】。
+- audit_logs target：user、role、storage_profile、project、folder、archive_category、archive_item、export_task；detail `{before, after}` 只放变了的。空修改不写库、不审计、不发事件。登录退出不审计。
+
+### 3.6 并发和加锁
+
+- **项目文件树锁**（每项目一把）：共享 = 建或改名文件夹、上传、复制、移动文件、重扫、删单个文件、审核写、改项目；排他 = 移动文件夹、删子树、删项目。
+- **项目归类树锁**（每项目一把）：共享 = 建或改名节点、条目增改移删和状态、挂接、项目改名；排他 = 移动或删节点子树、改 category_code/type、批量重算档号。
+- **顺序**：归类树锁 → 节点行 → 条目行（id 升序）→ 文件树锁 → 项目行 → files 行（id 升序）→ folders 行 → 存储配置行 → 内容锁。
+- **审核不等归类**：审核不拿归类锁、不锁条目；拿着文件树锁的事务不等归类的锁和行；挂接、项目改名这类两棵树都要的操作，先拿归类锁和归类行，最后拿文件树锁【总控】。
+- **files 行是每个文件的写锁**：分配、改派、审核、撤回、重扫、删除、挂接、移出都先锁它，锁后重读 folder_files；所以挂接和删除已归类文件互斥。
+- 行锁用不挡外键检查的 `FOR NO KEY UPDATE`，例外只有任务领取的 `SKIP LOCKED`。
+- **内容锁**：上传、重扫按（项目, sha256）加锁、锁内复查重。建导出任务不拿树锁，在一致快照里只插新行。事件提交后才发。
+- （可简化：内容锁、任务领取锁、存储配置表锁、重扫按文件的锁可用进程内互斥；但"同内容并发只入库一个""同一文件重扫串行"必须保证。）
+
+## 4. 权限和角色
+
+菜单码：dashboard 项目看板、files 文件目录、scan 扫描上传、review 我的审核、review_assign 审核分配、catalog 归类、export 导出；system 组下 system.users 用户、system.roles 角色与权限、system.projects 项目、system.storage 存储配置、system.plugins 插件能力、system.license 许可证、system.audit 审计日志（后三个目前是占位页）。路由 `/dashboard`、`/files`、`/scan`、`/review`、`/review-assign`、`/catalog`、`/export`、`/system/*`。
+
+| 内置角色 | 菜单 | 职责 |
+|---|---|---|
+| admin 系统管理员 | 全部（锁定） | 系统管理，进所有项目 |
+| manager 项目负责人 | dashboard files scan review review_assign catalog export | 分配改派、看进度、导出、解锁；默认不能建项目 |
+| scanner 扫描员 | files scan | 建文件夹、上传、重扫 |
+| reviewer 审核员 | files review | 审分给自己的 |
+| cataloger 归类员 | files catalog | 归类、挂接、定稿 |
+
+- 多角色菜单取并集，`GET /api/me/menus` 生成导航和路由守卫；有 `system.*` 时显示"系统管理"入口，/system 侧栏换成系统菜单并能返回业务界面。
+- 接口一般"有其中一个菜单即可"；**解锁定稿条目要同时有 catalog 和 review_assign**【用户 2026-10-14】。审核设置、归类设置、归类信息、SSE 只要能进项目；我的项目、图片信息、快照登录即可。
+- **项目授权**：在 project_members、有 project_roles 里的角色、或 admin。项目不存在或已删除 404，没授权 403；以资源 id 为参数的接口先反查项目（找不到、已删除、所在文件夹或项目已删除都 404）。
+- **检查顺序**：菜单 403 → 项目 404/403 → 参数 400 → 状态 409 → 版本 409 → 内容 400 → 前置条件 409。进不了项目的人带错参数也是 403。
+- 内置角色不能删，admin 菜单不能改；迁移新增菜单要同时给 admin。
+- **防提权**【用户 2026-09-26】（非 admin 违反 → 403 `admin_required`）：① 授予收回 admin、改持有 admin 的用户须是 admin；② 增减任何角色的 `system.*` 须是 admin；③ 给用户新加的角色里的 `system.*` 须是操作人菜单子集；④ 被改用户现有的 `system.*` 也须是子集。
+- `system.projects` 的人建项目和授权（默认只 admin，可加给负责人）【用户 2026-09-27】；能管所有项目、不要求自己能进；建项目的人不自动成为成员。
+- 403 code：`forbidden`、`admin_required`、`user_disabled`、`not_assignee`（审的不是自己的；不用 forbidden，免得前端刷新会话【用户 2026-10-07】）。
+
+## 5. 各模块
+
+### 5.1 登录和会话（M0）
+
+- HttpOnly Cookie `doclite_session`（SameSite=Lax，Secure 可配、默认关），`<img>` 也能带鉴权；库里只存令牌 sha256。
+- 有效期 `SESSION_TTL_HOURS`（默认 12，1–720），从登录起算、**不续期**【用户 2026-09-27】；last_seen_at 每分钟最多写一次。
+- 读 `X-Client-Type`（browser 缺省、desktop，其他 400）。停用用户不能登录（403 `user_disabled`），停用即撤销其会话。库里没有用户时用 `INIT_ADMIN_USERNAME/PASSWORD` 建 admin。登录名 1–64 无空白，显示名 1–64，密码 6–128，argon2id。
+- 边界：CSRF 只靠 SameSite=Lax【用户 2026-09-26】；不限速；IP 取 TCP 对端。原版限制密码哈希并发、排队 5 秒 503 `busy`（可简化）。
+
+### 5.2 用户和角色（M0）
+
+- 界面 /system/users（新建、编辑、停用启用、重置密码、改角色）、/system/roles（勾菜单、显示人数）。
+- 不能停用自己（409 `cannot_disable_self`）、不能去掉最后一个 admin（409 `last_admin`）。role_code `^[a-z][a-z0-9_]{0,31}$`；内置不能删（409 `builtin_role`）；admin 菜单不能改（409 `admin_menus_locked`）。读角色列表 system.roles 或 system.users 均可。分页 page_size 默认 20、最大 100。
+
+### 5.3 项目和授权（M1）
+
+- 界面 /system/projects：列表、新建编辑（含著录设置）、删除、授权（勾人和角色，标出停用的）。业务界面左上角项目切换器：不显示归档的，记住上次选的。
+- 规则【用户 2026-09-27】：project_code `^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$`（不能是 `.` `..`），区分大小写，不可改，未删除项目中唯一，进 S3 key。名称自动去首尾空白、1–100 字，其余按文件夹名规则【用户 2026-10-07】；说明 ≤ 500。
+- 建项目同一事务建根文件夹（名 = 项目名）和归类根（编码 = 项目编码、名 = 项目名、类型 root）；改名时一起改。删除是软删除，有未删除文件 409 `project_not_empty`。archived 只是标记。
+- 授权 `PUT access {user_ids, role_ids}` 整体替换（各 ≤ 1000，可授权给停用用户）。`GET /api/projects` 返回能进的未删除项目（含归档）。
+- **版本检查**【用户 2026-10-15，QB】：PATCH 可带 `expected_updated_at`，与库里不同 409 `conflict` 不改；不带不查。updated_at 写成 `max(now, 旧值 + 1µs)`。编辑对话框 409 后重载并按"打开时 / 我的 / 现在的"三方合并提示。
+- 保存著录设置时系统默认值也写进项目（用户 2026-10-15 接受）。
+
+### 5.4 存储配置（M0）
+
+- 界面 /system/storage：卡片列表、新增编辑、测试连接、设默认、删除。
+- 字段见建表 SQL：endpoint 是 server 访问地址，public_endpoint 是工作站访问地址（预签名按它签，空时同 endpoint）；path_prefix 默认 `doclite/`；url_expire_hours 1–168，默认 24。
+- secret_key 用 `MASTER_KEY`（32 字节 base64，缺了不启动）AES-256-GCM 加密，绑定行 id，任何输出都不含它；解不开 → 500 `secret_unreadable`，界面提示重填。PATCH 不传或空串 = 不改。
+- 首次启动无存储配置时用 `S3_*` 环境变量登记默认的"SeaweedFS（随系统部署）"。
+- 状态 active ⇄ readonly → disabled（可再启用）：只有 active 能设默认、仅一个默认；默认的不能改只读、停用、删除；有快照引用的不能停用；只有非默认且没被引用的能删。409 `storage_not_active`、`storage_is_default`、`storage_in_use`。
+- 测试连接：List(1) → 故意签错，确认对端是 S3 且校验签名 → public_endpoint 不同时预签名访问不存在的 key，应得 404 NoSuchKey。结果 ok / unreachable / auth_failed / bucket_not_found / secret_unreadable / other；不跟重定向，只回摘要；可测未保存的配置。
+- 校验：endpoint 只能根路径；path_prefix 空或以 `/` 结尾、不以 `/` 开头、无 `//`、每段 `[A-Za-z0-9._-]`；bucket 按 S3 规则。
+- 换存储：新的设默认后新快照写新存储，旧快照按自己的 storage_profile_id 读。写快照时存储须仍 active 且默认，否则 409 `storage_changed`。
+
+### 5.5 文件目录（M1）
+
+- **界面 /files**（像资源管理器）：目录树；面包屑和备注；封面网格 / 列表（虚拟滚动）；多选；详情（file_id、位置、版本、存储和 key、规格、审核和归类信息、日志）；右键（重命名、移动、复制、下载原图、查看原图、快照历史、删除，已驳回的可"上传重扫件"）；"已驳回"筛选；上传文件 / 文件夹。
+- **名称**【用户 2026-09-27】：1–255 字；不含 `\ / : * ? < > |`、双引号、控制字符；首尾不空白、不以点结尾、不是 `.` `..`。**Windows 保留名**【用户 2026-09-28】CON、PRN、AUX、NUL、COM1–9、LPT1–9 不分大小写，取第一个点前的部分去尾空格比较（`con.txt`、`con .jpg` 不行；`con (1).jpg`、`COM10.jpg` 可以），400 `invalid_input`，上传也不自动改名。老名字移动、复制时不重校验【用户 2026-10-07】。
+- **重名**（同文件夹、不分大小写、不算已删除）：明确改名撞名 409 `conflict`；上传、移动、复制文件撞名自动改为"名字 (n).扩展名"；新建、移动文件夹撞名 409；新建文件夹带 `if_exists: "return"` 时返回已有的（200）。
+- **顺序**：sort_no = 目标文件夹未删除文件 max+1（到达先后 = 纸张顺序），移入复制入排末尾；列表按 sort_no、名称。
+- 根文件夹不能改名、移动、删除（409 `root_folder_locked`），可改备注。移进自己子树 409 `tree_cycle`；目标在别项目或已删除 404；只在本项目内移动复制。
+- **复制**：新 file_id，v1 类型 copy，复用源当前快照的对象，记来源；新文件待分配、自动改名、排末尾；只在新文件记 copy 日志；源存储停用 409 `storage_unavailable`。
+- 同时改名和移动：新名在目标重名 409，日志先 rename 后 move。
+- **删除**：软删除，删文件夹连子树；已归类的文件不能删（409 `file_cataloged`）；取消进行中的分配，每文件记 delete。
+- **批量** move / delete：≤ 500、同一项目（否则 400）、一个事务、一个不合规就整体不做（details.ids 是 folder_files id）。
+- children 一次返回子文件夹（名、备注、子文件夹数、文件数）和文件（id、名、sort_no、审核状态、轮次、版本号、是否已归类），不分页、不带图片地址。日志倒序带操作人名；已删除的文件 404。
+- 菜单：读、列、建文件夹 scan 或 files；整理只要 files。
+
+### 5.6 上传和重扫（M1、M2）
+
+- **请求**【用户 2026-09-28】：一个 multipart，字段按序各一次：`file_name`（必填）、`content_sha256`（可选，壳带）、`cover`（可选 JPEG ≤ 256 KiB）、`file`（必填，最后，≤ `MAX_UPLOAD_BYTES` 默认 512 MiB）。缺字段、顺序错、重复、多余、文本 > 4 KiB → 400 `invalid_input`。文件名只认 `file_name`。
+- **流程**：原图流式写临时文件并算 sha（超限 413 `payload_too_large`，不符 400 `checksum_mismatch`）→ 读文件头 → 校验封面 → 预判重复 → 事务外传原图和封面到默认存储 → 短事务加锁、复查重、写 files / 快照 v1 original / folder_files unassigned / upload 日志 → 删临时文件 → 发 `files.changed`。
+  - 收完请求体后"传 S3 → 写库 → 发事件"必须做完，不受客户端断开影响。业务错误要读完剩余请求体再返回。请求体空闲 60 秒按 400。
+  - 写库失败留下的对象只记警告。对象带 `Cache-Control: private, max-age=<预签名有效期>, immutable`，元数据存原始文件名。临时文件总要删，启动时清残留（可简化：原版为多实例共用临时目录做了文件锁）。
+- **文件头**（不解码像素）：按魔数只收 JPEG、PNG、TIFF；其他（含 BigTIFF）415 `unsupported_media_type`；空、截断、读不出 400 `invalid_image`。读宽高、DPI（四舍五入；没写为空，显示"未知"）、颜色模式（调色板 color，1 位 bw，单通道 gray，其余 color）、方向（JPEG 看 EXIF，TIFF 看 Orientation，PNG 不看；5–8 交换宽高，存转正后的）。多页 TIFF 拒绝（400，提示拆页）；像素 > `MAX_IMAGE_PIXELS`（3 亿）400。（可简化：原版对畸形 JPEG/EXIF 容错很细，常见文件即可，但壳读方向要和 server 一致。）
+- **封面**【用户 2026-09-28】：JPEG，长边 400（不放大），质量约 75，按转正后的方向、不带 EXIF 方向，透明铺白。壳本机生成；浏览器用 canvas（TIFF 用 UTIF.js 解第一页，方向非 1 不生成）；生成不了就不带。server 校验：≤ 256 KiB、是 JPEG 有 SOF、以 `FF D9` 结尾、长边 ≤ 400 且 ≤ 原图、方向 2–8 拒绝、横竖一致、短边比例差 ≤ 1 像素；不合规 400 `invalid_cover`（什么都没写），客户端去掉封面重传：**封面可以缺，不能因封面丢页**。
+- **查重**【用户 2026-09-27】：同项目未删除文件当前版本 sha 相同 → 409 `duplicate_content`（details 带已有文件位置）；别的项目不算。**先判断断网重试**：同文件夹有 upload_name 和 sha 都相同的文件 → 200 返回已有文件。没有"仍然上传"，要保留同内容用复制。壳的预检 `files:check {file_name, sha256, size}` → `{duplicate, already_uploaded, final_name}`。
+- **响应** 201：file_id、snapshot_id、folder_file_id、file_name、renamed、sort_no、version_no、宽高、dpi、color_mode、file_size、has_cover、warnings（`low_dpi` < 200、`dpi_unknown`）。
+- **浏览器上传**：不算 sha、不预检；全局 ≤ 2 个、同文件夹串行【总控】；只收 jpg jpeg tif tiff png；"上传文件夹"按相对路径逐层建文件夹（if_exists）。壳里这两个按钮改为入上传队列。
+- **重扫** `POST /api/files/{fid}/rescan`（同格式）：只收 rejected（否则 409 `invalid_state`，客户端据此认为上次已成功）；追加 rescan 快照、轮次 +1、→ pending，给最近一次驳回它的人新增 open；那人不能再审（停用、没 review 菜单、失去授权任一条）→ unassigned、日志记 skipped_reviewer【用户 2026-10-07】；一个短事务完成。也查重【用户 2026-10-04】：和别的文件或自己当前版本相同 409，和自己更早版本相同放行。版本号对不上 409 `conflict`。同一文件重扫串行。
+- **待重扫** `GET /api/projects/{pid}/rescans`：rejected 的文件，带文件夹备注（原件位置）和最近一次驳回（人、原因、说明、版本）。
+
+### 5.7 看图（M1、M2）
+
+- **列表不返回图片地址**。图片信息统一由 `POST /api/files/batch {file_ids ≤ 500}` 给【用户 2026-09-26】：当前版本的 snapshot_id、version_no、宽高、dpi、颜色、大小、mime、sha256、cover_url（无封面 null）、original_url、url_expires_at【用户 2026-09-27】。只给能进的项目；不存在、无权、已删除放 `missing`。存储停用或密钥坏时 URL 为 null，带 `url_error`。
+- `GET /api/files/{fid}/snapshots`：全部版本，带类型、时间、创建人、存储和 key、URL。
+- **预签名**：先查权限，用快照所在存储的 public_endpoint 签；签名时间取 **UTC+8 当天 0 点**，同一天同一张图 URL 不变；有效期 `url_expire_hours×3600+86400` 秒、封顶 7 天。图片不经 server，密钥不下发。
+- 列表只显示封面、虚拟滚动；看原图一次一张，先显示封面。
+- **查看器**【用户 2026-10-07，Q1】：OpenSeadragon 局部显示。壳里用壳切的分块，只取看得到的块，100% 是真实像素；浏览器里 JPEG、PNG 整图，TIFF 在 Worker 里解码，超预算只显示封面并提示下载或用客户端。0.5 倍适合窗口到 400%；100% = 1 原图像素对 1 CSS 像素；旋转只转视图。（可简化：原版浏览器侧有 1 GiB 内存记账，超大图不撑崩页面即可。）
+- **审的必须是看到的那一版**【总控】：原图加载中不响应通过驳回；原图封面都没显示不能审；原图失败而封面已显示要先确认"只看了封面"；对比时在看旧版不能审。提交带看到的 snapshot_id。
+- **下载原图**【用户 2026-09-27】：不加接口，浏览器新窗口打开 original_url，壳里用系统浏览器。
+
+### 5.8 审核分配和审核（M2）
+
+| 当前 | 动作 | 结果 | 副作用 |
+|---|---|---|---|
+| unassigned | 分配（负责人） | pending | 新增 open；assign_review |
+| pending | 改派（负责人） | pending | 旧行 cancelled、新增 open；reassign_review |
+| pending | 通过 / 驳回（审核员） | approved / rejected | 那行 done、结果、当前快照（驳回加原因说明） |
+| rejected | 重扫（扫描员） | pending 或 unassigned | 见 5.6 |
+| approved | 撤回通过 | pending 或 unassigned | 给最近通过它的人新增 open；reopen；轮次不变 |
+| 任意 | 删除 | 软删除 | 取消进行中的分配 |
+
+- "最近一次通过 / 驳回"按 file_reviews 的 id（UUIDv7）倒序取。
+- **能分给的人**：启用、有 review 菜单、能进项目（含 admin、负责人自己），否则 400【用户 2026-10-07，Q5】。
+- **分配** `{reviewer_id, folder_id | file_ids}`：按文件夹 = 子树全部待分配（≤ 1 万）；按文件 1–500；非待分配的跳过计数（"跳过了 n 个"）；有不存在、已删除、别项目的整体 404（details.ids）。不做取消分配。
+- **改派**：单个（已不是 open 或不是 pending 409；原来就是这人 200 `changed:false`）；批量（选中 ≤ 500，或某人在某子树的全部待审 ≤ 1 万）；只改 pending 的，其余跳过。
+- **审核** `POST /api/files/{fid}/review {result, reject_reasons?, comment?, snapshot_id?}`：不是 pending 409 `invalid_state` → 不是自己的 403 `not_assignee`（负责人、admin 也一样）→ 快照不是当前版本 409 `conflict`。
+- **驳回原因**【Q4】：至少一个，只从项目列表选（区分大小写，重复算一个）；选 other 时说明必填；说明 ≤ 500 字、无控制字符（换行制表可以）。通过不能带原因，可带说明。
+- **批量通过**【Q9】：选中 1–500，一个事务；依次 404 → 409 → 403，有一类就整体不做。**撤回通过**【Q8】：只有 review 的只能撤自己的，有 review_assign 的能撤任何人的；不做撤回驳回。
+- `GET review-settings` → `{reject_reasons, rescan_reassign, comment_max_chars: 500, max_batch_files: 500, max_folder_files: 10000}`。
+- **读接口**：只含未删除的；folder_id 是子树；列表按文件夹 path_code、sort_no、file_id 排，keyset 分页（limit 默认 500、≤ 2000，cursor 原样回传）；计数不受分页影响，和列表同一只读快照。
+  - **我的审核** `GET /api/me/reviews?project_id=&folder_id=&state=all|open|approved|rejected&low_dpi=`：project_id 必填（待办跟随项目切换，Q12）；每文件取最近一次分给我、没取消的那行，`is_current` 标是否仍有效；带各标签计数、按文件夹计数、"其他项目还有 n 个待审"。
+  - 另有：可分配的人（带待办数）、按文件夹状态计数（子树、直接放的、各子文件夹）、open 分配（标出不能再审的人和原因）、一个文件的全部分配（含已取消）。
+- 事件：状态变了才发 files.changed，> 500 只带 folder_ids【Q10】。
+- **分配页**：左树带待分配数，中间是当前文件夹直接放的文件，右边可分配的人。没选文件 = 整个文件夹含子文件夹（先确认，> 1 万不能整个分）；不能再审的人标红。只有 review_assign 没 files/scan 的人只看到计数【总控】。
+- **审核台**：左栏我的审核（按文件夹分组，状态标签和"DPI 不足"）；中间查看器，第 2 轮起显示"上一轮（vN）因…被驳回"；右栏版本、审核记录、文件和归类信息、驳回原因。审完跳下一张待审，审完的行留原位，新分配的靠核对计数发现【总控】。不做放大镜。
+- **键位**【Q3】：← → ↑ ↓ 翻页；A 通过并跳下一张；R 驳回面板（1–9 勾原因、Tab 说明、Enter 确认、Esc 取消）；空格 适合窗口 / 100%；+ − 0 缩放；[ ] 旋转；C 对比，V 同位切换；Esc 依次关面板、对比、多选。输入框里字母键不触发；按住的重复按键忽略。
+- **对比**【Q2】：左右并排、联动，另可 V 同位切换；"上一轮"取最近一次驳回审的快照；也可选任意两版；两侧标版本和驳回原因。
+
+### 5.9 归类（M3）
+
+**节点**
+
+- 类型：root、fonds、category、year、retention、org、custom；root 只在建项目时建。同一链可有多层同类型。
+- 编码 1–32 字，不能有空白、控制字符、`{}`、`\ / : * ? " < > |` 和当前模板的分隔符；只在新建和改编码时校验；同层判重（区分大小写，409 `conflict`）。名称去首尾空白 1–100 字，同层可重名。
+- 根节点不能改名、改编码、改类型、移动、删除（409 `invalid_state`），界面不显示。
+- 移动、改编码、改类型：子树有定稿条目 409 `item_locked`【用户 2026-10-14，Q8】；否则同事务重算子树未定稿条目的档号。删除：软删子树；还有未删除条目 409 `category_not_empty`【Q8】。
+- 按需加载直接子节点，带子节点数、子树条目数。
+
+**档号和件号**【用户 2026-10-14，Q2】
+
+- 模板占位符 `{fonds}{category}{year}{retention}{org}{custom}`、`{item_no}` / `{item_no:0N}`（补零到 N 位，N ≤ 10）。`{item_no}` 正好一次、节点占位符各最多一次、相邻占位符间要有分隔符；文字不能有空白、控制字符、文件名非法字符、花括号；1–200 字；不合法 400。
+- 生成：沿祖先链，占位符取**离条目最近的**同类型节点编码；缺级则档号留空（能建不能定稿）。建条目时生成，移动节点、改编码、改类型、移动条目、改件号时重算（定稿的不动）；改模板不自动重算，提供"按新模板重新生成"（只改未定稿的）。不支持手改档号。
+- **撞号**【总控】：生成的档号已被别的未删除条目占 → 自动生成和重算都留空不报错，只有显式改件号撞号 409 `conflict`。批量重算时范围外和定稿的先占，范围内分档先到先得：① 有号不换 ② 有号要换 ③ 原为空，档内按 id；结果确定。
+- 详情给空档号原因：incomplete（缺哪级）、conflict（被谁占）、not_generated（重新生成会补上）、template_invalid。
+- **件号**：节点内 max+1，**算上已删除条目**（不回收）；未定稿可手改（1–999999999），已占（含已删除）409；移到别的节点取目标 max+1。
+
+**条目**（只做"件"）
+
+| 动作 \ 状态 | draft | done | locked |
+|---|---|---|---|
+| 改著录、移动、改件号、改页序、删除 | 可以 | 可以，保持 done | 409 `item_locked` |
+| 标记完成 / 退回草稿 | → done（查必填）/ 409 | 409 / → draft | 409 `item_locked` |
+| 定稿 / 解锁 | 409 `invalid_state` | → locked / 409 | 409 / → done |
+
+- 成功动作 row_version +1 并审计；PATCH、状态动作、改页序都带 row_version，不一致 409 `conflict`。挂接文件的重扫、审核不改它。无实际变化不写库。
+- **著录**【Q1】：题名固定列（≤ 1000 字）；其他存 extra_fields，PATCH 按 key 合并，null 或空串清空。text ≤ max_length（默认 500，可 1–10000）；date `YYYY` / `YYYY-MM` / `YYYY-MM-DD` 真实日期；enum 在选项里。草稿只查格式，**必填在标记完成和定稿时查**，现有值也要合当前设置；已完成的改著录后保持完成、再查必填。新建时没给的用 default。
+- 改设置后的旧值（不在选项、超长、已删除的著录项）不改就能保存，详情原样返回并用 `field_issues` 标出；不能悄悄丢掉【Q1】。
+- 校验不过 400 `invalid_input`，`details.fields [{key, message}]` 一次列全（题名 key 为 `title`，著录项不能叫 title）。
+- **定稿前置**【Q5】：已完成、著录合格、≥ 1 页、档号不空、`lock_requires_approved` 时全部页通过；后三条不满足 409 `invalid_state` 写明（"有 2 页还没审核通过（例如第 3 页）"）。定稿后著录、页序、档号、移动、删除冻结，文件仍可重扫；有页在定稿后出了新快照就标"定稿后有新版本"（按最近一次定稿审计的时间比，解锁后不标）。
+- 解锁要 catalog + review_assign，→ done。**批量定稿** 1–500，已定稿跳过，有一个不满足整体 409（details.ids 列全部，message 按原因计数）。
+
+**挂接**【Q3、Q8】
+
+- `PUT /api/archive-items/{id}/files {row_version, file_ids}` 整体替换页、页号重排 1..n；≤ 2000 页；重复 400；无变化不写库。
+- 一个文件只在一个条目：已在别处 409 `file_cataloged`，details 写在哪（条目、档号、件号、题名、节点名称链、第几页、状态），界面给"从原条目移出"（原条目定稿时不行）。不存在或别项目 404（details.ids 是 file_id）。
+- 新建条目可带 file_ids 直接挂，失败整体回滚。删除条目：有页一并移出（unlink 带 item_deleted），件号不回收，定稿的 409。
+- 日志：每页 link / unlink，带件号、档号、题名、页号、文件名、路径、版本、审核状态；留下的页相对顺序变了写一条 reorder 审计，只记挪动过的页（最长递增子序列之外），插入移出的顺延不算。
+- 重扫后条目里自动显示新版本和"第 n 轮 / 待审"，不用重新挂接；/files 不加"从条目移出"。
+
+**归类信息（只读）**【Q10】：能进项目就能看。`POST catalog-placements {file_ids ≤ 500}`、`GET files/{fid}/catalog` 返回挂在哪（件号、档号、题名、页号、状态、节点名称链数组，不含根）；/review 和 /files 只显示档号（空时"第 n 件"）、题名、第几页。`GET catalog-settings` 返回补全的模板及错误、用到的层级、著录项、开关、可选类型、编码禁用字符、日期格式。
+
+**界面 /catalog**：左栏归类树（根下直接放的条目单列一行【总控】）；中栏条目列表（虚拟滚动，"n 待审"，批量定稿）、著录表单（按设置生成，档号只读、空时写原因，按权限显示解锁）、页序条（封面、版本、审核状态和轮次、"定稿后有新版本"；原生拖放排序，另有键盘和"移到第 n 页"；定稿后只读）；右栏**待归类池**【Q4】：只看所选文件夹直接放的文件，默认仅未归类，Shift 区间和"第 a–b 张"，已归类的显示"在 0012 第 3 页"；可挂到末尾、插到选中页后、拖进页序条、用选中文件新建条目。
+
+- **每个动作立即保存**【总控】：放下、移出、挂接都马上 PUT；409 conflict 时把操作重做在最新页序上做成预览由用户确认；移出 ≥ 5 页先确认、可撤销。
+- 著录设置在 /system/projects 编辑里（字段增删改排序、模板实时预览、定稿开关），默认只有 system.projects 能改【Q1】。改设置不发事件。
+- 客户端里页面的 HTML5 拖放要能用（WebView2 上要关掉壳的原生文件拖放）【总控】。
+
+### 5.10 项目看板（M3）
+
+【用户 2026-10-14，Q6】只有 dashboard 能看；实时聚合，不建汇总表。矩阵 = 4 种审核状态 × 3 种归类状态（未归类、已归类未定稿、已定稿）加行列合计；可导出按 `require_locked_item` 算、按审核状态拆开；KPI：已上传、通过、待重扫、已归类、已定稿、可导出（主数字"通过且可导出"）【总控】；文件夹进度表逐层展开（`catalog-summary?folder_id=`，结构同审核的按文件夹计数）。人员统计、今天 / 本周不做。
+
+### 5.11 导出（M4）
+
+**范围**：`category`（节点子树里未删除的条目，重叠算一次）或 `item`；scope_ids 1–5000，须是本项目未删除的（否则 404 details.ids）。条目按节点 path_code、件号、id 排。页 = 挂接行里文件和文件夹都未删除的，页号 1..n。没归类的文件不可能被导出。
+
+**预检**【用户 2026-10-15，Q7】：就绪 =（require_locked_item 时）已定稿、档号不空、≥ 1 页、（勾"只导出审核通过的"，默认勾）全部页 approved。原因码 `not_locked`、`no_archive_no`、`no_pages`、`pages_not_approved`（带前 5 页，如"0012 第 3 页：待审"）。给件数页数、就绪与否、各原因件数、不就绪条目（≤ 500 件）。单任务 ≤ **20 万页**【总控】。建任务时没有条目、无一就绪、没勾"只导出就绪的"而有不就绪、超页数 → 409 `invalid_state`，details 即预检结果。
+
+**冻结**【Q4】：点导出那一刻在一致快照里定下条目、页和每页的最新快照（export_task_files），连同条目当时的档号、题名、著录、节点名称链、状态（原版存 job payload，写后不改、job 行永久保留【总控】）。之后的变化不影响这次导出，归入交付后变更。建任务不拿树锁。
+
+**导出物**【Q2、Q3】：一个 zip（不压缩、UTF-8 名、> 4 GB 可用）。PDF 每件 `<档号>.pdf` 平铺；原图包每件 `<档号>/0001.<jpg|tif|png>`（保留原格式）。都附 `目录.xlsx`（每件：序号、档号、题名、各著录项、页数、状态、分类路径；首行加粗冻结；全文本）和 `清单.csv`（UTF-8 BOM、CRLF；每页：档号、页号、zip 内文件名、file_id、snapshot_id、版本、sha256、原文件名、审核状态）——每页能反查的依据；原文件名以 `= + - @` 等开头加 `'`。
+
+- 名字 = 档号：Windows 非法字符换 `_`；结尾点或空格加 `_`；保留名在第一个点前那段后加 `_`（`con.2025` → `con_.2025`）；重名（不分大小写）或撞目录、清单名时加 ` (2)`…
+- **PDF 1.7**：一页一图铺满；Title 题名、Subject 档号。尺寸 = 像素 × 72 / DPI，横纵分别算：100–2400 算合理，一个合理而另一个 ≥ 50 时各用各的（传真 204×98 不压扁），否则都用合理的那个，都不合理按 300【总控】。JPEG / TIFF 方向用变换转正。
+- **原样嵌入**【Q1】：JPEG → DCTDecode；PNG（不隔行无透明）→ Flate + 预测器；TIFF 无压缩、LZW、Deflate、PackBits、G3/G4、JPEG → 对应过滤器，多条带拼一页；调色板 → Indexed。**放不进的无损转换**（Flate，透明转 SMask）。（可简化：原版还处理了 16 位预测器、预乘 alpha、旧式 JPEG-in-TIFF、条带 > 1024、> 10 GB 等；重写保证常见扫描格式，罕见的无损转换，转不了按不支持报错。）
+- **出错**：任一页有问题（大小或 sha 不符、格式不符、损坏、不支持）整个导出失败、不跳过；再把剩下的页只看文件头查一遍，一次列出全部问题页（档号、页号、file_id、snapshot_id、原因），提示重扫或移出后重导；不重试。
+
+**执行**【Q7】：同时 ≤ 2 个（`JOB_CONCURRENCY`），其余排队；可重试的失败（S3、临时盘、写库）自动重试，一共最多执行 3 次（max_attempts），重试前等 30 秒 × 4^(n−1)（30 秒、2 分钟…，最多 1 小时），复用同一 job 行。一次一件一页，页从 S3 流式读到临时目录，zip 边生成边分片上传；开始前查临时盘（PDF 要最大一件原图 × 1.2）。进度按页、≤ 每秒一次。成功时每页一条 file_logs `export`，和任务 done 同一事务。导出物 key `<path_prefix>exports/<project_code>/<task_id>/export-<第几次>.zip`。
+
+- **取消**【总控】：排队的直接 canceled；执行中的任务立即 canceled，job 等执行器中止上传、删临时文件后再 canceled，期间 `cleaning_up: true`；已结束的取消 409。执行器改任务状态带条件，不能把已取消覆盖成 done。
+- 优雅退出时执行中的放回队列（不算一次尝试）；被杀后重启要能接着处理。（可简化：原版的租约、心跳超时回收、多执行器领取锁是为多实例；单服务器只需心跳查取消、启动时把 running 的放回队列。）
+
+**下载和保留**【Q5】：`GET download` 返回 JSON `{url, file_name, size, expires_at, url_expires_at}`，不用 302（壳经代理会把 zip 转一遍）；url 是按天取整、带 `response-content-disposition` 的预签名地址，浏览器直连 S3，壳交给系统浏览器；每次写审计。文件名 `<项目编码>_<范围名>_<日期>.zip`（≤ 40 字，日期 UTC+8）。保留 7 天后自动删，任务和明细永久保留，可按原范围重导；过期下载 409 `invalid_state`，存储停用 409 `storage_unavailable`。定期清理（默认 10 分钟）：done 且过期超过 `url_expire_hours + 24h` 宽限的、failed / canceled 留下的，删对象、清 output_key。（可简化：原版另扫描近 7 天删"没人记着"的残留对象。）
+
+**交付后变更**【Q6】：只对 done 的任务，按件列出：new_version、pages_removed、pages_moved、pages_reordered、pages_added、not_approved（勾了只导出通过时）、item_changed（题名、档号、著录）、item_deleted；只换节点而档号不变、节点改名不算；≤ 500 件。"只补交有变更的 n 件"：建任务传 `resubmit_of`，server 同一快照算条目，不受 5000 限制【总控】。
+
+**权限和界面**：要 export + 能进项目。/export：任务列表（进度、下载、明细、"交付后变更 n"、取消）；新建（从归类树选范围、格式、"只导出审核通过的"、预检问题清单、"只导出就绪的 n 件"；双层 PDF、OFD 标"以后的版本"）；补交。/catalog 的节点和条目上有"导出"入口。交付后变更的刷新要节流【总控】。
+
+## 6. 桌面客户端（壳）
+
+- **标识**【用户 2026-09-27】：identifier `com.doclite.desktop`（不再改，改了安装更新会当成另一个应用）；productName `Doclite`；单实例（再启动聚焦已有窗口）。
+- **数据目录**【用户 2026-09-27】：`%LOCALAPPDATA%\Doclite\`（macOS `~/Library/Application Support/Doclite/`）：设置、会话 Cookie、上传队列库、日志（按天滚动）、图片缓存、`smoke\`。
+- **会话**【用户 2026-09-27】：界面打包进壳；首次启动填服务器地址（探测 `/api/health`、`/api/shell/latest`），连不上可重试或改地址。页面和 server 跨源，**壳代理全部 `/api/` 请求**：只许已配置 server 的 `/api/` 路径；壳保存 Cookie（退出或换服务器清空），页面拿不到令牌；壳加 `X-Client-Type: desktop`、`X-Client-Version`；SSE 经壳逐块转发；不用 Bearer（Wails 下怎么实现由重写定，"页面拿不到令牌、客户端头由壳统一加"保留）。热文件夹、缓存、页面共用会话；到期时队列暂停，登录后自动继续。本机能力只开给打包的页面。
+- **版本**【用户 2026-09-27】：server 配 `MIN_CLIENT_VERSION`（不设不限）、`CLIENT_LATEST_VERSION`、`CLIENT_DOWNLOAD_URL`；低于最低 426 `client_upgrade_required`（details 带版本和下载地址），格式错 400 `invalid_client_version`；不带头放行；`/api/health`、`/api/shell/*` 不查。壳启动查 `shell/latest`，低于最低或收到 426 时整页提示更新。只在接口不兼容时调高；不做版本范围。
+- **上传队列**：本机库，一行一个本地文件（路径、大小、修改时间、sha、目标、状态 等待写入 / 排队 / 上传中 / 已入库 / 重复 / 失败、重试、错误）；一个数据目录只一个进程开队列；重启时上传中回到排队。热文件夹和壳里的上传按钮都进它。
+- **热文件夹**【用户 2026-09-27】：只监控一个目录，对应目标文件夹（可换）；子文件夹逐层按名字建（if_exists）并记住 folder_id（服务端改名移动照传，删除后重建）。写完判定：大小和修改时间 2 秒不变 → Windows 能独占打开 → JPEG 尾 `FF D9`、PNG 有 IEND；60 秒仍不完整记失败。忽略隐藏、系统、临时文件（`.`、`~$` 开头、`.tmp`、Thumbs.db 等）；不跟符号链接，≤ 32 层。同一子文件夹按文件名自然顺序串行（IMG_2 在 IMG_10 前），≤ 2 个子文件夹并行。
+- **每个文件**：核对大小时间 → 算 sha → 取或建文件夹 → 预检 → 生成封面（不依赖系统库；生成不了就不带）→ 流式上传。本地文件不动；没变不重传，变了当新内容。失败自动重试（1 秒起翻倍、封顶 5 分钟），断网整文件重传；400、403 永久失败；网络、5xx 临时；401、426 暂停；invalid_cover 去封面重传。暂停 = 停监控，重启按上次状态恢复。（可简化：原版为 10 万级积压、中途换服务器做了很多细节；"不丢页、不重复、顺序对、断网或 server 重启后接着传"必须保证。）
+- **/scan 页**：缓存摘要；热文件夹卡片（目录只能用系统对话框选，目标在当前项目里选或新建；开始 / 暂停）；各状态计数；最近文件（进度、DPI、无封面、重复位置、改名、重试倒计时）；右侧待重扫。浏览器的 /scan 引导去 /files 上传。
+- **重扫件上传**【用户 2026-10-07，Q6】：不进队列：系统对话框选一个文件 → 查文件尾完整 → 算 sha → 封面 → 上传，显示进度和结果；同时只一个；提示"重扫件不要扫进热文件夹"。浏览器同样先查扩展名和文件尾。
+- **图片缓存**：页面经壳的自定义协议取图（`<cover|original>/<file_id>/<snapshot_id>`），先查本机，没有用预签名 URL 下载并存下。按 snapshot_id 存（不用版本号：库回退时同一 v2 可能是另一张），不需失效。默认 2 GB（100 MB–1 TB 可改），按最近访问淘汰到 90%；可按项目查看和清空；大于上限一半的不存。原图校验 sha256、封面校验是 JPEG。**只认来源记录**：只用该快照最近出现在 batch / snapshots 响应里的 URL；命中缓存也要在记录里（缓存是所有账号共用的）；登录、退出、换服务器清空记录。（可简化：原版的索引损坏重建、启动对账。）
+- **大图切块**【Q1】：DZI，512×512、重叠 1，最高级是转正后原尺寸、逐级减半；灰度彩色 JPEG（质量 90），1 位 PNG；存进缓存参与淘汰；同一快照只切一次，同时 ≤ 2 张，可提前切下一张；切不了 422，页面只显示封面。（可简化：原版对条带 TIFF 逐行流式解码；可整张解码，但要有内存和时间上限。）
+- **托盘和窗口**：提示状态（需重新登录、需升级、未连接、热文件夹运行 / 暂停 / 未设置）和各状态数量；菜单：打开、暂停 / 继续热文件夹、退出。关窗缩到托盘、上传继续；只有"退出"真退出；退出时移除图标。App Nap 不处理【用户 2026-10-07】。
+- **自检 `--smoke`**：地址和账号从环境变量读，用 `smoke\` 目录；逐项查登录、协议取图、SSE 心跳、缓存、切块、查看器、托盘、扫描页等；输出一行 JSON；退出码 0 成功、1 失败、2 连不上、3 需升级。
+
+## 7. 实时事件（SSE）
+
+`GET /api/projects/{pid}/stream`：能进项目即可；只推本项目；`data: {"type", "project_id", ...}`，**只带 id**，客户端据此重取。15 秒保活；60 秒复核会话和授权，失效即断；提交后才发；断开期间不补发，重连后整体刷新；积压溢出发 `resync`。客户端 45 秒无数据重连，401/403/404 不重连，收到后去抖约 300 ms 刷新。没有实际变化、改设置不发。
+
+| type | 字段 | 含义 |
+|---|---|---|
+| folders.changed | folder_ids | 文件夹建、改名、改备注、移动、删除；项目改名时是根 |
+| files.changed | folder_ids, file_ids? | 上传、重扫、改名、移动、复制、删除、审核状态变、挂上移出（只换页号不算）；> 500 个只带 folder_ids |
+| catalog.changed | category_ids?, item_ids | 归类节点或条目变化 |
+| export.changed | task_ids | 任务建立、取消、开始、进度（≤ 1 次/秒）、完成、失败、重试、清理完 |
+| resync | — | 整体刷新 |
+
+**catalog.changed 的 item_ids**【总控】：存在时按条目刷新；`[]` = 只有节点变；**不存在** = 变了的条目 > 500，把 category_ids 当子树根整体刷新。item_ids 只列条目本身变了的（档号、著录、状态、页）；节点改名、移动、改编码会改子树条目的路径显示，显示归类路径的地方要按 category_ids 刷新，/files、/review 的归类信息收到任何 catalog.changed 都重取。挂接、页序、删条目先发 files.changed（有挂上移出时）再发 catalog.changed。
+
+## 8. 接口清单
+
+都在 `/api` 下，JSON，时间 RFC 3339，错误体 `{code, message, details?}`。
+
+| 路径（省略 /api/） | 菜单 | 说明 |
+|---|---|---|
+| GET health · shell/latest · shell/download/{v}（M5） | 不用登录 | 健康、客户端版本、安装包 |
+| POST auth/login · auth/logout · GET me · me/menus · projects | 登录 | 会话、菜单、我的项目 |
+| system/users（GET/POST）· {id}（GET/PATCH）· {id}/disable·enable·reset-password（POST）· {id}/roles（PUT） | system.users | 用户 |
+| GET system/roles | roles 或 users | 角色列表 |
+| system/roles（POST）· {id}（GET/PATCH/DELETE）· {id}/menus（PUT）· GET system/menus | system.roles | 角色、菜单 |
+| system/storage-profiles（GET/POST）· {id}（GET/PATCH/DELETE）· test · {id}/test · {id}/set-default · {id}/migrate（M5） | system.storage | 存储 |
+| system/projects（GET/POST）· {id}（GET/PATCH/DELETE）· access-candidates · projects/{pid}/access（GET/PUT） | system.projects | 项目、授权 |
+| folders/{id}（GET）· folders/{id}/children · POST folders | scan 或 files | 文件夹 |
+| folders/{id}（PATCH/DELETE）· folder-files/{id}（PATCH/DELETE）· {id}/copy · folder-files:move · :delete | files | 整理 |
+| POST folders/{id}/files · files:check · files/{fid}/rescan · GET projects/{pid}/rescans | scan 或 files | 上传、预检、重扫、待重扫 |
+| POST files/batch · GET files/{fid}/snapshots | 登录 | 图片、版本 |
+| GET files/{fid}/logs | files | 日志 |
+| POST projects/{pid}/review-assignments · review-assignments/{id}/reassign · projects/{pid}/review-assignments:reassign · GET …/reviewers · …/review-summary · …/review-assignments | review_assign | 分配、改派、查询 |
+| GET me/reviews · POST files/{fid}/review · projects/{pid}/reviews:approve | review | 我的审核、审、批量通过 |
+| POST files/{fid}/reopen · GET files/{fid}/reviews | review 或 review_assign | 撤回、分配历史 |
+| GET …/review-settings · …/catalog-settings · POST …/catalog-placements · GET files/{fid}/catalog · …/stream | 能进项目 | 设置、归类信息、SSE |
+| projects/{pid}/archive-categories（GET/POST）· {id}（PATCH/DELETE） | catalog | 节点 |
+| archive-categories/{id}/items（GET/POST）· archive-items/{id}（GET/PATCH/DELETE）· {id}/mark-done·back-to-draft·lock · {id}/files（PUT）· projects/{pid}/archive-items:lock · :renumber | catalog | 条目、挂接 |
+| POST archive-items/{id}/unlock | catalog **和** review_assign | 解锁 |
+| GET projects/{pid}/catalog-summary | dashboard | 看板 |
+| POST projects/{pid}/export-tasks:precheck · export-tasks（POST/GET）· export-tasks/{id} · /files · /changes · /download · /cancel | export | 导出 |
+
+**错误码**：400 `invalid_input`（参数、名称、格式、著录 `details.fields`、批量跨项目、空列表或 > 500）、`invalid_client_version`、`checksum_mismatch`、`invalid_image`、`invalid_cover`；401 `unauthorized`、`invalid_credentials`；403 `forbidden`、`admin_required`、`user_disabled`、`not_assignee`；404 `not_found`（批量 details.ids：文件目录批量是 folder_files id，审核和挂接是 file_id，批量定稿是条目 id，导出是节点或条目 id）；405 `method_not_allowed`；409 `conflict`（唯一冲突、版本过期、件号占用、显式改件号撞号、审的不是当前快照）、`invalid_state`（状态不允许、定稿前置、导出不就绪）、`tree_cycle`、`tree_full`、`root_folder_locked`、`file_cataloged`、`duplicate_content`、`storage_changed`、`storage_unavailable`、`storage_not_active`、`storage_is_default`、`storage_in_use`、`project_not_empty`、`item_locked`、`category_not_empty`、`last_admin`、`cannot_disable_self`、`builtin_role`、`admin_menus_locked`；413 `payload_too_large`；415 `unsupported_media_type`；426 `client_upgrade_required`；500 `internal`、`secret_unreadable`；503 `busy`。
+
+## 9. 用户决定汇总（按时间）
+
+- **2026-09-26**：防提权四条；图片信息统一走 batch；CSRF 暂不处理；预签名按天取整（UTC+8），自己实现签名。
+- **2026-09-27**：CI 不做、镜像和 compose 暂缓；项目规则；名称、重名、顺序规则；重扫到原 file_id；文件夹改名移动只审计；会话 12 小时不续期；壳代理请求；key 扩展名统一；入库上限、多页 TIFF 拒绝、无 DPI 存空；查重和断网重试、预检；batch 字段；下载原图不加接口；壳 identifier 和数据目录；决策 5 界面打包进客户端；最低客户端版本；热文件夹 v1；有扫描仪时真扫补测。
+- **2026-09-28**：封面由客户端生成、随原图一个 multipart，server 不做图像处理；禁止 Windows 保留名；封面必须备份；插件出新版本时自带封面。
+- **2026-10-04**：重扫也查重；Windows 打包和验收移到 M5。
+- **2026-10-07**：App Nap 不处理；项目名去首尾空白、1–100 字；老名字不重校验；M2 不改表、同意迁移 0002；Q1 OpenSeadragon + 壳里切块、不换 Electron；Q2 对比；Q3 键位；Q4 驳回原因；Q5 分配规则；Q6 待重扫入口和壳的一次性重扫；Q8 撤回通过、不做撤回驳回；Q9 批量通过；Q10 > 500 只带 folder_ids；Q11 /files 查看原图；Q12 待办跟随项目；Q13 `not_assignee`、带 snapshot_id、DPI 筛选、不做放大镜；原审核人不能再审时改待分配。
+- **2026-10-14**：先做完图像处理以外的流程，M6 和二期不排期；确认 M2；M3 全部按建议（Q1 著录项、Q2 档号件号、Q3 一文件一条目 / ≤ 2000 页 / 原生拖放 / 不做页号和案卷、Q4 待归类池、Q5 定稿解锁批量定稿、Q6 看板、Q7 互不阻塞定义和新事件错误码、Q8 删除移动、Q9 不改表、Q10 归类信息）。
+- **2026-10-15**：确认 M3；M4 Q1（用户改选）放不进 PDF 的由 server 无损转换；Q2 导出物格式；Q3 xlsx + CSV；Q4 建任务时冻结；Q5 存 S3 直连下载、保留 7 天；Q6 交付后变更和补交；Q7 预检、并发 2、可取消、重试 3 次；QA 迁移 0003；QB 项目保存版本检查；接受"保存著录设置写入默认值"。
+
+## 10. 总控代定的规则
+
+| 规则 | 原因 |
+|---|---|
+| 没看到这一版不能审，只看了封面要确认；对比看旧版时不能审 | 防止没看图就通过 |
+| 自动分回的条件从"停用"扩到三条 | 不把文件分给打不开的人 |
+| 审核批量混进别项目的文件整批 404 | 不透露别的项目 |
+| 按子树改派 ≤ 1 万；通过可带说明 | 和分配一致 |
+| 只有 review_assign 的人在分配页只看计数 | 浏览目录要 files 或 scan |
+| 审完的行留原位；新分配靠核对计数发现 | 翻页稳定；不为每个事件重拉 |
+| 分配记录含已取消；我的审核用 is_current 标历史 | 完整改派历史 |
+| 浏览器上传全局 2 个、同文件夹串行 | server 按到达排页序 |
+| 档号撞号留空，只有手改件号报错 | 否则后建的条目建不出来 |
+| 重算档号分档先到先得 | 不让快定稿的条目丢号 |
+| 归类锁和归类行在文件树锁之前 | 原顺序审核被间接拖慢 1.4 秒，改后约 0.01 秒 |
+| 挂接每步立即保存，冲突做成预览 | 减少两人抢页，操作不丢 |
+| 删有页的条目写明页数、期间有变化重新确认 | 不误移别人刚挂的页 |
+| 根下直接放的条目单列 | 否则看不见、移不走 |
+| 客户端关原生文件拖放 | Windows 上页面拖拽会失效 |
+| catalog.changed item_ids 三种含义 | 分清"无条目变"和"太多" |
+| 看板可导出按审核状态拆，主 KPI"通过且可导出" | 和导出默认勾选一致 |
+| 执行中取消：任务立即 canceled，job 清理完再改 | server 被杀时不停在 running |
+| 冻结的条目信息不改、job 永久保留、重试复用 | 交付后变更要和它比 |
+| 补交用 resubmit_of 不受 5000 限制 | 重新生成档号后可能上万件 |
+| 单任务 ≤ 20 万页 | 建任务是同步的 |
+| PDF 尺寸横纵 DPI 分别算、兜底 300 | 传真不压扁 |
+| 一页失败后检查剩余页一次列出 | 一次处理完 |
+| 条带 > 1024 的 TIFF 页转换 | 对象太多阅读器打不开（可简化） |
+| 交付后变更刷新节流 | 原来 24 秒请求 77 次 |
+
+## 11. M5 还没做的
+
+- **存储迁移**：对接客户对象存储；`storage-profiles/{id}/migrate` 由后台任务（`storage_migrate`）复制对象 → 校验 sha256 → 切换引用，迁完原存储可停用；完成标志是新旧文件都能读。**（待确认）** plan 写"更新快照行"，和"快照只追加"冲突，要问是否允许迁移改快照的存储和 key；迁移范围、导出物迁不迁、迁移中能否写入、失败续传也未定。
+- **许可证**：绑定首次启动生成的 install_id，限制在线会话数和到期日，Ed25519 离线签名（签发是厂商侧工程），存 system_settings。**（待确认）** 席位怎么算（浏览器和客户端、同人多处登录）、超出和到期行为、导入方式。
+- **install.ps1**：查虚拟化 → WSL2 → Docker → 导入镜像 → 生成密钥写 .env → compose up → 防火墙开 9080、8333 → 开机自启 → 建管理员、登记默认存储 → Portainer（仅本机）。**（待确认）** 细节。
+- **backup.ps1**：pg_dump + rclone 增量同步桶；**封面必须备份**【用户 2026-09-28】。**（待确认）** 频率、保留、恢复流程。
+- **export-tree** 运维命令：按目录结构导出文件和清单（容灾、交接），不跳过封面。
+- **镜像、compose、CI**（原 M0-7）。**（待确认）** 是否建远端仓库、CI 放哪。
+- **离线交付包**：镜像 tar、compose、脚本、客户端安装包。
+- **自动更新**：从内网 server 下载安装包（`shell/download/{version}`），校验签名后安装。**（待确认）** 签名证书、Wails 下的更新方式。
+- **SeaweedFS 4.45 复验**：预签名、CORS、带 content-disposition 的下载、取消上传残留。
+- **Windows 验收**【用户 2026-10-04】：远程 Windows 离线安装，按 `/Users/yanlong/project/doclite-project/bak/doclite-v3/docs/acceptance/m1-windows.md` 逐项查（自定义协议、热文件夹文件锁和目录通知、中文长路径、安装包、单实例、托盘幽灵图标、后台节流、页面拖放、下载）。
+- 其他：/system/audit 审计日志页**没有接口设计**（待确认 v1 是否做）；M4-6 验收未完成。
+
+## 12. v1 不做
+
+插件（修图、纠偏等，M6）；OCR、双层 PDF、OFD、二维码分隔页、全文检索、按钮级权限、抽检、返工统计、壳直接驱动扫描仪（二期）；手改档号、案卷、页号；撤回驳回；看板人员统计和今天 / 本周；放大镜；跨项目移动复制；复制文件夹；恢复已删除；带真实文件名下载原图；封面补生成。

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 图标内联，不引用任何外部资源（客户内网不联网）。 -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23171717'/%3E%3Ctext x='16' y='22.5' font-size='18' font-family='Arial,sans-serif' font-weight='600' fill='white' text-anchor='middle'%3ED%3C/text%3E%3C/svg%3E"
+    />
+    <title>Doclite</title>
+    <!-- OpenSeadragon（看原图，M2-4）建查看器时会往 head 里插一个同样标记的 <style>（触摸屏上去掉画布的焦点轮廓）；
+         这里先放好，它就不再插。运行时插入的内联样式过不了壳的 CSP；写在这里的，Tauri 打包时会给它加上 CSP 的 nonce。 -->
+    <style data-openseadragon-mobile-css>@media (hover: none) { .openseadragon-canvas:focus { outline: none !important; } }</style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

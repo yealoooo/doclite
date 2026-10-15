@@ -1,0 +1,9 @@
+server/.env
+server/bin/
+server/tmp/
+web/node_modules/
+web/dist/
+client/build/
+*.log
+.DS_Store
+.idea/
