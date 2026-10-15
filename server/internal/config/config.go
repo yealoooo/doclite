@@ -23,6 +23,8 @@ const (
 	DefaultSessionTTLHours = 12
 	MaxSessionTTLHours     = 24 * 30
 	DefaultAdminName       = "系统管理员"
+	DefaultMaxUploadBytes  = 512 << 20
+	DefaultMaxImagePixels  = 300_000_000
 )
 
 // Config 是 server 的全部配置。
@@ -50,6 +52,10 @@ type Config struct {
 	ClientVersions ClientVersions
 	// WebDir 是托管的网页构建产物目录（WEB_DIR）；为空时不托管网页。
 	WebDir string
+	// MaxUploadBytes 是上传原图的大小上限（MAX_UPLOAD_BYTES，默认 512 MiB），超过 413。
+	MaxUploadBytes int64
+	// MaxImagePixels 是原图像素总数的上限（MAX_IMAGE_PIXELS，默认 3 亿），超过 400 invalid_image。
+	MaxImagePixels int64
 }
 
 // InitAdmin 是初始管理员。
@@ -168,6 +174,13 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 	}
 
 	c.WebDir = get("WEB_DIR")
+
+	if c.MaxUploadBytes, err = int64InRange("MAX_UPLOAD_BYTES", get("MAX_UPLOAD_BYTES"), DefaultMaxUploadBytes, 1, 1<<40); err != nil {
+		return nil, err
+	}
+	if c.MaxImagePixels, err = int64InRange("MAX_IMAGE_PIXELS", get("MAX_IMAGE_PIXELS"), DefaultMaxImagePixels, 1, 1<<40); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 
@@ -190,6 +203,17 @@ func intInRange(key, v string, def, min, max int) (int, error) {
 		return def, nil
 	}
 	n, err := strconv.Atoi(v)
+	if err != nil || n < min || n > max {
+		return 0, fmt.Errorf("%s 应为 %d 到 %d 之间的整数，实际是 %q", key, min, max, v)
+	}
+	return n, nil
+}
+
+func int64InRange(key, v string, def, min, max int64) (int64, error) {
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil || n < min || n > max {
 		return 0, fmt.Errorf("%s 应为 %d 到 %d 之间的整数，实际是 %q", key, min, max, v)
 	}

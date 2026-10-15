@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"doclite/server/internal/config"
+	"doclite/server/internal/file"
 	"doclite/server/internal/platform/db"
 	"doclite/server/migrations"
 )
@@ -26,6 +27,7 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	if err := os.MkdirAll(cfg.TmpDir, 0o755); err != nil {
 		return fmt.Errorf("建临时目录 TMP_DIR=%s 失败：%w", cfg.TmpDir, err)
 	}
+	file.SweepTmp(cfg.TmpDir, log)
 
 	pool, err := db.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -43,6 +45,7 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		ClientVersions: cfg.ClientVersions,
 		WebDir:         cfg.WebDir,
 		MasterKey:      cfg.MasterKey,
+		Upload:         file.Options{TmpDir: cfg.TmpDir, MaxUploadBytes: cfg.MaxUploadBytes, MaxImagePixels: cfg.MaxImagePixels},
 	}, log)
 	if err != nil {
 		return err

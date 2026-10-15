@@ -27,6 +27,7 @@ const (
 	// M4-1：归类节点、档案条目。
 	TargetArchiveCategory = "archive_category"
 	TargetArchiveItem     = "archive_item"
+	TargetFolder          = "folder"
 )
 
 // Entry 是一条审计记录。

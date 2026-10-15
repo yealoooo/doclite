@@ -15,6 +15,8 @@ import (
 	"doclite/server/internal/auth"
 	"doclite/server/internal/catalog"
 	"doclite/server/internal/config"
+	"doclite/server/internal/file"
+	"doclite/server/internal/folder"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
 	"doclite/server/internal/project"
@@ -38,6 +40,8 @@ type Options struct {
 	MasterKey config.MasterKey
 	// Stream 是实时通道的保活、复核间隔；零值用默认的 15 秒、60 秒（测试里调短）。
 	Stream project.StreamOptions
+	// Upload 是上传的配置（TMP_DIR、MAX_UPLOAD_BYTES、MAX_IMAGE_PIXELS）；零值用默认值。
+	Upload file.Options
 }
 
 // App 是组装好的 server。
@@ -52,6 +56,9 @@ type App struct {
 	Storage  *storage.Service
 	// Events 是项目的实时事件总线（server 退出时 Close，结束所有 SSE 连接）。
 	Events *events.Bus
+
+	Folders *folder.Service
+	Files   *file.Service
 }
 
 // New 组装各模块。数据库迁移要在这之前执行（Run 里先迁移）。
@@ -72,6 +79,8 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	bus := events.NewBus()
 	projectSvc := project.NewService(pool, bus, authSvc)
 	storageSvc := storage.NewService(pool, opts.MasterKey)
+	folderSvc := folder.NewService(pool, bus, authSvc, storageSvc)
+	fileSvc := file.NewService(pool, bus, authSvc, storageSvc, folderSvc, opts.Upload)
 
 	gate := auth.NewGate(authSvc)
 	api := httpx.NewRouter()
@@ -82,6 +91,8 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	project.NewHandler(projectSvc, opts.Stream).Routes(api, gate)
 	storage.NewHandler(storageSvc).Routes(api, gate)
 	catalog.NewHandler(catalog.NewService(pool, bus)).Routes(api, gate)
+	folder.NewHandler(folderSvc).Routes(api, gate)
+	file.NewHandler(fileSvc).Routes(api, gate)
 
 	// /api 的最外层是客户端版本检查（先于鉴权）；/api 以外是网页。
 	apiHandler := auth.ClientVersionCheck(opts.ClientVersions)(api)
@@ -103,6 +114,8 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 		Projects: projectSvc,
 		Storage:  storageSvc,
 		Events:   bus,
+		Folders:  folderSvc,
+		Files:    fileSvc,
 	}, nil
 }
 

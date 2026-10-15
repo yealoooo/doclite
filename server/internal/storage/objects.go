@@ -172,3 +172,17 @@ func (s *Service) LockForSnapshot(ctx context.Context, tx pgx.Tx, profileID uuid
 	}
 	return nil
 }
+
+// LockForReuse 在复用已有对象的事务里调用（复制文件：新快照指向源快照的 key，不写字节）：锁住源快照所在的存储配置行
+// （FOR KEY SHARE，和停用、删除互斥），只要求它不是 disabled（只读的也行，不要求是默认），否则 409
+// `storage_unavailable`。加锁顺序同 [Service.LockForSnapshot]。
+func (s *Service) LockForReuse(ctx context.Context, tx pgx.Tx, profileID uuid.UUID) error {
+	status, _, found, err := lockForSnapshot(ctx, tx, profileID)
+	if err != nil {
+		return err
+	}
+	if !found || status == StatusDisabled {
+		return httpx.Conflict(CodeStorageUnavailable, "源文件所在的存储已停用，不能复制")
+	}
+	return nil
+}
