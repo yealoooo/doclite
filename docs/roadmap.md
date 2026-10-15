@@ -38,7 +38,7 @@
 - **完成标志：** API 测试覆盖登录、会话、用户、角色、菜单权限；用 Go server 托管前端，跑截图脚本 `m0.mjs`（登录、导航、用户、角色）通过。
 - **先读：** CLAUDE.md；requirements 1、2、3.1、4、5.1、5.2、8；`server/migrations/0001_init.sql`；前端 `web/src/api/{http,auth,system}*.ts`、`web/src/api/types.ts`。
 
-### [~] M1-2 shared 库：文件头解析、名称规则、档号模板
+### [x] M1-2 shared 库：文件头解析、名称规则、档号模板（commit 4b442fd）
 - **范围：** `shared` 模块（纯函数，不碰数据库和网络）：
   - `imagehdr`：JPEG、PNG、TIFF 文件头解析（requirements 5.6"文件头"：格式、宽高、DPI、颜色模式、方向、多页 TIFF、像素上限；不解码像素）；
   - `names`：文件和文件夹名称规则、Windows 保留名（5.5）；项目编码规则（5.3）；
@@ -53,6 +53,13 @@
 - **前置：** M1-1。
 - **先读：** requirements 4、5.3、5.4、5.7、7、8。
 
+- **结果：** `shared` 模块（`doclite/shared`，只用标准库）：`imagehdr`、`names`、`archiveno`；单元测试 imagehdr 65 个子测试、names 5 个、archiveno 5 个（覆盖率 84%、100%、97%）。样本 12 个在 `server/testdata/samples/`（3.8 MB，README 有格式、尺寸、DPI、方向和生成命令）；`web/scripts/lib/upload-samples.mjs` 改为读这个目录（每个进程往样本里加一段注释，保持"每次运行内容不同、不被判重复"）。
+- **须知：**
+  - `imagehdr.Parse(r io.ReaderAt, size int64, maxPixels int64) (Info, error)`（`DefaultMaxPixels = 300_000_000`；先读 64 KiB，需要时按偏移补读）；`Info{Format, Width, Height（转正后）, DPI（0 = 未知）, ColorMode（bw/gray/color/空）, Orientation（1–8）}`、`StoredSize()`、`Format.MIME()`、`Format.Ext()`；错误用 `errors.Is`：`ErrUnsupported` → 415 `unsupported_media_type`，`ErrInvalid`、`ErrMultiPage`、`ErrTooLarge` → 400 `invalid_image`，其他 → 500；`err.Error()` 是给用户看的中文说明。**封面校验不在这里**，M2-1 用 `Parse` 读封面后自己查（JPEG、方向 2–8 拒绝、长边和比例、`FF D9`、≤ 256 KiB）。
+  - `names`：`ValidateFileName`、`ValidateFolderName`、`IsWindowsReserved`、`NumberedName(name, n)`（重名改"名字 (n).扩展名"）、`NormalizeProjectCode`、`NormalizeProjectName`、`ValidateCategoryCode(code, separators)`、`CategoryCodeForbiddenChars(separators)`；错误一律 400 `invalid_input`。归类节点名称的规则没做，留给 M4-1。
+  - `archiveno`：`Parse(template) (*Template, error)`（错误以"档号模板不对："开头）、`Render(chain []Node, itemNo int) (archiveNo string, missing []CategoryType)`、`Levels()`、`Separators()`、`ItemNoWidth()`、`NearestCode()`、`DefaultTemplate`、`FallbackSeparators`、`CategoryType` 常量、`AssignableTypes`、`Label()`。
+  - imagehdr 里的 IFD 读取没导出；M5-1 需要压缩方式、条带等细节时扩展或自己读。
+  - **遗留：** `m1-accept.mjs` 还自己调 gen-samples（M5-3 改）；bak 里的 gen-samples 要用已编译好的 `target/release/examples/gen-samples`（搬家后 cargo 重新编译会失败）；JPEG 段之间的多余字节按读不出来处理（遇到真实扫描件这样写再放宽）。
 ---
 
 ## M2 文件目录和上传
@@ -87,7 +94,7 @@
 
 ## M5 导出
 
-### [ ] M5-1 导出物生成（PDF、原图包、目录、清单）
+### [~] M5-1 导出物生成（PDF、原图包、目录、清单）
 - **范围：** `internal/export` 里的生成部分（纯函数，输入冻结的条目和页、读原图的接口，输出写进一个 writer 的 zip）：PDF 原样嵌入、放不进的无损转换（硬性规则 11 的例外）、横纵 DPI、原图包、`目录.xlsx`、`清单.csv`、Windows 安全的文件名（requirements 5.11"导出物"）。
 - **完成标志：** 单元测试覆盖常见扫描格式（JPEG、G4 TIFF、LZW TIFF、无压缩 TIFF、PNG、带透明的 PNG）原样嵌入或转换的结果（嵌入的字节、转换的像素）；用 macOS 的 `sips` 抽查 PDF 能打开、尺寸对。罕见格式不逐个做。
 - **前置：** M1-2（和 M1-3 并行）。
