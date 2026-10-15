@@ -1,0 +1,121 @@
+// Package httpx 是 HTTP 的基础设施：路由、中间件、统一错误体、JSON 读写、分页和路径参数、托管网页。
+//
+// 错误体：所有接口出错时返回 `{"code": "<错误码>", "message": "<给人看的中文说明>", "details": …}`，
+// details 可选、没有时不输出。错误码见 requirements 第 8 节。
+//
+// handler 返回 error：
+//   - [*Error] 按它的状态码和错误码输出；
+//   - 其他错误一律 500 `internal`，细节只写日志，不返回给调用方。
+package httpx
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+)
+
+// Error 是带 HTTP 状态码和错误码的错误。service 里也用它表达业务错误（`last_admin` 之类）。
+type Error struct {
+	Status  int
+	Code    string
+	Message string
+	// Details 放进响应体的 details（426 的升级信息、批量操作的 ids……）；nil 时不输出。
+	Details any
+}
+
+func (e *Error) Error() string { return e.Code + ": " + e.Message }
+
+// NewError 建一个错误。
+func NewError(status int, code, message string) *Error {
+	return &Error{Status: status, Code: code, Message: message}
+}
+
+// WithDetails 返回带 details 的副本。
+func (e *Error) WithDetails(details any) *Error {
+	c := *e
+	c.Details = details
+	return &c
+}
+
+// 常用错误码。
+const (
+	CodeInvalidInput         = "invalid_input"
+	CodeInvalidClientVersion = "invalid_client_version"
+	CodeUnauthorized         = "unauthorized"
+	CodeInvalidCredentials   = "invalid_credentials"
+	CodeForbidden            = "forbidden"
+	CodeAdminRequired        = "admin_required"
+	CodeUserDisabled         = "user_disabled"
+	CodeNotFound             = "not_found"
+	CodeMethodNotAllowed     = "method_not_allowed"
+	CodeConflict             = "conflict"
+	CodeInvalidState         = "invalid_state"
+	CodePayloadTooLarge      = "payload_too_large"
+	CodeUnsupportedMedia     = "unsupported_media_type"
+	CodeUpgradeRequired      = "client_upgrade_required"
+	CodeInternal             = "internal"
+	CodeBusy                 = "busy"
+)
+
+// Invalid 是 400 `invalid_input`。
+func Invalid(format string, args ...any) *Error {
+	return NewError(http.StatusBadRequest, CodeInvalidInput, fmt.Sprintf(format, args...))
+}
+
+// NotFound 是 404 `not_found`，what 是东西的中文名称，例如"用户"。
+func NotFound(what string) *Error {
+	return NewError(http.StatusNotFound, CodeNotFound, what+"不存在")
+}
+
+// Conflict 是 409，code 为空时用 `conflict`。
+func Conflict(code, message string) *Error {
+	if code == "" {
+		code = CodeConflict
+	}
+	return NewError(http.StatusConflict, code, message)
+}
+
+// Forbidden 是 403 `forbidden`（菜单权限不够）。
+func Forbidden() *Error {
+	return NewError(http.StatusForbidden, CodeForbidden, "没有权限执行这个操作")
+}
+
+// AdminRequired 是 403 `admin_required`（防提权，requirements 第 4 节）。
+func AdminRequired(message string) *Error {
+	return NewError(http.StatusForbidden, CodeAdminRequired, message)
+}
+
+// Unauthorized 是 401 `unauthorized`（没登录，或会话过期、已撤销、用户已停用）。
+func Unauthorized() *Error {
+	return NewError(http.StatusUnauthorized, CodeUnauthorized, "未登录或登录已失效，请重新登录")
+}
+
+// Busy 是 503 `busy`。
+func Busy() *Error {
+	return NewError(http.StatusServiceUnavailable, CodeBusy, "服务器繁忙，请稍后再试")
+}
+
+// AsError 取出 err 链里的 *Error。
+func AsError(err error) (*Error, bool) {
+	var e *Error
+	if errors.As(err, &e) {
+		return e, true
+	}
+	return nil, false
+}
+
+type errorBody struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Details any    `json:"details,omitempty"`
+}
+
+// WriteError 输出错误体。不是 *Error 的错误写日志（带请求的方法和路径）后返回 500 `internal`。
+func WriteError(w http.ResponseWriter, r *http.Request, err error) {
+	e, ok := AsError(err)
+	if !ok {
+		LoggerFrom(r.Context()).Error("请求处理失败", "method", r.Method, "path", r.URL.Path, "error", err)
+		e = NewError(http.StatusInternalServerError, CodeInternal, "服务器内部错误，请稍后重试或联系管理员")
+	}
+	WriteJSON(w, e.Status, errorBody{Code: e.Code, Message: e.Message, Details: e.Details})
+}
