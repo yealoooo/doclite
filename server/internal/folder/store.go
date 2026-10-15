@@ -13,8 +13,8 @@ import (
 //
 // 跨模块的读（只读）：projects（是否已删除）、file_snapshots（当前版本号）、archive_item_files（是否已归类）。
 // 跨模块的写（例外）：删除文件时把进行中的分配（file_reviews 里 open 的行）改成 cancelled——删除必须在同一个事务里
-// 取消分配（requirements 5.5、5.8），审核模块（M3-1）还没有。files、file_snapshots、file_logs 经 internal/file 的
-// 包级函数写。
+// 取消分配（requirements 5.5、5.8），而 internal/review 引用本包，这里不能反过来调它。files、file_snapshots、file_logs
+// 经 internal/file 的包级函数写。
 
 // folderRow 是 folders 的一行。
 type folderRow struct {

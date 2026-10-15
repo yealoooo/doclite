@@ -19,6 +19,7 @@
 //   - 提交后发 folders.changed、files.changed。
 //
 // 给上传（internal/file）用的 ClaimSlot、AddFile、PreviewName、Path、ProjectOf 实现 file.Folders。
+// 给审核（internal/review）用的 SetReviewStatus、SetReviewState 改 folder_files 的审核状态和轮次（review_state.go）。
 package folder
 
 import (

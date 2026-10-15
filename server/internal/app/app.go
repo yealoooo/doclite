@@ -20,6 +20,7 @@ import (
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
 	"doclite/server/internal/project"
+	"doclite/server/internal/review"
 	"doclite/server/internal/role"
 	"doclite/server/internal/storage"
 	"doclite/server/internal/user"
@@ -59,6 +60,8 @@ type App struct {
 
 	Folders *folder.Service
 	Files   *file.Service
+	// Reviews 是审核分配、审核、重扫（M3-1）。
+	Reviews *review.Service
 }
 
 // New 组装各模块。数据库迁移要在这之前执行（Run 里先迁移）。
@@ -81,6 +84,7 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	storageSvc := storage.NewService(pool, opts.MasterKey)
 	folderSvc := folder.NewService(pool, bus, authSvc, storageSvc)
 	fileSvc := file.NewService(pool, bus, authSvc, storageSvc, folderSvc, opts.Upload)
+	reviewSvc := review.NewService(pool, bus, authSvc, storageSvc, folderSvc, fileSvc)
 
 	gate := auth.NewGate(authSvc)
 	api := httpx.NewRouter()
@@ -93,6 +97,7 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	catalog.NewHandler(catalog.NewService(pool, bus)).Routes(api, gate)
 	folder.NewHandler(folderSvc).Routes(api, gate)
 	file.NewHandler(fileSvc).Routes(api, gate)
+	review.NewHandler(reviewSvc).Routes(api, gate)
 
 	// /api 的最外层是客户端版本检查（先于鉴权）；/api 以外是网页。
 	apiHandler := auth.ClientVersionCheck(opts.ClientVersions)(api)
@@ -116,6 +121,7 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 		Events:   bus,
 		Folders:  folderSvc,
 		Files:    fileSvc,
+		Reviews:  reviewSvc,
 	}, nil
 }
 
