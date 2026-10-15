@@ -102,12 +102,21 @@
 
 ## M5 导出
 
-### [~] M5-1 导出物生成（PDF、原图包、目录、清单）
+### [x] M5-1 导出物生成（PDF、原图包、目录、清单）（commit 9b80d3a）
 - **范围：** `internal/export` 里的生成部分（纯函数，输入冻结的条目和页、读原图的接口，输出写进一个 writer 的 zip）：PDF 原样嵌入、放不进的无损转换（硬性规则 11 的例外）、横纵 DPI、原图包、`目录.xlsx`、`清单.csv`、Windows 安全的文件名（requirements 5.11"导出物"）。
 - **完成标志：** 单元测试覆盖常见扫描格式（JPEG、G4 TIFF、LZW TIFF、无压缩 TIFF、PNG、带透明的 PNG）原样嵌入或转换的结果（嵌入的字节、转换的像素）；用 macOS 的 `sips` 抽查 PDF 能打开、尺寸对。罕见格式不逐个做。
 - **前置：** M1-2（和 M1-3 并行）。
 - **先读：** requirements 2（第 11 条）、5.11。
 
+- **结果：** `server/internal/export/bundle`，单元测试 51 个用例（覆盖率约 71%），macOS 上用 sips 渲染抽查；依赖 excelize v2.11.0、x/image v0.44.0（正式代码只用 `tiff/lzw`）。**JPEG 压缩的 TIFF（7 和旧式 6）也原样嵌入**（用户要求 PDF 不限图片类型；总控任务说明一开始写错成不支持，已补）。
+- **原样嵌入：** JPEG（基线、渐进，1/3/4 分量，Adobe CMYK 反转）；PNG（不隔行、无 alpha 和 tRNS，拼 IDAT + Predictor 15）；TIFF 无压缩（拼一个对象）、LZW/Deflate/PackBits（每条带一个对象，8 位预测器写进 DecodeParms）、CCITT MH/G3/G4、JPEG 压缩（每条带或分块一个 DCTDecode，拼 JPEGTables，YCbCr 写 ColorTransform 1）；WhiteIsZero 用 Decode，FillOrder=2 按位反转；调色板写成一份间接对象。**转换**（Flate + 预测器，像素不变，透明转 SMask）：带 alpha/tRNS/隔行的 PNG；TIFF 分平面、额外通道、16 位小端、16 位带预测器、16 位调色板、条带 > 1024、PackBits 里有 128、分块（非 JPEG）——条带、分块自己解压（`x/image/tiff` 不支持分平面且会悄悄解错）。**不支持**：旧式 LZW、浮点或有符号样本、YCbCr（非 JPEG）、CIELab、预测器 3、分块的 CCITT、JPEG 无损/分层/算术/12 位、JPEG 压缩又分平面或带 alpha。
+- **自定：** DPI 规则"另一个方向在 50–2400 之间才各用各的"（600×5000 按 600×600）；页面边长限制 3–14400 磅；新增可重试的错误类 Temp（临时盘）。
+- **遗留：** 一件 PDF 超过约 9.3 GB 报 TooLarge（没写交叉引用流）；超过 4 GB 的 zip 条目用数据描述符 + zip64，本地文件头没有 zip64 扩展字段（Info-ZIP、7-Zip 能读；Windows 自带解压要在 M7 实测）；转换整张解码，受 `ConvertMemoryLimit` 限制；72 DPI 的图按规则当不合理、按 300 算，页面会显得很小。
+- **须知（给 M5-2）：**
+  - `Generate(ctx, job *Job, src PageSource, w io.Writer, opts Options, progress func(Progress)) (Summary, error)`；`Format` 是 `FormatPDF = "pdf"`、`FormatImages = "images"`（和 `export_tasks.export_format` 一致）；`Options{TmpDir, Now（传 UTC+8 的时间，zip 的 DOS 时间按它的时区写）, ConvertMemoryLimit}`；`Progress{PagesDone, PagesTotal, ItemsDone, ItemsTotal, BytesWritten}` 每页回调一次，节流由调用方做；`Summary{Size, Items, Pages, EmbeddedPages, ConvertedPages, Names}`。
+  - `PageSource` 两个方法：`Open(ctx, Page) (io.ReadCloser, error)`（整个对象）、`ReadAt(ctx, Page, b, off)`（Range 读，到末尾返回 `io.EOF`，只有 Inspect 用）。
+  - 错误统一是 `*bundle.Error{Kind, Reason}`，`Retryable()`（Source、Temp、Output）、`PageProblem()`（Integrity、Corrupt、Unsupported、TooLarge，带档号、页号、file_id、snapshot_id、`ItemIndex`、`PageIndex`），`IsRetryable(err)`；Canceled 时 `errors.Is(err, context.Canceled)` 成立。出错后从这一页之后对剩下的页调 `Inspect(ctx, src, job.Format, item, page, opts)` 列出全部问题页（查不出 sha256 不对和压缩数据内部损坏）。
+  - 成功时 zip 已写完但 writer 没关，由调用方完成分片上传；失败或取消时调用方中止上传。`Page.ReviewStatus` 传执行时 `folder_files.review_status` 的当前值。页号只要求严格递增，原图包文件名用页号。
 ### [ ] M5-2 导出任务、执行、下载
 - **范围：** requirements 5.11 其余部分：范围和预检、冻结、交付后变更、补交、取消、后台任务执行器（单服务器版：心跳查取消，启动时把 running 的放回队列，重试和退避）、下载、到期清理；`export.changed` 事件。
 - **完成标志：** API 测试覆盖预检、冻结（建任务后重扫不影响这次导出）、交付后变更的几种原因、执行和下载的端到端（下载 zip 核对清单和明细）；**并发/恢复**：执行中重启 server 后能接着完成；截图脚本 `m4-export.mjs` 通过。
