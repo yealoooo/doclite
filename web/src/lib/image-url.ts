@@ -1,9 +1,10 @@
 // 图片地址（design §4.4、§4.5）：页面里所有 <img> 的 src 都用 `imageSrc()` 生成。
 // - 浏览器里：直接用 batch / snapshots 接口返回的预签名 URL（直连 S3）；
-// - 壳里：用壳的取图地址（先查本机缓存，没有再用预签名 URL 下载）。Wails 壳的取图在 M6-3 做：在那之前
-//   `shellImages()` 为 false，壳里也直接用预签名 URL（和浏览器一样）。
+// - 壳里：用壳的取图地址（先查本机缓存，没有再用预签名 URL 下载）。取图挂在壳的资产服务器上（M6-3，
+//   client/internal/imagecache），和页面同源：页面不直连存储（局域网 http 的存储不会被当作混合内容拦下），
+//   CSP 只放行 'self'。
 //
-// 壳里（M6-3 起）：壳只用这个快照最近一次出现在 batch、snapshots 响应里的预签名 URL 下载（Go 代理转发时记下），
+// 壳里：壳只用这个快照最近一次出现在 batch、snapshots 响应里的预签名 URL 下载（Go 代理转发时记下），
 // 所以 info 必须来自这两个接口；不在记录里的图片返回 404（<img> 的 error），存储连不上返回 502。
 // 缓存管理见 lib/image-cache.ts。测试图（SHELL_TEST_IMAGE_PATH）给 --smoke 的 img 一步用。
 //
@@ -18,8 +19,10 @@
 import { shellImages } from './client'
 
 /**
- * 壳里取图的地址前缀（M6-3 定稿）：建议由壳的资产服务器中间件处理这个路径——和页面同源，不需要 CORS，
- * 也不受 CSP 的 connect-src 限制；图片是完整的响应，Windows 上资产服务器整块交给 WebView2 也没问题。
+ * 壳里取图的地址前缀（M6-3）：壳的资产服务器在界面的文件之前处理这个路径——和页面同源，不需要 CORS，
+ * CSP 用 'self' 就够；图片是完整的响应，Windows 上资产服务器整块交给 WebView2 也没问题。
+ * 地址：`cover|original|dzi/<file_id>/<snapshot_id>`、`tile/<file_id>/<snapshot_id>/<级>/<x>_<y>.<jpg|png>`、
+ * `test/probe.png`；失败时响应头带 `X-Doclite-Error`，分块描述的响应体是 `{code, message}`。
  */
 const SHELL_IMAGE_BASE = '/shell/img/'
 
@@ -54,14 +57,14 @@ export function shellTestImageSrc(): string {
   return shellImageUrl(SHELL_TEST_IMAGE_PATH)
 }
 
-/** 分块描述的地址（M2-3）：壳里是取图地址下的 `dzi/<file_id>/<snapshot_id>`；浏览器里、壳还没有切块（M6-3 之前）、
- * 没有原图地址（存储不可用）时返回 null。 */
+/** 分块描述的地址（M2-3）：壳里是取图地址下的 `dzi/<file_id>/<snapshot_id>`；浏览器里、没有原图地址（存储不可用）
+ * 时返回 null。 */
 export function tileSourceSrc(info: ImageInfo): string | null {
   if (!shellImages() || !info.original_url) return null
   return shellImageUrl(`dzi/${info.file_id}/${info.snapshot_id}`)
 }
 
-/** 分块描述（壳的 img 协议 `dzi/` 返回的 JSON）：`Image` 一项是 DZI 的 JSON 写法，OpenSeadragon 直接认；
+/** 分块描述（壳的取图地址 `dzi/` 返回的 JSON）：`Image` 一项是 DZI 的 JSON 写法，OpenSeadragon 直接认；
  * 其余字段方便页面用（级数、格式、是否命中……）。 */
 export interface TileSourceDescriptor {
   Image: {
@@ -96,7 +99,7 @@ export interface TileSourceDescriptor {
   hit: boolean
 }
 
-/** 取分块描述失败。status 为 img 协议的状态码（0 表示请求本身失败），code 为壳给的错误码。 */
+/** 取分块描述失败。status 为取图地址的状态码（0 表示请求本身失败），code 为壳给的错误码。 */
 export class TileSourceError extends Error {
   readonly status: number
   readonly code: string

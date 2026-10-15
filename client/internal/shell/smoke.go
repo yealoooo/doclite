@@ -95,6 +95,7 @@ func (r *smokeRun) config() SmokeConfig {
 	// M6-2：上传队列、热文件夹、重扫件。
 	c.Capabilities.UploadQueue = true
 	c.Rescan = smokeRescanConfig()
+	r.s.imageSmokeConfig(&c)
 	return c
 }
 

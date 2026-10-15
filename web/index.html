@@ -10,7 +10,7 @@
     />
     <title>Doclite</title>
     <!-- OpenSeadragon（看原图，M2-4）建查看器时会往 head 里插一个同样标记的 <style>（触摸屏上去掉画布的焦点轮廓）；
-         这里先放好，它就不再插。运行时插入的内联样式过不了壳的 CSP；写在这里的，Tauri 打包时会给它加上 CSP 的 nonce。 -->
+         这里先放好，它就不再插（上一版 Tauri 壳的 CSP 挡运行时插入的样式；Wails 壳的 CSP 放行内联样式，留着无妨）。 -->
     <style data-openseadragon-mobile-css>@media (hover: none) { .openseadragon-canvas:focus { outline: none !important; } }</style>
   </head>
   <body>

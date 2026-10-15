@@ -1,6 +1,6 @@
-// 本机图片缓存（M1-11，design §4.5）的管理命令，只在 isShell() 时调用。Wails 壳在 M6-3 实现（M6-1 的壳返回 unsupported）。
+// 本机图片缓存（M1-11，design §4.5）的管理命令，只在 isShell() 时调用。Wails 壳的实现在 client/internal/imagecache（M6-3）。
 //
-// - 图片本身不经过这里：页面照常用 `imageSrc()`（壳里是 img 协议），壳先查本机缓存，没有再用预签名 URL 下载。
+// - 图片本身不经过这里：页面照常用 `imageSrc()`（壳里是同源的取图地址），壳先查本机缓存，没有再用预签名 URL 下载。
 // - 缓存放在本机数据目录的 `image-cache/` 下，按 file_id、snapshot_id 存；默认上限 2 GB，超出后按最近访问淘汰。
 // - 命令失败时 reject `{kind, message}`（ShellError，见 lib/shell.ts）。
 
@@ -15,7 +15,7 @@ export interface CacheCounters {
   /** 实际完成的下载次数（同一张图的并发请求只算一次）。 */
   downloads: number
   download_bytes: number
-  /** 不在记录里、没有下载地址的请求（img 协议返回 404）。 */
+  /** 不在记录里、没有下载地址的请求（取图地址返回 404）。 */
   rejected: number
   /** 其他失败（存储连不上、sha 不一致、读写文件出错）。 */
   errors: number
@@ -58,7 +58,7 @@ export interface CacheClearReport {
 }
 
 const GB = 1024 ** 3
-/** 上限的范围（和 Rust 端一致）：100 MB – 1 TB。 */
+/** 上限的范围（和壳一致）：100 MB – 1 TB。 */
 export const CACHE_LIMIT_MIN_BYTES = 100 * 1024 ** 2
 export const CACHE_LIMIT_MAX_BYTES = 1024 * GB
 export const CACHE_DEFAULT_LIMIT_BYTES = 2 * GB

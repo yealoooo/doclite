@@ -20,6 +20,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 
 	"doclite/client/internal/appdata"
+	"doclite/client/internal/imagecache"
 	"doclite/client/internal/proxy"
 )
 
@@ -61,6 +62,8 @@ type Shell struct {
 	smoke  *smokeRun
 	// uploads 是上传队列、热文件夹、重扫件（M6-2，upload.go）。
 	uploads *uploadState
+	// images 是取图协议、本机图片缓存和切块（M6-3，images.go）。
+	images *imagecache.Service
 
 	// navGuard：导航保护装上了（macOS）。
 	navGuard bool
@@ -93,7 +96,8 @@ func Run(cfg Config) (int, error) {
 		Logger:      cfg.WailsLog,
 		Services:    []application.Service{application.NewService(&Bridge{s: s})},
 		Assets: application.AssetOptions{
-			Handler: spaHandler(cfg.Assets),
+			// 取图地址（/shell/img/）要在 spaHandler 之前处理（images.go）。
+			Handler: s.withImages(spaHandler(cfg.Assets)),
 		},
 		Mac: application.MacOptions{
 			// 关掉窗口（缩到托盘）后应用继续运行。
@@ -132,6 +136,7 @@ func Run(cfg Config) (int, error) {
 	}
 	s.app = application.New(opts)
 	s.app.HandleStream(apiStreamName, s.handleAPIStream)
+	s.app.OnShutdown(s.images.Close)
 
 	s.window = s.app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:             "main",

@@ -174,7 +174,7 @@ function wait(ms: number, signal: AbortSignal): Promise<boolean> {
 
 /**
  * 壳的分块（M2-3）：描述是 DZI 的 JSON 写法，块地址 `<Image.Url><级>/<x>_<y>.<jpg|png>`。块用 fetch 取（壳的
- * img 协议给描述和块都带了 `Access-Control-Allow-Origin: *`，CSP 的 connect-src 也放行了 img:），
+ * 取图地址和页面同源，CSP 的 connect-src 'self' 就放行），
  * `signal` 取消时（换图、关掉）正在取的块一起取消；单个块被 OpenSeadragon 放弃时也取消它。
  *
  * 失败的块 OpenSeadragon 当作"不存在"，这张图的这一层再也不取（留下空白）。所以没拿到响应、5xx 时在这里先重试
@@ -264,8 +264,7 @@ export class ShellTileSource extends OpenSeadragon.TileSource {
         throw new TileFetchError(0, timedOut ? `取块超过 ${TILE_ATTEMPT_TIMEOUT_MS / 1000} 秒` : `取块失败：${e instanceof Error ? e.message : String(e)}`)
       }
       if (!res.ok) {
-        // 壳的块响应带 `Access-Control-Expose-Headers: x-doclite-cache, x-doclite-error`（img.rs 的 cors()），
-        // 错误码读得到；读不到时（别的响应）只写状态码。
+        // 壳的块响应和页面同源，错误码（X-Doclite-Error）读得到；没有时只写状态码。
         const code = res.headers.get('X-Doclite-Error')
         throw new TileFetchError(res.status, `取块失败：HTTP ${res.status}${code ? ` ${code}` : ''}`)
       }

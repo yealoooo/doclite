@@ -655,7 +655,7 @@ async function mountViewer(fileId: string, info: ViewerImageInfo): Promise<Mount
   const vm = app.mount(host) as unknown as { viewer: () => import('@/lib/viewer/osd').OsdViewer | null }
   let drawn = 0
   vm.viewer()?.addHandler('tile-drawn', (e: { tile?: { getUrl?: () => string } }) => {
-    // 只数原图的块（壳的块地址是 img://localhost/tile/…；封面那一层是 cover%2F…）。
+    // 只数原图的块（壳的块地址是 /shell/img/tile/…；封面那一层是 /shell/img/cover/…）。
     if (String(e.tile?.getUrl?.() ?? '').includes('/tile/')) drawn++
   })
   try {

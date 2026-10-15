@@ -14,10 +14,10 @@ export function isShell(): boolean {
 export const isTauri = isShell
 
 /**
- * 壳的取图协议、本机图片缓存和大图切块（M6-3）是否已经可用。还没有时，壳里看图和浏览器一样：
- * `<img>` 直接用预签名 URL 连存储，原图查看器走浏览器的那条路。M6-3 做完后改成 true。
+ * 壳的取图协议、本机图片缓存和大图切块（M6-3）是否可用。为 false 时壳里看图和浏览器一样：`<img>` 直接用
+ * 预签名 URL 连存储，原图查看器走浏览器的那条路（M6-1 的壳是这样；壳的 CSP 打开后这条路走不通）。
  */
-const SHELL_IMAGE_PROTOCOL = false as boolean
+const SHELL_IMAGE_PROTOCOL = true as boolean
 
 /** 看图要不要走壳（取图协议、缓存、切块）。 */
 export function shellImages(): boolean {

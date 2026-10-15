@@ -60,12 +60,7 @@ func handle[A any](s *Shell, name string, fn func(ctx context.Context, args A) (
 type noArgs struct{}
 
 // unsupported：后续任务才做的命令先登记成"还不支持"，页面照常提示，不会因为"未知的命令"出错。
-var unsupported = map[string]string{
-	"cache_stats":     "本机图片缓存",
-	"cache_clear":     "本机图片缓存",
-	"cache_set_limit": "本机图片缓存",
-	"prepare_tiles":   "大图切块",
-}
+var unsupported = map[string]string{}
 
 func (s *Shell) registerCommands() {
 	s.commands = map[string]command{}
@@ -160,6 +155,7 @@ func (s *Shell) registerCommands() {
 
 	// M6-2：上传队列、热文件夹、重扫件（upload.go、hotfolder.go、rescan.go）。
 	s.initUploads()
+	s.registerImageCommands()
 }
 
 // ShellInfo 是 shell_info 的结果（web/src/lib/shell.ts 的 ShellInfo）。
