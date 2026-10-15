@@ -151,7 +151,7 @@ func TestIntegrationUpload(t *testing.T) {
 	t.Cleanup(func() { fetch(t, p, http.MethodDelete, "/api/folders/"+target.ID, nil, nil) })
 
 	// 本机文件：根目录一张（方向 6），"盒 001" 四张（自然顺序 IMG_1、IMG_2、IMG_3、IMG_10；IMG_3 是 JPEG 压缩的
-	// TIFF，生成不了封面），"盒 002" 两张内容相同（b 判为重复）。
+	// TIFF），"盒 002" 两张内容相同（b 判为重复）。
 	dir := t.TempDir()
 	tag := "m6-2-it " + stamp
 	files := []struct{ rel, name, sample string }{
@@ -219,9 +219,6 @@ func TestIntegrationUpload(t *testing.T) {
 	if it := byName["b.jpg"]; it.Status != upload.StatusDuplicate || it.DuplicateOf == nil {
 		t.Errorf("b.jpg 应该判为内容重复：%s %s", it.Status, it.DuplicateOf)
 	}
-	if it := byName["IMG_3.tif"]; deref(it.CoverStatus) != upload.CoverNotGenerated {
-		t.Errorf("JPEG 压缩的 TIFF 应该不带封面：%v", deref(it.CoverStatus))
-	}
 	var fileIDs []string
 	for name, it := range byName {
 		if it.Status != upload.StatusDone {
@@ -230,7 +227,7 @@ func TestIntegrationUpload(t *testing.T) {
 		if it.FileID == nil || it.FolderID == nil {
 			t.Fatalf("%s 没有 file_id、folder_id", name)
 		}
-		if name != "IMG_3.tif" && deref(it.CoverStatus) != upload.CoverIncluded {
+		if deref(it.CoverStatus) != upload.CoverIncluded {
 			t.Errorf("%s 应该带封面：%v %v", name, deref(it.CoverStatus), deref(it.CoverReason))
 		}
 		if rec.progress[it.ID] != it.Size {
@@ -269,7 +266,7 @@ func TestIntegrationUpload(t *testing.T) {
 		t.Errorf("盒 001 的入库顺序 %v，应为 %v", order, want)
 	}
 
-	// 封面：batch 里除了 IMG_3 都有封面地址。
+	// 封面：batch 里都有封面地址（包括 JPEG 压缩的 TIFF）。
 	var batch struct {
 		Items []struct {
 			FileID   string  `json:"file_id"`
@@ -285,8 +282,8 @@ func TestIntegrationUpload(t *testing.T) {
 			covers++
 		}
 	}
-	if covers != len(fileIDs)-1 {
-		t.Errorf("有封面的应该是 %d 个，实际 %d", len(fileIDs)-1, covers)
+	if covers != len(fileIDs) {
+		t.Errorf("有封面的应该是 %d 个，实际 %d", len(fileIDs), covers)
 	}
 
 	// 没变化的不重传。

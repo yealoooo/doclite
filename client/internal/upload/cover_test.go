@@ -54,7 +54,8 @@ func boxLuma(img image.Image, b image.Rectangle, fx, fy float64) int {
 	return sum / n
 }
 
-// 封面尺寸：长边 400、不放大、短边按比例；方向 6 的 JPEG 转正后是竖的；解不了的（TIFF 里的 JPEG 压缩）不带封面。
+// 封面尺寸：长边 400、不放大、短边按比例；方向 6 的 JPEG 转正后是竖的；JPEG 压缩的 TIFF 也有封面（颜色的比较见
+// imgdecode 的 consumers_test.go）；多页 TIFF 不带封面。
 func TestCoverSamples(t *testing.T) {
 	cases := []struct {
 		file string
@@ -70,7 +71,8 @@ func TestCoverSamples(t *testing.T) {
 		{"tiff-g4-1bit.tif", 2480, 3508, true},
 		{"tiff-lzw-rgb.tif", 595, 842, true},
 		{"tiff-none-gray8.tif", 595, 842, true},
-		{"tiff-jpeg-ycbcr.tif", 595, 842, false},
+		{"tiff-jpeg-ycbcr.tif", 595, 842, true},
+		{"tiff-multipage-2p.tif", 827, 1169, false},
 	}
 	for _, c := range cases {
 		t.Run(c.file, func(t *testing.T) {

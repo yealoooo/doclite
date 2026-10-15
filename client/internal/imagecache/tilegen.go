@@ -23,6 +23,7 @@ import (
 //   - 一张图切了 tileTimeout 还没切完就中止（timeout）；写出的块合计超过 min(缓存上限的一半, 1 GiB) 也中止；
 //   - 切好的整套块改名进缓存（<file_id>/<snapshot_id>.tiles/），索引里算一项，参与淘汰；缓存不可用时不切（503）；
 //   - 切不了的（422：too_large、timeout、unsupported_format、unsupported、corrupt）本次运行记住，不再反复尝试；
+//     只记在内存里、不写进索引（客户端升级了解码器重启后就会重新切，例如 M6-3b 以前切不了的 JPEG 压缩的 TIFF）；
 //     本机读写出错（500）不记；
 //   - 提前切块（prepare_tiles）：同时只有一个在跑，排队的只留最新的一张。
 

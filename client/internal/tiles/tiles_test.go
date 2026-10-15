@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"doclite/client/internal/imgdecode"
 )
 
 func TestDZIMath(t *testing.T) {
@@ -70,7 +72,7 @@ func TestOrientation(t *testing.T) {
 		if lv.w != wt.w || lv.h != wt.h || string(lv.pix) != wt.pix {
 			t.Errorf("方向 %d：%d×%d %q，应为 %d×%d %q", o, lv.w, lv.h, lv.pix, wt.w, wt.h, wt.pix)
 		}
-		if w, h := OrientedSize(o, 3, 2); w != wt.w || h != wt.h {
+		if w, h := imgdecode.OrientedSize(o, 3, 2); w != wt.w || h != wt.h {
 			t.Errorf("OrientedSize(%d) = %d×%d", o, w, h)
 		}
 	}

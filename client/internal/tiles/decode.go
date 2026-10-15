@@ -1,19 +1,14 @@
 package tiles
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
-	"image/jpeg"
-	"image/png"
-	"io"
 	"os"
 
-	"golang.org/x/image/tiff"
-
+	"doclite/client/internal/imgdecode"
 	"doclite/shared/imagehdr"
 )
 
@@ -22,7 +17,7 @@ const (
 	CodeTooLarge          = "too_large"          // 超出内存或输出的上限
 	CodeTimeout           = "timeout"            // 切得太久
 	CodeUnsupportedFormat = "unsupported_format" // 不是 JPEG、PNG、经典 TIFF
-	CodeUnsupported       = "unsupported"        // 格式认得，但这种写法解不了（例如 JPEG 压缩的 TIFF、多页）
+	CodeUnsupported       = "unsupported"        // 格式认得，但这种写法解不了（例如多页 TIFF、12 位的 JPEG）
 	CodeCorrupt           = "corrupt"            // 文件坏了
 	CodeIO                = "io"                 // 读写本机文件出错（不是文件本身的问题）
 )
@@ -42,6 +37,27 @@ func fail(code, format string, args ...any) *Error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, args...)}
 }
 
+// decodeError 把 imgdecode 的错误换成切块的错误码（取消就是超时：切块的 ctx 只有超时）。
+func decodeError(err error) *Error {
+	var de *imgdecode.Error
+	if !errors.As(err, &de) {
+		return fail(CodeIO, "%v", err)
+	}
+	switch de.Kind {
+	case imgdecode.KindCanceled:
+		return timeoutError()
+	case imgdecode.KindUnsupportedFormat:
+		return fail(CodeUnsupportedFormat, "%s", de.Msg)
+	case imgdecode.KindUnsupported:
+		return fail(CodeUnsupported, "%s", de.Msg)
+	case imgdecode.KindTooLarge:
+		return fail(CodeTooLarge, "%s", de.Msg)
+	case imgdecode.KindIO:
+		return fail(CodeIO, "%s", de.Msg)
+	}
+	return fail(CodeCorrupt, "%s", de.Msg)
+}
+
 // Mode 是块的颜色：gray 灰度（JPEG）、rgb 彩色（JPEG）、bilevel 1 位黑白（PNG）。
 type Mode string
 
@@ -53,9 +69,8 @@ const (
 
 // Plan 是读了文件头之后的切块计划：转正后的宽高、块的颜色和格式、整张解码大约要的内存。
 type Plan struct {
-	path     string
-	fileSize int64
-	info     imagehdr.Info
+	src  *imgdecode.Source
+	info imagehdr.Info
 	// pngDepth、pngColorType：PNG 的 IHDR（估算内存用）。
 	pngDepth, pngColorType int
 
@@ -70,33 +85,12 @@ type Plan struct {
 
 // NewPlan 读文件头（shared/imagehdr，和 server 同一份规则），算出切块计划。
 func NewPlan(path string) (*Plan, error) {
-	f, err := os.Open(path)
+	src, err := imgdecode.Open(path, 0)
 	if err != nil {
-		return nil, fail(CodeIO, "打不开原图：%v", err)
+		return nil, decodeError(err)
 	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return nil, fail(CodeIO, "读不了原图：%v", err)
-	}
-	info, err := imagehdr.Parse(f, st.Size(), 0)
-	if err != nil {
-		var he *imagehdr.Error
-		if !errors.As(err, &he) {
-			return nil, fail(CodeIO, "读原图出错：%v", err)
-		}
-		switch {
-		case errors.Is(err, imagehdr.ErrUnsupported):
-			return nil, fail(CodeUnsupportedFormat, "%s", he.Msg)
-		case errors.Is(err, imagehdr.ErrMultiPage):
-			return nil, fail(CodeUnsupported, "%s", he.Msg)
-		case errors.Is(err, imagehdr.ErrTooLarge):
-			return nil, fail(CodeTooLarge, "%s", he.Msg)
-		default:
-			return nil, fail(CodeCorrupt, "%s", he.Msg)
-		}
-	}
-	p := &Plan{path: path, fileSize: st.Size(), info: info, Width: info.Width, Height: info.Height}
+	info := src.Info
+	p := &Plan{src: src, info: info, Width: info.Width, Height: info.Height}
 	switch info.ColorMode {
 	case imagehdr.ColorBW:
 		p.Mode, p.Format = ModeBilevel, "png"
@@ -106,9 +100,12 @@ func NewPlan(path string) (*Plan, error) {
 		p.Mode, p.Format = ModeRGB, "jpg"
 	}
 	if info.Format == imagehdr.PNG {
-		var ihdr [26]byte
-		if _, err := f.ReadAt(ihdr[:], 0); err == nil {
-			p.pngDepth, p.pngColorType = int(ihdr[24]), int(ihdr[25])
+		if f, err := os.Open(path); err == nil {
+			var ihdr [26]byte
+			if _, err := f.ReadAt(ihdr[:], 0); err == nil {
+				p.pngDepth, p.pngColorType = int(ihdr[24]), int(ihdr[25])
+			}
+			f.Close()
 		}
 	}
 	p.Estimate = p.estimate()
@@ -127,7 +124,8 @@ func (p *Plan) channels() int {
 // 缓冲，转正后的那一份）+ 下一级；×2 是 Go 的垃圾回收留的余量（堆涨到存活数据的两倍才回收）和解码器读条带时
 // 缓冲逐步变大留下的旧缓冲。实测 200 MB 的无压缩 RGB TIFF（7016×9921）进程峰值约 950 MB，估算约 990 MB。
 // 解码出来的每像素字节数按 Go 的解码器：JPEG 灰度 1、彩色 YCbCr 最多 3；PNG 灰度 1（16 位 2）、调色板 1、
-// 其余 RGBA 4（16 位 8）；TIFF 黑白和灰度 1、彩色 RGBA 4。
+// 其余 RGBA 4（16 位 8）；TIFF 黑白和灰度 1、彩色 RGBA 4（JPEG 压缩的 TIFF 也是：整张 RGBA 或 CMYK，加上一个条带的
+// 解码结果——最多是整张 YCbCr 每像素 3 字节，记在 raw 里；只有一个条带的 YCbCr、灰度直接用解码结果，更省）。
 func (p *Plan) estimate() int64 {
 	px := int64(p.info.Width) * int64(p.info.Height)
 	var decoded, raw int64
@@ -161,68 +159,11 @@ func (p *Plan) estimate() int64 {
 	return 2*(decoded+max(raw, level0)+level0/4) + 16<<20
 }
 
-// ctxFile：读文件之前先看 ctx（超时后解码器在下一次读时就出错停下）。同时是 io.Reader 和 io.ReaderAt
-// （x/image/tiff 见到 ReaderAt 就按偏移读，不把整个文件读进内存）。
-type ctxFile struct {
-	ctx context.Context
-	f   *os.File
-	off int64
-}
-
-func (c *ctxFile) Read(b []byte) (int, error) {
-	if err := c.ctx.Err(); err != nil {
-		return 0, err
-	}
-	n, err := c.f.ReadAt(b, c.off)
-	c.off += int64(n)
-	if err == io.EOF && n > 0 {
-		err = nil
-	}
-	return n, err
-}
-
-func (c *ctxFile) ReadAt(b []byte, off int64) (int, error) {
-	if err := c.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return c.f.ReadAt(b, off)
-}
-
-// decode 整张解码。
+// decode 整张解码（imgdecode，文件里存的方向）。
 func (p *Plan) decode(ctx context.Context) (image.Image, error) {
-	f, err := os.Open(p.path)
+	img, err := p.src.Decode(ctx)
 	if err != nil {
-		return nil, fail(CodeIO, "打不开原图：%v", err)
-	}
-	defer f.Close()
-	r := &ctxFile{ctx: ctx, f: f}
-	var img image.Image
-	switch p.info.Format {
-	case imagehdr.JPEG:
-		img, err = jpeg.Decode(bufio.NewReaderSize(r, 256<<10))
-	case imagehdr.PNG:
-		img, err = png.Decode(bufio.NewReaderSize(r, 256<<10))
-	case imagehdr.TIFF:
-		img, err = tiff.Decode(r)
-	default:
-		return nil, fail(CodeUnsupportedFormat, "不支持的格式")
-	}
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, timeoutError()
-		}
-		var ju jpeg.UnsupportedError
-		var pu png.UnsupportedError
-		var tu tiff.UnsupportedError
-		switch {
-		case errors.As(err, &ju), errors.As(err, &pu), errors.As(err, &tu):
-			return nil, fail(CodeUnsupported, "解不了这种写法：%v", err)
-		}
-		return nil, fail(CodeCorrupt, "解码失败：%v", err)
-	}
-	sw, sh := p.info.StoredSize()
-	if b := img.Bounds(); b.Dx() != sw || b.Dy() != sh {
-		return nil, fail(CodeCorrupt, "解出来是 %d×%d，文件头写的是 %d×%d", b.Dx(), b.Dy(), sw, sh)
+		return nil, decodeError(err)
 	}
 	return img, nil
 }
@@ -234,7 +175,7 @@ func timeoutError() *Error { return fail(CodeTimeout, "切块超时") }
 func toLevel(ctx context.Context, img image.Image, ch, orientation int) (*level, error) {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
-	ow, oh := OrientedSize(orientation, w, h)
+	ow, oh := imgdecode.OrientedSize(orientation, w, h)
 	if orientation < 1 || orientation > 8 {
 		orientation = 1
 	}
@@ -253,7 +194,7 @@ func toLevel(ctx context.Context, img image.Image, ch, orientation int) (*level,
 			copy(out[y*w*ch:], row)
 			continue
 		}
-		p, step := rowPlacement(orientation, w, h, ow, y)
+		p, step := imgdecode.RowPlacement(orientation, w, h, ow, y)
 		for x := 0; x < w; x++ {
 			copy(out[p*ch:p*ch+ch], row[x*ch:x*ch+ch])
 			p += step

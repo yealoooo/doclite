@@ -1,4 +1,6 @@
-package tiles
+package imgdecode
+
+import "image"
 
 // 方向（EXIF / TIFF 的 Orientation，1–8；shared/imagehdr 读出，PNG 一律 1）：文件里存的像素 (x, y)（存的宽高 w×h）
 // 转正后落在哪里。5–8 转正后宽高交换。和 server（imagehdr 交换宽高）、封面（requirements 5.6）的规则一致：
@@ -20,8 +22,8 @@ func OrientedSize(orientation, w, h int) (int, int) {
 	return w, h
 }
 
-// orientPoint 把存的像素 (x, y) 换到转正后的位置。不认识的方向按 1。
-func orientPoint(orientation, w, h, x, y int) (int, int) {
+// OrientPoint 把存的像素 (x, y) 换到转正后的位置。不认识的方向按 1。
+func OrientPoint(orientation, w, h, x, y int) (int, int) {
 	switch orientation {
 	case 2:
 		return w - 1 - x, y
@@ -41,14 +43,34 @@ func orientPoint(orientation, w, h, x, y int) (int, int) {
 	return x, y
 }
 
-// rowPlacement：存的第 y 行转正后第一个像素的下标和逐像素的步长（以像素计，转正后的图宽 ow）。
+// RowPlacement：存的第 y 行转正后第一个像素的下标和逐像素的步长（以像素计，转正后的图宽 ow）。
 // 每行内的映射对 x 是线性的，所以只要算 x=0、x=1 两个点。
-func rowPlacement(orientation, w, h, ow, y int) (start, step int) {
-	x0, y0 := orientPoint(orientation, w, h, 0, y)
+func RowPlacement(orientation, w, h, ow, y int) (start, step int) {
+	x0, y0 := OrientPoint(orientation, w, h, 0, y)
 	start = y0*ow + x0
 	if w == 1 {
 		return start, 0
 	}
-	x1, y1 := orientPoint(orientation, w, h, 1, y)
+	x1, y1 := OrientPoint(orientation, w, h, 1, y)
 	return start, (y1*ow + x1) - start
+}
+
+// OrientRGBA 按方向把 RGBA 图转正（1 和不认识的方向原样返回）。
+func OrientRGBA(src *image.RGBA, orientation int) *image.RGBA {
+	if orientation < 2 || orientation > 8 {
+		return src
+	}
+	b := src.Bounds()
+	w, h := b.Dx(), b.Dy()
+	ow, oh := OrientedSize(orientation, w, h)
+	dst := image.NewRGBA(image.Rect(0, 0, ow, oh))
+	for y := 0; y < h; y++ {
+		row := src.Pix[src.PixOffset(b.Min.X, b.Min.Y+y):]
+		p, step := RowPlacement(orientation, w, h, ow, y)
+		for x := 0; x < w; x++ {
+			copy(dst.Pix[p*4:p*4+4], row[x*4:x*4+4])
+			p += step
+		}
+	}
+	return dst
 }
