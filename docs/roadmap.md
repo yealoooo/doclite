@@ -152,7 +152,7 @@
   - `PageSource` 两个方法：`Open(ctx, Page) (io.ReadCloser, error)`（整个对象）、`ReadAt(ctx, Page, b, off)`（Range 读，到末尾返回 `io.EOF`，只有 Inspect 用）。
   - 错误统一是 `*bundle.Error{Kind, Reason}`，`Retryable()`（Source、Temp、Output）、`PageProblem()`（Integrity、Corrupt、Unsupported、TooLarge，带档号、页号、file_id、snapshot_id、`ItemIndex`、`PageIndex`），`IsRetryable(err)`；Canceled 时 `errors.Is(err, context.Canceled)` 成立。出错后从这一页之后对剩下的页调 `Inspect(ctx, src, job.Format, item, page, opts)` 列出全部问题页（查不出 sha256 不对和压缩数据内部损坏）。
   - 成功时 zip 已写完但 writer 没关，由调用方完成分片上传；失败或取消时调用方中止上传。`Page.ReviewStatus` 传执行时 `folder_files.review_status` 的当前值。页号只要求严格递增，原图包文件名用页号。
-### [ ] M5-2 导出任务、执行、下载
+### [~] M5-2 导出任务、执行、下载
 - **范围：** requirements 5.11 其余部分：范围和预检、冻结、交付后变更、补交、取消、后台任务执行器（单服务器版：心跳查取消，启动时把 running 的放回队列，重试和退避）、下载、到期清理；`export.changed` 事件。
 - **完成标志：** API 测试覆盖预检、冻结（建任务后重扫不影响这次导出）、交付后变更的几种原因、执行和下载的端到端（下载 zip 核对清单和明细）；**并发/恢复**：执行中重启 server 后能接着完成；截图脚本 `m4-export.mjs` 通过。
 - **前置：** M4-2、M5-1。
