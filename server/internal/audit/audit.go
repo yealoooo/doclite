@@ -24,6 +24,9 @@ const (
 	TargetRole           = "role"
 	TargetProject        = "project"
 	TargetStorageProfile = "storage_profile"
+	// M4-1：归类节点、档案条目。
+	TargetArchiveCategory = "archive_category"
+	TargetArchiveItem     = "archive_item"
 )
 
 // Entry 是一条审计记录。

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"doclite/server/internal/auth"
+	"doclite/server/internal/catalog"
 	"doclite/server/internal/config"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
@@ -80,6 +81,7 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	role.NewHandler(roleSvc).Routes(api, gate)
 	project.NewHandler(projectSvc, opts.Stream).Routes(api, gate)
 	storage.NewHandler(storageSvc).Routes(api, gate)
+	catalog.NewHandler(catalog.NewService(pool, bus)).Routes(api, gate)
 
 	// /api 的最外层是客户端版本检查（先于鉴权）；/api 以外是网页。
 	apiHandler := auth.ClientVersionCheck(opts.ClientVersions)(api)
