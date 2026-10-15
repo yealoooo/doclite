@@ -1,8 +1,8 @@
-// M1-11 本机图片缓存面板的截图：npm run screenshots -- --spec scripts/shots/m1-cache.mjs --base http://localhost:<preview 端口>
+// M1-11 本机图片缓存面板的截图：npm run screenshots -- --spec scripts/shots/m1-cache.mjs --base <devshell 的地址>
 //
-// 和 m1-shell.mjs 一样，在页面脚本运行前注入 Tauri IPC 的模拟（window.__TAURI_INTERNALS__），让页面以为自己在壳里：
+// 和 m1-shell.mjs 一样，以壳模式的地址打开、注入 Wails 桥的模拟（scripts/lib/wails-mock.mjs），让页面以为自己在壳里：
 // - shell_info / check_server：已配置服务器、连得上（Windows 的数据目录）；
-// - api_fetch：转给 preview 的 /api 代理（真实 server，要先启动），项目名取自真实的 GET /api/projects；
+// - api_fetch：转给 devshell 的 /api（真实 server，要先启动），项目名取自真实的 GET /api/projects；
 // - cache_stats / cache_clear / cache_set_limit：在页面里模拟一份缓存（DEMO-A、DEMO-B 用真实的项目 id，
 //   另有一个当前账号进不了的项目），清空时从模拟数据里删掉。
 // 管理员账号同 m0.mjs（INIT_ADMIN_USERNAME / INIT_ADMIN_PASSWORD，默认 admin / change-me-now）。
@@ -13,13 +13,13 @@
 // - shell-cache-confirm：点 DEMO-B 那一行的"清空"，确认框；
 // - shell-cache-cleared：确认后 DEMO-B 那一行消失，总占用变小，右下角提示释放了多少。
 
+import { installWailsMock } from '../lib/wails-mock.mjs'
+
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
 const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
 
 /** 在页面里执行（会被序列化，不能引用外部变量）。 */
-function installTauriMock() {
-  const version = '0.1.0'
-  const serverUrl = 'http://127.0.0.1:9080'
+function cacheMock() {
   const MB = 1024 * 1024
   let cache = null
 
@@ -58,80 +58,34 @@ function installTauriMock() {
     }
   }
 
-  let nextId = 1
-  window.__TAURI_INTERNALS__ = {
-    transformCallback(callback) {
-      const id = nextId++
-      window[`_${id}`] = callback
-      return id
+  Object.assign(window.__shell.commands, {
+    async cache_stats() {
+      cache ??= await buildCache()
+      // 慢一点，看得到加载的样子。
+      await new Promise((r) => setTimeout(r, 100))
+      return withTotals(cache)
     },
-    unregisterCallback(id) {
-      delete window[`_${id}`]
-    },
-    convertFileSrc(path, protocol = 'asset') {
-      return `http://${protocol}.localhost/${encodeURIComponent(path)}`
-    },
-    async invoke(cmd, args) {
-      switch (cmd) {
-        case 'shell_info':
-          return {
-            version,
-            server_url: serverUrl,
-            data_dir: 'C:\\Users\\scan01\\AppData\\Local\\Doclite',
-            platform: 'windows',
-            smoke: false,
-          }
-        case 'check_server':
-          return {
-            server_url: serverUrl,
-            reachable: true,
-            error: null,
-            server_version: version,
-            min_version: null,
-            latest_version: null,
-            download_url: null,
-            client_version: version,
-            upgrade_required: false,
-          }
-        case 'api_fetch': {
-          const req = args.req
-          const qs = new URLSearchParams(req.query).toString()
-          const res = await fetch(qs ? `${req.path}?${qs}` : req.path, {
-            method: req.method,
-            headers: req.headers,
-            body: req.body,
-          })
-          return { status: res.status, headers: {}, body: await res.text() }
-        }
-        case 'cache_stats':
-          cache ??= await buildCache()
-          // 慢一点，看得到加载的样子。
-          await new Promise((r) => setTimeout(r, 100))
-          return withTotals(cache)
-        case 'cache_clear': {
-          cache ??= await buildCache()
-          const pid = args.projectId
-          const removed = cache.projects.filter((p) => pid == null || p.project_id === pid)
-          cache.projects = cache.projects.filter((p) => !removed.includes(p))
-          await new Promise((r) => setTimeout(r, 300))
-          return {
-            removed_files: removed.reduce((s, p) => s + p.file_count, 0),
-            removed_bytes: removed.reduce((s, p) => s + p.total_bytes, 0),
-            failed_files: 0,
-          }
-        }
-        case 'cache_set_limit':
-          cache ??= await buildCache()
-          cache.limit_bytes = args.limitBytes
-          return withTotals(cache)
-        default:
-          throw { kind: 'internal', message: `截图模拟里没有命令 ${cmd}` }
+    async cache_clear(args) {
+      cache ??= await buildCache()
+      const pid = args.projectId
+      const removed = cache.projects.filter((p) => pid == null || p.project_id === pid)
+      cache.projects = cache.projects.filter((p) => !removed.includes(p))
+      await new Promise((r) => setTimeout(r, 300))
+      return {
+        removed_files: removed.reduce((s, p) => s + p.file_count, 0),
+        removed_bytes: removed.reduce((s, p) => s + p.total_bytes, 0),
+        failed_files: 0,
       }
     },
-  }
+    async cache_set_limit(args) {
+      cache ??= await buildCache()
+      cache.limit_bytes = args.limitBytes
+      return withTotals(cache)
+    },
+  })
 }
 
-const mock = (page) => page.evaluateOnNewDocument(installTauriMock)
+const mock = (page) => installWailsMock(page, { serverUrl: 'http://127.0.0.1:9080' }, cacheMock)
 
 /** 登录，打开用户菜单里的"本机图片缓存"，等各项目的占用出来。 */
 async function openPanel(page) {
@@ -164,6 +118,7 @@ export default {
       // 左下角用户区上方的入口（只在壳里出现）。
       name: 'shell-cache-entry',
       path: '/login',
+      shell: true,
       init: mock,
       waitFor: '#username',
       async prepare(page) {
@@ -177,6 +132,7 @@ export default {
     {
       name: 'shell-cache-panel',
       path: '/login',
+      shell: true,
       init: mock,
       waitFor: '#username',
       async prepare(page) {
@@ -191,6 +147,7 @@ export default {
     {
       name: 'shell-cache-confirm',
       path: '/login',
+      shell: true,
       init: mock,
       waitFor: '#username',
       async prepare(page) {
@@ -202,6 +159,7 @@ export default {
     {
       name: 'shell-cache-cleared',
       path: '/login',
+      shell: true,
       init: mock,
       waitFor: '#username',
       async prepare(page) {

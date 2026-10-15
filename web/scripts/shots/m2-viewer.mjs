@@ -1,10 +1,11 @@
 // M2-4 查看原图（OpenSeadragon）的截图和断言：/files 右键"查看原图"。
 //
-//   cd shell/src-tauri && cargo build --release --example tiles-bench     # 壳模式的模拟要用（第一次约 2 分钟）
+//   cd client && go run ./cmd/devshell -server <server> -listen 127.0.0.1:<端口> -cache <临时目录>   # 壳模式要用
 //   INIT_ADMIN_PASSWORD=admin123456 [SHOTS_TMP=<临时目录>] \
-//     npm run screenshots -- --spec scripts/shots/m2-viewer.mjs --base http://localhost:<preview 端口>
+//     npm run screenshots -- --spec scripts/shots/m2-viewer.mjs --base http://127.0.0.1:<devshell 的端口>
 //
-// 前端地址是 vite preview（/api 代理到 server）。样本见 scripts/lib/viewer-shots.mjs（DEMO-A 下已有的 M1、M2-3 样本，
+// 前端地址是 devshell（/api 转给 server；壳模式的几张用它的取图地址，即客户端的缓存和切块代码）。浏览器的几张也可以
+// 用 vite preview。样本见 scripts/lib/viewer-shots.mjs（DEMO-A 下已有的 M1、M2-3 样本，
 // 外加第一次运行时建好的"M2-4 查看器样本"文件夹，之后复用、不删）。局域网地址（非安全上下文）另见 m2-viewer-lan.mjs。
 //
 // 截图（docs/screenshots/m2/）：
@@ -13,14 +14,14 @@
 //   viewer-loading（限速下载 200 MB TIFF：先显示封面、下载进度，viewer-switch 中途另存）、viewer-switch（下载中连切两次文件
 //   之后）、viewer-tiff-200mb（浏览器打开 200 MB TIFF，记内存和耗时）、viewer-compare-budget（对比两张大 TIFF，两侧共用
 //   内存预算：放不下的一侧只显示封面；拦截 snapshots 换成现场生成的 TIFF）。
-// - 壳（IPC 和 img 协议模拟，分块用壳的 tiles-bench 现场切）：shell-viewer-jpeg、shell-viewer-tiff-lzw、shell-viewer-tiff-g4、
-//   shell-viewer-100、shell-viewer-200mb（只取看得到的块）、shell-viewer-too-large（img 协议 422）、shell-viewer-compare、
+// - 壳（壳模式的地址 + Wails 桥的模拟，分块由 devshell 用客户端的 Go 代码现场切）：shell-viewer-jpeg、shell-viewer-tiff-lzw、shell-viewer-tiff-g4、
+//   shell-viewer-100、shell-viewer-200mb（只取看得到的块）、shell-viewer-too-large（取图地址 422）、shell-viewer-compare、
 //   shell-viewer-switch、shell-viewer-flip（连按 10 次"下一个"之后）、shell-viewer-tile-failed（取块 503，提示和"重试"，
 //   shell-viewer-tile-retry 中途另存）、shell-viewer-tile-retry（点"重试"之后）。
 //
 // 断言（失败时这一张算失败，脚本退出码 1）：
 // - 除对比外，同一时间只有一张原图在加载（浏览器：DevTools 看到的 S3 上原图的 GET，Worker 被 terminate 时它的请求一起结束；
-//   壳：页面里包一层 fetch，统计 img 协议的 dzi、tile 按快照分组，页面一取消就算结束），对比最多两张；
+//   壳：页面里包一层 fetch，统计取图地址的 dzi、tile 按快照分组，页面一取消就算结束），对比最多两张；
 // - 切换文件时上一张的请求和 Worker 被取消：浏览器里 Worker 被销毁（workerdestroyed）、同时活着的 Worker 不超过 1 个，
 //   另用一个开着 NetLog 的 Chrome 再跑一遍，核对 200 MB 和 8.7 MB 那两张的下载在网络栈里是 CANCELLED（DevTools 收不到
 //   被 terminate 的 Worker 的请求结束）；壳里上一张的 dzi 请求 AbortError、之后不再取它的块；
@@ -41,12 +42,14 @@ import {
   assert,
   BENCH_FOLDER,
   BIG_FILE,
+  apiOrigin,
   browserOriginalKey,
   COMPARE_FILE,
   installShellMock,
   login,
   openFolder,
   openViewer,
+  pageOrigin,
   sampleMemory,
   settle,
   shotsTmp,
@@ -81,7 +84,7 @@ let browserRef = null
 
 async function ctxOf(page) {
   browserRef = page.browser()
-  return viewerContext(new URL(page.url()).origin, { user: admin, password: adminPassword })
+  return viewerContext(apiOrigin(page), { user: admin, password: adminPassword })
 }
 
 /** 打开某个样本所在的文件夹，右键它 → 查看原图。 */
@@ -89,7 +92,7 @@ async function view(page, name) {
   const ctx = await ctxOf(page)
   const f = ctx.files[name]
   assert(f, `没有样本 ${name}`)
-  await openFolder(page, ctx.origin, f.folder_id)
+  await openFolder(page, pageOrigin(page), f.folder_id)
   await openViewer(page, name)
   return f
 }
@@ -98,7 +101,7 @@ async function click(page, testid) {
   await page.click(`[data-testid=${testid}]`)
 }
 
-/** 壳里：页面里在途的 img 协议请求（dzi、tile）按快照分组，同一时间最多几张（截图模拟里包了一层 fetch 统计）。 */
+/** 壳里：页面里在途的取图请求（dzi、tile）按快照分组，同一时间最多几张（截图模拟里包了一层 fetch 统计）。 */
 async function shellOneAtATime(page, label, max = 1) {
   const st = await page.evaluate(() => window.__shellImgStats)
   assert(st.max <= max, `${label}：同时在加载的原图有 ${st.max} 张（应不超过 ${max}）`)
@@ -134,14 +137,13 @@ function browserShot(name, file, mode, extra) {
 
 // ---------- 壳的模拟 ----------
 
-const shellTmp = () => shotsTmp('m2-viewer-shell')
-
-/** 壳里的一张：注入 IPC、拦截 img 协议，经登录页登录。 */
+/** 壳里的一张：壳模式的地址、Wails 桥的模拟、拦截取图地址做统计，经登录页登录。 */
 function shellShot(name, prepare, mockOptions = {}) {
   let stats = null
   return {
     name,
     path: '/login',
+    shell: true,
     waitFor: '#username',
     async init(page) {
       const fail = new Map()
@@ -149,11 +151,11 @@ function shellShot(name, prepare, mockOptions = {}) {
         // 这时页面还没打开、不知道 file_id：先占位，prepare 里换成"超出预算"样本的 file_id。
         fail.set('__big__', { code: 'too_large', message: '原图太大，切不了块（模拟壳的 422 too_large）' })
       }
-      stats = await installShellMock(page, { cacheDir: shellTmp(), fail, dziDelayMs: mockOptions.dziDelayMs ?? 0 })
+      stats = await installShellMock(page, { fail, dziDelayMs: mockOptions.dziDelayMs ?? 0 })
       stats.fail = fail
     },
     async prepare(page) {
-      await login(page, new URL(page.url()).origin, admin, adminPassword)
+      await login(page, pageOrigin(page), admin, adminPassword)
       await page.waitForSelector('[data-testid=side-nav]')
       const ctx = await ctxOf(page)
       if (stats.fail.has('__big__')) {
@@ -547,7 +549,7 @@ export default {
       delay: 500,
     },
 
-    // ===== 壳（IPC 和 img 协议模拟） =====
+    // ===== 壳（壳模式的地址 + Wails 桥的模拟，取图和切块是 devshell 里客户端的 Go 代码） =====
     shellShot('shell-viewer-jpeg', async (page) => {
       await shellOpen(page, JPEG)
       await shellOneAtATime(page, `壳 ${JPEG}`)
@@ -597,7 +599,7 @@ export default {
       async (page, { ctx, stats }) => {
         await view(page, BIG_FILE)
         const d = await waitViewer(page, ['too_large', 'ready', 'failed', 'unsupported'])
-        assert(d.state === 'too_large', `img 协议返回 422 too_large 时应该是 too_large，实际 ${d.state}`)
+        assert(d.state === 'too_large', `取图地址返回 422 too_large 时应该是 too_large，实际 ${d.state}`)
         await page.waitForFunction(() => document.querySelector('[data-testid=image-viewer]')?.dataset.cover === 'loaded', { timeout: 10000 })
         const text = await page.$eval('[data-testid=viewer-problem]', (el) => el.textContent)
         assert(!text.includes('改用客户端'), `壳里不该提示"改用客户端"：${text}`)
@@ -634,7 +636,7 @@ export default {
         // 每次取描述都晚 1.5 秒（模拟第一次打开要等壳下载、切块）：在等的时候切到下一个，上一张的 dzi 请求被取消，
         // 同一时间只有一张在加载。
         const ctx = await ctxOf(page)
-        await openFolder(page, ctx.origin, ctx.files[BIG200].folder_id)
+        await openFolder(page, pageOrigin(page), ctx.files[BIG200].folder_id)
         await openViewer(page, BIG200)
         await page.waitForFunction(() => document.querySelector('[data-testid=image-viewer]')?.dataset.step === 'tiles', { timeout: 10000, polling: 20 })
         const first = (await viewerData(page)).snapshotId
@@ -653,7 +655,7 @@ export default {
     ),
     shellShot('shell-viewer-flip', async (page, { ctx, stats }) => {
       // 快速翻页（M2-4 审查第 1 轮）：连按 10 次"下一个"，每次间隔不到 250 毫秒，只有最后停下的那张请求了分块描述。
-      await openFolder(page, ctx.origin, ctx.files[JPEG].folder_id)
+      await openFolder(page, pageOrigin(page), ctx.files[JPEG].folder_id)
       await openViewer(page, JPEG)
       const first = await waitViewer(page, ['ready'])
       await settle(page)
@@ -679,7 +681,7 @@ export default {
       const f = ctx.files[G4]
       let failing = true
       stats.tileFail = (sid, level) => (failing && level >= 10 ? 503 : 0)
-      await openFolder(page, ctx.origin, f.folder_id)
+      await openFolder(page, pageOrigin(page), f.folder_id)
       await openViewer(page, G4)
       await waitViewer(page, ['ready', 'failed'], { timeout: 60000 })
       await page.waitForSelector('[data-testid=viewer-tile-failures]', { timeout: 30000 })

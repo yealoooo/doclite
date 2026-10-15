@@ -1,105 +1,53 @@
-// M1-2 壳里的整页提示截图：npm run screenshots -- --spec scripts/shots/m1-shell.mjs --base http://localhost:<preview 端口>
+// M1-2 壳里的整页提示截图：npm run screenshots -- --spec scripts/shots/m1-shell.mjs --base <devshell 的地址>
 //
-// 用无头 Chrome 打开 vite preview 的页面，并在页面脚本运行前注入 Tauri IPC 的模拟（window.__TAURI_INTERNALS__），
-// 让页面以为自己在壳里：
+// 页面以壳模式的地址打开（shell: true），在页面脚本运行前注入 Wails 桥的模拟（scripts/lib/wails-mock.mjs），让页面
+// 以为自己在壳里：
 // - shell_info / check_server / probe_server 按场景返回（没有服务器地址、连不上、版本够）；
-// - api_fetch 默认转给 preview 的 /api 代理（真实 server，要先启动），按场景拦截某些请求（例如 /api/me 返回 426）；
-// - convertFileSrc 按 Windows 的形式生成 http://<协议>.localhost/…。
+// - api_fetch 默认转给 devshell 的 /api（真实 server，要先启动），按场景拦截某些请求（例如 /api/me 返回 426）。
 // 管理员账号同 m0.mjs（INIT_ADMIN_USERNAME / INIT_ADMIN_PASSWORD，默认 admin / change-me-now）。
+
+import { installWailsMock } from '../lib/wails-mock.mjs'
 
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
 const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
 
 const SERVER = 'http://192.168.1.10:9080'
 
-/** 在页面里执行（会被序列化，不能引用外部变量）。 */
-function installTauriMock(scenario) {
-  const version = '0.1.0'
-  const reachable = (url) => ({
-    server_url: url,
-    reachable: true,
-    error: null,
-    server_version: '0.1.0',
-    min_version: null,
-    latest_version: null,
-    download_url: null,
-    client_version: version,
-    upgrade_required: false,
-  })
-  const unreachable = (url) => ({ ...reachable(url), reachable: false, server_version: null, error: '无法连接服务器' })
-  const normalize = (url) => {
-    const s = url.trim().replace(/\/+$/, '')
-    return s.includes('://') ? s : `http://${s}`
+/** 在页面里执行（会被序列化，不能引用外部变量）：按场景覆盖通用模拟的几个命令。 */
+function scenarioMock(scenario) {
+  const shell = window.__shell
+  const probe = shell.commands.probe_server
+  const unreachable = (url) => ({ ...probe({ url }), reachable: false, server_version: null, error: '无法连接服务器' })
+  shell.commands.check_server = () => (scenario.checkReachable ? probe({ url: scenario.serverUrl }) : unreachable(scenario.serverUrl))
+  shell.commands.probe_server = async (args) => {
+    // 慢一点，看得到"正在连接…"。
+    await new Promise((r) => setTimeout(r, 300))
+    return unreachable(String(args.url).includes('://') ? args.url : `http://${args.url}`)
   }
-
-  let nextId = 1
-  window.__TAURI_INTERNALS__ = {
-    transformCallback(callback) {
-      const id = nextId++
-      window[`_${id}`] = callback
-      return id
-    },
-    unregisterCallback(id) {
-      delete window[`_${id}`]
-    },
-    convertFileSrc(path, protocol = 'asset') {
-      return `http://${protocol}.localhost/${encodeURIComponent(path)}`
-    },
-    async invoke(cmd, args) {
-      switch (cmd) {
-        case 'shell_info':
-          return {
-            version,
-            server_url: scenario.serverUrl,
-            data_dir: 'C:\\Users\\scan01\\AppData\\Local\\Doclite',
-            platform: 'windows',
-            smoke: false,
-          }
-        case 'check_server':
-          return scenario.checkReachable ? reachable(scenario.serverUrl) : unreachable(scenario.serverUrl)
-        case 'probe_server':
-          // 慢一点，看得到"正在连接…"。
-          await new Promise((r) => setTimeout(r, 300))
-          return unreachable(normalize(args.url))
-        case 'set_server':
-          return normalize(args.url)
-        case 'open_external':
-          return null
-        case 'api_fetch': {
-          const req = args.req
-          if (scenario.upgradeOn === req.path) {
-            return {
-              status: 426,
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({
-                code: 'client_upgrade_required',
-                message: '客户端版本过低，请更新',
-                details: {
-                  client_version: version,
-                  min_version: '0.2.0',
-                  latest_version: '0.2.1',
-                  download_url: 'http://192.168.1.10:9080/downloads/Doclite_0.2.1_x64-setup.exe',
-                },
-              }),
-            }
-          }
-          // 其余请求转给 preview 的 /api 代理（真实 server）。
-          const qs = new URLSearchParams(req.query).toString()
-          const res = await fetch(qs ? `${req.path}?${qs}` : req.path, {
-            method: req.method,
-            headers: req.headers,
-            body: req.body,
-          })
-          return { status: res.status, headers: {}, body: await res.text() }
-        }
-        default:
-          throw { kind: 'internal', message: `截图模拟里没有命令 ${cmd}` }
+  const apiFetch = shell.commands.api_fetch
+  shell.commands.api_fetch = async (args) => {
+    if (scenario.upgradeOn === args.req.path) {
+      return {
+        status: 426,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          code: 'client_upgrade_required',
+          message: '客户端版本过低，请更新',
+          details: {
+            client_version: '0.1.0',
+            min_version: '0.2.0',
+            latest_version: '0.2.1',
+            download_url: 'http://192.168.1.10:9080/downloads/Doclite_0.2.1_x64-setup.exe',
+          },
+        }),
       }
-    },
+    }
+    // 其余请求转给 devshell 的 /api（真实 server）。
+    return apiFetch(args)
   }
 }
 
-const mock = (scenario) => (page) => page.evaluateOnNewDocument(installTauriMock, scenario)
+const mock = (scenario) => (page) => installWailsMock(page, { serverUrl: scenario.serverUrl }, scenarioMock, scenario)
 
 export default {
   out: '../docs/screenshots/m1',
@@ -109,6 +57,7 @@ export default {
     {
       name: 'shell-connect',
       path: '/',
+      shell: true,
       init: mock({ serverUrl: null }),
       waitFor: '[data-testid=connect-server]',
       async prepare(page) {
@@ -119,6 +68,7 @@ export default {
     {
       name: 'shell-connect-failed',
       path: '/',
+      shell: true,
       init: mock({ serverUrl: null }),
       waitFor: '[data-testid=connect-server]',
       async prepare(page) {
@@ -131,6 +81,7 @@ export default {
     {
       name: 'shell-unreachable',
       path: '/',
+      shell: true,
       init: mock({ serverUrl: SERVER, checkReachable: false }),
       waitFor: '[data-testid=server-unreachable]',
     },
@@ -138,6 +89,7 @@ export default {
     {
       name: 'shell-upgrade',
       path: '/',
+      shell: true,
       init: mock({ serverUrl: SERVER, checkReachable: true, upgradeOn: '/api/me' }),
       waitFor: '[data-testid=upgrade-required]',
     },
@@ -145,6 +97,7 @@ export default {
     {
       name: 'shell-login',
       path: '/login',
+      shell: true,
       init: mock({ serverUrl: SERVER, checkReachable: true }),
       waitFor: '[data-testid=login-server]',
     },
@@ -152,6 +105,7 @@ export default {
     {
       name: 'shell-about',
       path: '/login',
+      shell: true,
       init: mock({ serverUrl: SERVER, checkReachable: true }),
       waitFor: '#username',
       async prepare(page) {
@@ -161,6 +115,11 @@ export default {
         await page.waitForSelector('[data-testid=side-nav]')
         await page.click('[data-testid=about]')
         await page.waitForSelector('[data-testid=about-dialog]')
+        // 关于对话框里的版本、服务器、数据目录来自壳（shell_info）。
+        const text = await page.$eval('[data-testid=about-dialog]', (el) => el.textContent)
+        for (const want of ['0.1.0', SERVER, 'C:\\Users\\scan01\\AppData\\Local\\Doclite']) {
+          if (!text.includes(want)) throw new Error(`关于对话框里没有 ${want}：${text}`)
+        }
       },
       delay: 500,
     },

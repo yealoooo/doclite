@@ -42,6 +42,8 @@ type smokeRun struct {
 	done       bool
 	code       int
 	closeCheck *CloseCheck
+	// flow 是主流程用的本机文件夹和 open_external 收到的地址（M6-4，smokeflow.go）。
+	flow *smokeFlowState
 }
 
 func newSmokeRun(s *Shell, opts *SmokeOptions) *smokeRun {
@@ -66,6 +68,8 @@ type SmokeConfig struct {
 	} `json:"tiles"`
 	// Rescan 是重扫一步的参数（M6-2，rescan.go）。
 	Rescan SmokeRescan `json:"rescan"`
+	// Flow 是主流程几步的参数（M6-4，smokeflow.go）。
+	Flow SmokeFlow `json:"flow"`
 	// Capabilities 告诉页面这个壳有哪些功能，没有的步骤跳过（M6-2 做上传队列、M6-3 做取图协议后改成 true）。
 	Capabilities SmokeCapabilities `json:"capabilities"`
 	// Pages：逐个打开账号菜单里的页面（DOCLITE_SMOKE_PAGES=1）。
@@ -95,6 +99,7 @@ func (r *smokeRun) config() SmokeConfig {
 	// M6-2：上传队列、热文件夹、重扫件。
 	c.Capabilities.UploadQueue = true
 	c.Rescan = smokeRescanConfig()
+	c.Flow = smokeFlowConfig()
 	r.s.imageSmokeConfig(&c)
 	return c
 }

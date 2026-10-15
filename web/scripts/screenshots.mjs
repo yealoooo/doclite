@@ -5,7 +5,8 @@
 //
 // 选项：
 //   --spec <文件>       截图清单（必填），格式见 scripts/shots/m0.mjs
-//   --base <URL>        前端地址，默认 http://127.0.0.1:5173（vite dev 或 vite preview，/api 由它代理到 server）
+//   --base <URL>        前端地址，默认 http://127.0.0.1:5173（托管了 web/dist 的 server、vite preview，或 devshell——
+//                       有壳模式截图的脚本要用 devshell，见 scripts/lib/wails-mock.mjs）
 //   --out <目录>        输出目录，默认取清单里的 out（相对 web/）
 //   --account 名:密码   覆盖或补充清单里的账号密码，可重复
 //   --only a,b          只截这几张（按 name）
@@ -15,7 +16,8 @@
 //
 // 每个账号用一个独立的浏览器上下文，通过登录页登录一次，之后依次打开它的各个页面。
 // 清单里写了 init(page) 的截图单独用一个新的上下文（未登录），先执行 init 再打开页面，
-// 例如用 page.evaluateOnNewDocument 注入 Tauri IPC 的模拟（scripts/shots/m1-shell.mjs）。
+// 例如注入 Wails 桥的模拟（scripts/lib/wails-mock.mjs，scripts/shots/m1-shell.mjs）。写了 shell: true 的截图用壳模式的地址
+// （`http://wails.localhost:<端口>`，页面认为自己在壳里）打开 path。
 // 打开页面时默认等到网络空闲（networkidle0）；页面常开一条 SSE 连接时（例如 /files）要在清单或这一张上写
 // waitUntil: 'networkidle2'（M1-10）。after(page) 在截图之后执行（清理测试数据等）；前面的步骤失败时也执行
 // （放在 finally 里），它自己出错也算这一张失败。
@@ -26,6 +28,8 @@ import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
 
 import puppeteer from 'puppeteer-core'
+
+import { shellOrigin } from './lib/wails-mock.mjs'
 
 const { values: args } = parseArgs({
   options: {
@@ -128,7 +132,8 @@ for (const shot of shots) {
     } else {
       page = await pageFor(shot.user ?? null)
     }
-    await page.goto(base + shot.path, { waitUntil: shot.waitUntil ?? spec.waitUntil ?? 'networkidle0' })
+    const origin = shot.shell ? shellOrigin(base) : base
+    await page.goto(origin + shot.path, { waitUntil: shot.waitUntil ?? spec.waitUntil ?? 'networkidle0' })
     if (shot.waitFor) await page.waitForSelector(shot.waitFor, { timeout: 15000 })
     if (shot.prepare) await shot.prepare(page)
     await page.evaluate(() => document.fonts.ready)

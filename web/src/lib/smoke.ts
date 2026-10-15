@@ -48,6 +48,10 @@
 //   rescan  重扫件（M2-7，lib/smoke-rescan.ts）：设置了 DOCLITE_SMOKE_RESCAN_PATH 才跑，否则跳过。经真实的
 //           pick_and_rescan（自检里用那个本机文件，不弹对话框）重扫一页已驳回的文件，用接口核对新版本、封面、
 //           自动再分配和 rescan 日志。失败时照样跑完后面各步。
+//   flow_upload、flow_hotfolder、flow_review、flow_catalog、flow_export  主流程（M6-4，lib/smoke-flow.ts）：设置了
+//           DOCLITE_SMOKE_FLOW_SAMPLES 才跑，否则跳过。壳里上传、热文件夹（都不弹系统对话框）→ 分给自己、在查看器里看原图、
+//           逐页通过 → 新建条目挂上、定稿 → 导出、经 open_external 拿到下载地址（自检里不打开系统浏览器），壳用 HTTP
+//           下载核对 zip。每一步失败时照样跑完后面各步。
 //   logout  退出登录，之后 GET /api/me 返回 401
 //   direct_blocked  页面自己直连服务器会被 CSP 挡住
 //   csp     整个过程中没有别的 CSP 违规
@@ -73,6 +77,15 @@ import type { ViewerStatus } from '@/components/viewer/ImageViewer.vue'
 import type { ViewerImageInfo } from '@/lib/viewer/load-original'
 // M2-7：重扫一步。
 import { checkRescan } from '@/lib/smoke-rescan'
+// M6-4：主流程几步。
+import {
+  checkFlowCatalog,
+  checkFlowExport,
+  checkFlowHotfolder,
+  checkFlowReview,
+  checkFlowUpload,
+  newFlowState,
+} from '@/lib/smoke-flow'
 import router from '@/router'
 import { useSessionStore } from '@/stores/session'
 import {
@@ -120,6 +133,9 @@ const VIEWER_TIMEOUT_MS = 60_000
 const VIEWER_READY_MS = 25_000
 /** rescan 一步的时限（M2-7）：算 sha、生成封面（debug 壳也优化了图像依赖）、上传一页。 */
 const RESCAN_TIMEOUT_MS = 60_000
+/** 主流程各步的时限（上传等入库、导出等执行完，见 lib/smoke-flow.ts）。 */
+const FLOW_STEP_TIMEOUT_MS = 120_000
+const FLOW_EXPORT_TIMEOUT_MS = 240_000
 /** pages 一步：每个页面打开后等多久再看有没有出错提示；整步的时限。 */
 const PAGE_SETTLE_MS = 1500
 const PAGES_TIMEOUT_MS = 120_000
@@ -1181,6 +1197,29 @@ export async function runSmoke(hooks: SmokeHooks) {
       } catch (e) {
         if (outcomeOf(e) !== 'failed') throw e
         deferred.push({ name: 'rescan', error: e })
+      }
+    }
+
+    // 主流程（M6-4）。没设置 DOCLITE_SMOKE_FLOW_SAMPLES 时跳过；每一步失败时同样接着跑后面各步。
+    const flowSteps: [string, (st: ReturnType<typeof newFlowState>) => Promise<unknown>, number][] = [
+      ['flow_upload', checkFlowUpload, FLOW_STEP_TIMEOUT_MS],
+      ['flow_hotfolder', checkFlowHotfolder, FLOW_STEP_TIMEOUT_MS],
+      ['flow_review', (st) => checkFlowReview(st, mountViewer), FLOW_STEP_TIMEOUT_MS],
+      ['flow_catalog', checkFlowCatalog, STEP_TIMEOUT_MS],
+      ['flow_export', checkFlowExport, FLOW_EXPORT_TIMEOUT_MS],
+    ]
+    if (!cfg.flow?.enabled || !caps.upload_queue || !caps.images) {
+      const why = !cfg.flow?.enabled ? '没有设置 DOCLITE_SMOKE_FLOW_SAMPLES' : '壳还没有上传队列或取图协议'
+      for (const [name] of flowSteps) skip(name, why)
+    } else {
+      const flow = newFlowState(cfg.flow)
+      for (const [name, fn, timeout] of flowSteps) {
+        try {
+          await step(name, () => fn(flow), timeout)
+        } catch (e) {
+          if (outcomeOf(e) !== 'failed') throw e
+          deferred.push({ name, error: e })
+        }
       }
     }
 

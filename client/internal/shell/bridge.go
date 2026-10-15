@@ -128,6 +128,12 @@ func (s *Shell) registerCommands() {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return nil, proxy.InvalidRequest("只能用系统浏览器打开 http 或 https 地址")
 		}
+		if s.smoke != nil {
+			// 自检不打开系统浏览器（不抢焦点），只记下地址，smoke_external_check 再核对（smokeflow.go）。
+			s.smoke.recordExternal(u.String())
+			s.log.Info("自检：open_external 只记下地址", "host", u.Host)
+			return nil, nil
+		}
 		if err := s.app.Browser.OpenURL(u.String()); err != nil {
 			return nil, proxy.Internal("打开系统浏览器失败：" + err.Error())
 		}
@@ -156,6 +162,8 @@ func (s *Shell) registerCommands() {
 	// M6-2：上传队列、热文件夹、重扫件（upload.go、hotfolder.go、rescan.go）。
 	s.initUploads()
 	s.registerImageCommands()
+	// M6-4：自检的主流程（smokeflow.go）。
+	s.registerSmokeFlowCommands()
 }
 
 // ShellInfo 是 shell_info 的结果（web/src/lib/shell.ts 的 ShellInfo）。

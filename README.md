@@ -83,7 +83,7 @@ INIT_ADMIN_PASSWORD=<管理员密码> npm run screenshots -- --spec scripts/shot
 #   --out <目录>      截图放哪（默认 docs/screenshots/<里程碑>；截图不提交，跑完 git clean -fd docs/screenshots）
 ```
 
-- `--base` 指向托管了 `web/dist` 的 server（或 vite preview，`/api` 由它代理）。脚本在页面之外调接口也走这个地址。
+- `--base` 指向托管了 `web/dist` 的 server（或 vite preview、devshell，`/api` 由它们代理；有壳模式截图的脚本要用 devshell，见下面）。脚本在页面之外调接口也走这个地址。
 - `INIT_ADMIN_PASSWORD`（`INIT_ADMIN_USERNAME`）是管理员的密码，和启动 server 用同一组变量；演示账号的密码 `demo123456`（`DEMO_PASSWORD` 可改）。`SHOTS_TMP` 是脚本的临时目录（默认系统临时目录）。
 - 审计没有读接口，几个脚本直接 `psql` 读库：要 `psql` 在 PATH 里，`DATABASE_URL` 指向同一个库（默认本机 `doclite_dev`）。
 
@@ -104,7 +104,15 @@ npm run seed:files -- --base http://127.0.0.1:9080 --user demo_scanner:demo12345
 - `m2-accept`：要先建「M2 验收演示 <日期>」（脚本开头有命令）；只能走一遍，再跑换一个文件夹（`M2_ACCEPT_FOLDER`）。
 - `m3-accept`：自己建「M3 验收演示 <日期>」和全宗 Z308，只能走一遍；再跑换 `M3_ACCEPT_FOLDER`、`M3_ACCEPT_FONDS`，或者 `M3_ACCEPT_TRIAL=1` 试跑（最后删掉自己建的数据）。
 - `m4-export`：server 要在执行导出（见下一节）。
-- 壳的部分：`m1-shell`、`m1-scan`、`m1-cache` 和其他脚本里名字带 `shell` 的几张注入的是上一版 Tauri 的 IPC 模拟，客户端换成 Wails 后不再适用，等 M6-4 改写（跑的时候用 `--only` 跳过）。`m2-accept`、`m3-accept` 的壳重扫在没设 `M2_ACCEPT_SHELL`、`M3_ACCEPT_SHELL`（打包的壳）时改用接口模拟；`m2-accept` 的两步"壳模式审核"默认改在浏览器里做（`M2_ACCEPT_SHELL_MOCK=1` 才用 Tauri 模拟）。
+- 壳的部分（`m1-shell`、`m1-scan`、`m1-cache` 和 `m1-organize`、`m2-rescan`、`m2-viewer`、`m2-review`、`m2-accept` 里名字带 `shell` 的几张）：`--base` 要指向 **devshell**（见下面）。这几张用 `http://wails.localhost:<端口>` 打开页面（`lib/client.ts` 的 `isShell()` 认 Windows 上 WebView2 的这个地址，Chrome 把 `*.localhost` 解析到本机），在页面脚本运行前注入 Wails 桥的模拟（`scripts/lib/wails-mock.mjs`：拦下 `/wails/runtime` 的命令调用、`_wails.dispatchWailsEvent` 推事件、`_wails.streamFactory` 给实时通道），正式前端代码不改。
+- `m2-accept`：`M2_ACCEPT_SHELL_MOCK=1` 时壳模式审核那两步用上面的模拟（否则改在浏览器里做）；`M2_ACCEPT_SHELL=client/bin/Doclite.app/Contents/MacOS/Doclite`、`M2_ACCEPT_SERVER=<server 本身的地址>` 时壳重扫、壳的大图两步跑打包的客户端 `--smoke`（隔离的数据目录、后台模式），不设时壳重扫改用接口模拟。`m3-accept` 的 `M3_ACCEPT_SHELL` 同理。
+
+**devshell**（`client/cmd/devshell`，截图脚本的开发服务器，不打包）：一个端口上托管 `web/dist`、把 `/api/` 转给 server、用客户端的 Go 代码（`internal/imagecache`、`internal/tiles`，和打包的客户端同一份）回答取图地址 `/shell/img/…`（下载、本机缓存、切块）；壳模式的地址和客户端一样加 CSP。浏览器的那些截图也可以照常经它跑。
+
+```sh
+cd client && go run ./cmd/devshell -server http://127.0.0.1:9080 -listen 127.0.0.1:24173 -cache <临时目录>
+cd web && INIT_ADMIN_PASSWORD=<管理员密码> npm run screenshots -- --spec scripts/shots/m1-scan.mjs --base http://127.0.0.1:24173
+```
 
 ## 桌面客户端
 
@@ -127,9 +135,14 @@ DOCLITE_BACKGROUND=1 client/bin/Doclite.app/Contents/MacOS/Doclite --smoke
 | 变量 | 说明 |
 |---|---|
 | `DOCLITE_SMOKE_SERVER`、`DOCLITE_SMOKE_USERNAME`、`DOCLITE_SMOKE_PASSWORD` | 服务器和账号（账号至少能进一个项目） |
-| `DOCLITE_SMOKE_TIMEOUT_SECS` | 整个自检的时限，默认 120 |
+| `DOCLITE_SMOKE_TIMEOUT_SECS` | 整个自检的时限，默认 120（加上 pages 和主流程要 300 以上） |
 | `DOCLITE_SMOKE_PAGES=1` | 另外逐个打开菜单里的页面 |
-| `DOCLITE_SMOKE_RESCAN_PATH`、`_FILE_ID`、`_PROJECT`、`_EXPECT` | 设了 PATH 才跑 rescan 一步：用这个本机文件重扫（不设 FILE_ID 取待重扫列表第一个；EXPECT 是 `done` 或 `incomplete`） |
+| `DOCLITE_SMOKE_RESCAN_PATH`、`_FILE_ID`、`_PROJECT`、`_EXPECT` | 设了 PATH 才跑 rescan 一步：用这个本机文件重扫（不设 FILE_ID 取待重扫列表第一个；EXPECT 是 `done` 或 `incomplete`）。重扫件的内容在项目里不能重复 |
+| `DOCLITE_SMOKE_CACHE` | img_cache、tiles 两步：`cold`（默认，先清空自检的缓存，要求全部下载、现切）或 `warm`（要求全部命中；先跑一次 cold） |
+| `DOCLITE_SMOKE_IMG_PROJECT`、`_IMG_FOLDER`、`_IMG_COUNT` | img_cache 一步取哪个项目、文件夹（从项目根起，`/` 分隔）的前几个文件（默认第一个有文件的文件夹、8 个） |
+| `DOCLITE_SMOKE_TILES_PROJECT`、`_TILES_FOLDER`、`_TILES_FILES` | tiles、viewer 两步：默认找文件名含 g4、lzw 的 TIFF；`_TILES_FILES` 指定文件夹里的几个文件（逗号分隔，第一个给 viewer 看，含 JPEG 压缩 TIFF 的列表见 roadmap M6-3b） |
+| `DOCLITE_SMOKE_FLOW_SAMPLES` | 设了才跑主流程五步（M6-4）：本机样本文件夹（单页 JPEG、PNG、TIFF，按文件名取前 2 × COUNT 个）。壳复制一份、每个文件写进本次独有的注释（内容不重复）：壳里上传（`pick_and_enqueue_upload` 用复制的文件夹代替系统对话框）→ 热文件夹（`hotfolder_pick_dir` 用准备好的空文件夹，壳再往里放文件）→ 分给自己、在查看器里看原图、逐页通过 → 建条目挂上、定稿 → 导出，下载地址经 `open_external` 交给壳（自检里不打开系统浏览器），壳用 HTTP 下载核对 zip。账号要有扫描、审核分配、审核、归类、导出菜单（admin）；server 要在执行导出。每次在项目里留下一个「<FOLDER>/自检 <时间>」文件夹和一个定稿的条目 |
+| `DOCLITE_SMOKE_FLOW_PROJECT`、`_FOLDER`、`_COUNT`、`_FORMAT` | 主流程的项目（默认第一个能进的）、上级文件夹（默认「客户端自检」）、两种上传各几个（默认 3）、导出格式（`pdf` 默认或 `images`）。归类节点按档号模板用到的层级找或建：全宗 `ZJ`「客户端自检」/ `WS` / `2026` / `Y` / `ZJ` |
 
 其他环境变量：`DOCLITE_DATA_DIR` 换数据目录（默认 `~/Library/Application Support/Doclite/`、`%LOCALAPPDATA%\Doclite\`；自检用其中的 `smoke/`）；`DOCLITE_BACKGROUND=1` 不抢焦点（开发、测试用）；`DOCLITE_LOG_LEVEL=debug`；`DOCLITE_LOG_STDERR=1` 日志同时写到标准错误。删掉数据目录里的 `upload-queue.db` 就是重置上传队列。
 

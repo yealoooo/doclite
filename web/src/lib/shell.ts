@@ -205,6 +205,19 @@ export interface SmokeConfig {
     expect?: 'done' | 'incomplete'
   }
   /**
+   * 主流程几步（M6-4，lib/smoke-flow.ts）的参数：给了 DOCLITE_SMOKE_FLOW_SAMPLES 才跑。旧版壳没有这一项。
+   */
+  flow?: {
+    enabled: boolean
+    /** 项目编码；null 表示第一个能进的项目。 */
+    project: string | null
+    /** 放自检文件夹的上级（从项目根起，/ 分隔）。 */
+    folder: string
+    /** 壳里上传、热文件夹各传几个。 */
+    count: number
+    format: 'pdf' | 'images'
+  }
+  /**
    * 这个壳有哪些功能（M6-1 起）：没有的步骤跳过并记为 skipped。images：取图协议、本机缓存、切块（M6-3）；
    * upload_queue：上传队列、热文件夹、重扫（M6-2）；csp：页面不能直连服务器（M6-3）；nav_guard：导航保护装上了。
    * 旧版壳没有这一项，视为前三项都有。

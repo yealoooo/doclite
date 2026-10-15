@@ -10,6 +10,7 @@ import (
 
 	"doclite/client/internal/imagecache"
 	"doclite/client/internal/proxy"
+	"doclite/client/internal/webcsp"
 )
 
 // 取图协议、本机图片缓存、大图切块（M6-3，实现在 internal/imagecache、internal/tiles）在壳里的接线：
@@ -17,17 +18,7 @@ import (
 //     路径回退到 index.html）；
 //   - 会话代理的每个响应交给缓存记来源（batch、snapshots；登录、退出、换服务器清空）；
 //   - 命令 cache_stats、cache_clear、cache_set_limit、prepare_tiles；
-//   - 页面的 CSP（见 contentSecurityPolicy）。
-
-// contentSecurityPolicy 是壳里页面的 CSP（资产服务器给每个响应都带上；开发时页面由 Vite 提供，不加）：
-//   - 页面只能连自己（connect-src 'self'）：/api/ 全部经壳的会话代理（Wails 的绑定方法和流都在同源的 /wails/ 下），
-//     图片和块经同源的取图地址，页面不能绕过壳直连服务器或存储（自检的 direct_blocked 一步验证）；
-//   - 脚本只能是打包进来的文件（script-src 'self'，没有内联脚本、eval）；
-//   - 样式允许内联（'unsafe-inline'）：Vue 的样式绑定、OpenSeadragon 和组件库都会写内联样式，脚本的限制才是关键；
-//   - 图片：同源、data:（内联的图标）、blob:（OpenSeadragon 把取到的块转成 blob 再画）。
-const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-	"img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; " +
-	"object-src 'none'; base-uri 'self'; frame-src 'none'"
+//   - 页面的 CSP（internal/webcsp，截图脚本的开发服务器 cmd/devshell 用同一份）。
 
 // registerImageCommands 打开缓存、接上会话代理，登记缓存和切块的命令（registerCommands 最后调用）。
 func (s *Shell) registerImageCommands() {
@@ -88,7 +79,7 @@ func (s *Shell) withImages(next http.Handler) http.Handler {
 			return
 		}
 		if !dev {
-			w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
+			w.Header().Set("Content-Security-Policy", webcsp.Policy)
 		}
 		next.ServeHTTP(w, r)
 	})

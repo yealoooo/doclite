@@ -34,10 +34,17 @@ func (s *Shell) registerHotfolderCommands() {
 		if _, err := hot(); err != nil {
 			return nil, err
 		}
-		dir, err := s.openDialog().SetTitle("选择扫描软件保存文件的文件夹").CanChooseDirectories(true).CanChooseFiles(false).
-			CanCreateDirectories(true).ShowHiddenFiles(false).ResolvesAliases(true).PromptForSingleSelection()
-		if err != nil {
-			return nil, proxy.Internal("打不开系统对话框：" + err.Error())
+		var dir string
+		if d, ok := s.smokeHotDir(); ok {
+			// 自检的主流程：用准备好的空文件夹代替系统对话框（smokeflow.go）。
+			dir = d
+		} else {
+			d, err := s.openDialog().SetTitle("选择扫描软件保存文件的文件夹").CanChooseDirectories(true).CanChooseFiles(false).
+				CanCreateDirectories(true).ShowHiddenFiles(false).ResolvesAliases(true).PromptForSingleSelection()
+			if err != nil {
+				return nil, proxy.Internal("打不开系统对话框：" + err.Error())
+			}
+			dir = d
 		}
 		if dir == "" {
 			return nil, nil
@@ -97,4 +104,12 @@ func (s *Shell) registerHotfolderCommands() {
 		}
 		return st, nil
 	})
+}
+
+// smokeHotDir：自检准备了主流程的样本时，返回代替系统对话框的监控目录。
+func (s *Shell) smokeHotDir() (string, bool) {
+	if s.smoke == nil {
+		return "", false
+	}
+	return s.smoke.flowHotDir()
 }

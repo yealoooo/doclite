@@ -186,8 +186,11 @@ func (s *Shell) registerUploadCommands() {
 		if a.Mode != "files" && a.Mode != "folder" {
 			return nil, proxy.InvalidRequest("mode 只能是 files 或 folder")
 		}
-		paths, err := s.pickForUpload(a.Mode)
-		if err != nil {
+		var paths []string
+		if p, ok := s.smokePickForUpload(a.Mode); ok {
+			// 自检的主流程：用复制好的样本代替系统对话框（smokeflow.go）。
+			paths = p
+		} else if paths, err = s.pickForUpload(a.Mode); err != nil {
 			return nil, proxy.Internal("打不开系统对话框：" + err.Error())
 		}
 		res := PickResult{Added: []int64{}, Skipped: []upload.Skipped{}}
@@ -229,6 +232,14 @@ func (s *Shell) openDialog() *application.OpenFileDialogStruct {
 		d.AttachToWindow(s.window)
 	}
 	return d
+}
+
+// smokePickForUpload：自检准备了主流程的样本时，返回代替系统对话框的路径。
+func (s *Shell) smokePickForUpload(mode string) ([]string, bool) {
+	if s.smoke == nil {
+		return nil, false
+	}
+	return s.smoke.flowUploadPaths(mode)
 }
 
 // pickForUpload 用系统对话框选文件（可多选）或一个文件夹。取消时返回空。

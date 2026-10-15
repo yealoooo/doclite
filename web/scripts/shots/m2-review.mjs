@@ -1,10 +1,10 @@
-// M2-6 审核工作台 /review 的截图和断言（demo_reviewer 操作，浏览器真实数据 + 壳的 IPC 和 img 协议模拟）。
+// M2-6 审核工作台 /review 的截图和断言（demo_reviewer 操作，浏览器真实数据 + 壳模式：Wails 桥的模拟）。
 //
-//   cd shell/src-tauri && cargo build --release --example tiles-bench     # 壳模式的模拟要用
 //   INIT_ADMIN_PASSWORD=admin123456 [SHOTS_TMP=<临时目录>] \
-//     npm run screenshots -- --spec scripts/shots/m2-review.mjs --base http://localhost:<preview 端口> [--only …]
+//     npm run screenshots -- --spec scripts/shots/m2-review.mjs --base <devshell 的地址> [--only …]
 //
-// 前端地址是 vite preview（/api 代理到 server）。要先有：
+// 前端地址是 devshell（client/cmd/devshell：/api 转给 server，壳模式的取图和切块用客户端的 Go 代码）；浏览器的几张也可以
+// 用 vite preview。要先有：
 // - DEMO-A 下的演示文件夹「M2-6 审核演示」（30 页，seed:files 建的，都加 --base 和 --user）：
 //     npm run seed:files -- --project DEMO-A --folder "M2-6 审核演示/盒 01" --count 12 --low-dpi 2 --remark "M2-6 审核工作台演示：库房 A 架 3 层"
 //     npm run seed:files -- --project DEMO-A --folder "M2-6 审核演示/盒 02" --count 10
@@ -27,8 +27,8 @@
 //   DEMO-B 之后）、m2-review-stale-guards（验收第 1 轮第 1、2、4 条之后；中途另存 m2-review-showing-old：同位切换正在看
 //   上一轮时不能审）、m2-review-unseen（验收第 1 轮第 3 条：只看了封面的标记；中途另存 m2-review-cover-confirm：原图没加载
 //   出来时的确认框）。
-// - 壳（IPC 和 img 协议模拟，分块用 tiles-bench 现场切；另外模拟了 api_stream，实时事件照常）：shell-review（客户端分块
-//   显示，给下一张提前切块）、shell-review-compare（第 2 轮按 C 对比，两侧都是分块）。
+// - 壳（壳模式的地址 + Wails 桥的模拟，scripts/lib/wails-mock.mjs；分块由 devshell 用客户端的 Go 代码现场切，api_stream
+//   的实时事件照常）：shell-review（客户端分块显示，给下一张提前切块）、shell-review-compare（第 2 轮按 C 对比，两侧都是分块）。
 //
 // 断言（失败时这一张算失败，脚本退出码 1）：
 // - m2-review-list：分组头和接口的 folders 一致（3 个文件夹）、标签上的数字等于接口的 counts、"历史"行没有撤回按钮。
@@ -64,10 +64,11 @@ import path from 'node:path'
 
 import {
   apiClient,
+  apiOrigin,
   assert,
   installShellMock,
   login as loginPage,
-  shotsTmp,
+  pageOrigin,
   sleep,
 } from '../lib/viewer-shots.mjs'
 import { makeScanPage } from '../lib/scan-pages.mjs'
@@ -107,7 +108,7 @@ let ctxPromise = null
 /** 登录 admin、demo_manager、demo_reviewer、demo_scanner，找到 DEMO-A、演示文件夹和用户 id（只做一次）。 */
 function context(page) {
   ctxPromise ??= (async () => {
-    const origin = new URL(page.url()).origin
+    const origin = apiOrigin(page)
     const adminApi = await as(origin, admin, adminPassword)
     const projects = await adminApi('GET', '/api/projects')
     const project = projects.find((p) => p.project_code === PROJECT)
@@ -1223,7 +1224,7 @@ export default {
         await dropTemp(tempOther)
       },
     },
-    // ---------- 壳（IPC 和 img 协议模拟） ----------
+    // ---------- 壳（壳模式的地址 + Wails 桥的模拟） ----------
     shellShot('shell-review', async (page, { ctx }) => {
       await shellOpenTwice(page, ctx)
       // 打开时自动看第一张待审的（盒 01 第 3 页）。
@@ -1263,13 +1264,12 @@ export default {
 }
 
 /**
- * 壳里打开审核台（范围是演示文件夹）。截图模拟的来源记录是 Node 这边收到 batch、snapshots 响应后异步记下的（真壳在
- * Rust 代理里转发响应之前就记好了），页面一打开就要的封面、分块描述可能抢在记下之前（404，显示"加载失败"）。所以先打开
- * 一次让模拟记下这些快照，再重新打开（快照不变，第二次都在记录里）。
+ * 壳里打开审核台（范围是演示文件夹）。上一版的截图模拟在 Node 这边异步记来源，要先打开一次再重新打开；devshell 和壳一样
+ * 在转发 batch、snapshots 响应之前就记好了，打开两次只是沿用原来的步骤（第二次全部命中本机缓存）。
  */
 async function shellOpenTwice(page, ctx) {
   for (let i = 0; i < 2; i++) {
-    await page.goto(`${ctx.origin}/review?folder=${ctx.demo.id}`, { waitUntil: IDLE })
+    await page.goto(`${pageOrigin(page)}/review?folder=${ctx.demo.id}`, { waitUntil: IDLE })
     await page.waitForSelector('[data-testid=review-page][data-list=ready][data-stream=open]', { timeout: 15000 })
     await page.waitForFunction(
       () => [...document.querySelectorAll('[data-testid=file-cover]')].every((c) => !['loading', 'loading-image'].includes(c.dataset.coverState)),
@@ -1279,65 +1279,24 @@ async function shellOpenTwice(page, ctx) {
   }
 }
 
-/** 壳里的一张：注入 IPC、拦截 img 协议（同 m2-viewer.mjs），记下 prepare_tiles 的调用，以 demo_reviewer 登录。 */
+/** 壳里的一张：壳模式的地址 + Wails 桥的模拟、统计取图请求（同 m2-viewer.mjs），记下 prepare_tiles 的调用，以 demo_reviewer 登录。 */
 function shellShot(name, run) {
   return {
     name,
     path: '/login',
+    shell: true,
     waitFor: '#username',
     async init(page) {
-      await installShellMock(page, { cacheDir: shotsTmp('m2-review-shell') })
-      // 在 M2-4 的模拟之上：记下 prepare_tiles 的调用；api_stream（实时事件）转给 preview 的 /api 代理，逐块经 Channel
-      // 的 onmessage 推给页面（open → chunk… → end，同 lib/shell.ts 的 ShellStreamEvent）。
+      await installShellMock(page)
+      // prepare_tiles 照常交给 devshell（真的提前切块），这里只把调用的参数列出来。
       await page.evaluateOnNewDocument(() => {
-        const t = window.__TAURI_INTERNALS__
-        const invoke = t.invoke.bind(t)
-        window.__prepareCalls = []
-        const streams = new Map()
-        let nextStream = 1
-        t.invoke = async (cmd, args) => {
-          if (cmd === 'prepare_tiles') window.__prepareCalls.push(args)
-          if (cmd === 'api_stream') {
-            const id = nextStream++
-            const ctrl = new AbortController()
-            streams.set(id, ctrl)
-            const send = (m) => {
-              if (!ctrl.signal.aborted) args.onEvent.onmessage(m)
-            }
-            const req = args.req
-            const qs = new URLSearchParams(req.query).toString()
-            void (async () => {
-              try {
-                const res = await fetch(qs ? `${req.path}?${qs}` : req.path, { headers: req.headers, signal: ctrl.signal })
-                send({ event: 'open', status: res.status, headers: {} })
-                const reader = res.body.getReader()
-                const dec = new TextDecoder()
-                for (;;) {
-                  const { done, value } = await reader.read()
-                  if (done) break
-                  send({ event: 'chunk', data: dec.decode(value, { stream: true }) })
-                }
-                send({ event: 'end' })
-              } catch (e) {
-                send({ event: 'error', kind: 'network', message: String(e) })
-              } finally {
-                streams.delete(id)
-              }
-            })()
-            return id
-          }
-          if (cmd === 'api_stream_cancel') {
-            streams.get(args.id)?.abort()
-            streams.delete(args.id)
-            return null
-          }
-          return invoke(cmd, args)
-        }
+        Object.defineProperty(window, '__prepareCalls', {
+          get: () => window.__shell.calls.filter((c) => c.cmd === 'prepare_tiles').map((c) => c.args),
+        })
       })
     },
     async prepare(page) {
-      const origin = new URL(page.url()).origin
-      await loginPage(page, origin, REV1, demoPassword)
+      await loginPage(page, pageOrigin(page), REV1, demoPassword)
       await page.waitForSelector('[data-testid=side-nav]')
       const ctx = await context(page)
       await run(page, { ctx })

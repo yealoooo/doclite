@@ -6,25 +6,24 @@
 //   - 对比样本.png：v1 是 150 DPI（被驳回：模糊，带说明），v2 是 300 DPI 的重扫；
 //   - 超出预算 A0 300dpi.tif：1 位黑白无压缩 TIFF，9933×14043（约 1.4 亿像素，超过浏览器 1 亿像素的预算）。
 // - 页面：打开文件夹、右键"查看原图"、等查看器的状态；
-// - 壳的模拟：Tauri IPC（同 m1-cache.mjs）+ 在截图脚本里拦截 `http://img.localhost/…`：封面用记录下的预签名 URL 取；
-//   分块描述和块用壳自己的切块代码现场生成（`shell/src-tauri` 的 `tiles-bench run`，和 M2-3 同一份代码），
-//   描述按 M2-3 的格式拼；来源记录同壳：只认在 batch、snapshots 响应里出现过的快照，其余 404。
-//   tiles-bench 要先编译：`cd shell/src-tauri && cargo build --release --example tiles-bench`。
+// - 壳的模拟（M6-4）：壳模式的地址 + Wails 桥的模拟（scripts/lib/wails-mock.mjs），--base 要指向 devshell
+//   （client/cmd/devshell）：封面、分块描述和块由 devshell 用客户端的 Go 代码（internal/imagecache、internal/tiles，
+//   和打包的壳同一份）现场下载、切块；来源记录同壳（devshell 转发 batch、snapshots 响应时记下），其余 404。
+//   截图脚本只拦截取图地址的请求做统计和故障注入（422、503、延迟）。
 // - 渲染进程的内存：按 ps 轮询这个浏览器的 renderer、GPU 进程的 RSS。
 // - 共用内存预算的模拟（M2-4 审查第 1 轮）：拦截对比样本的 snapshots 响应，把两个版本换成现场生成的大 TIFF
 //   （Deflate 压缩的彩色，文件只有几 MB，解码要几百 MB），原图地址也由截图脚本回答（interceptCompareTiffs）。
 
-import { execFile, execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
 import { deflateSync } from 'node:zlib'
 
 import jpeg from 'jpeg-js'
 
 import { coverSize, makeScanPage } from './scan-pages.mjs'
+import { installWailsMock } from './wails-mock.mjs'
 
 export const PROJECT = 'DEMO-A'
 export const JPEG_FOLDER = 'M1 验收演示 2026-10-05/盒 WS-2025-001'
@@ -33,9 +32,6 @@ export const BENCH_FOLDER = 'M2-3 分块实测'
 export const OWN_FOLDER = 'M2-4 查看器样本'
 export const COMPARE_FILE = '对比样本.png'
 export const BIG_FILE = '超出预算 A0 300dpi.tif'
-
-const SHELL_DIR = fileURLToPath(new URL('../../../shell/src-tauri/', import.meta.url))
-export const TILES_BENCH = path.join(SHELL_DIR, 'target/release/examples/tiles-bench')
 
 export function assert(cond, msg) {
   if (!cond) throw new Error(msg)
@@ -256,6 +252,18 @@ export function bigBilevelTiff() {
 
 // ---------- 页面 ----------
 
+/** 页面现在的 origin（壳模式是 http://wails.localhost:<端口>，在页面里跳转要用它，不然就离开了壳模式）。 */
+export function pageOrigin(page) {
+  return new URL(page.url()).origin
+}
+
+/** 页面之外调接口用的 origin：壳模式的地址换回 127.0.0.1（同一个 devshell；Windows 上 node 不一定解析 *.localhost）。 */
+export function apiOrigin(page) {
+  const u = new URL(page.url())
+  if (u.hostname === 'wails.localhost') u.hostname = '127.0.0.1'
+  return u.origin
+}
+
 export async function login(page, origin, user, password) {
   await page.goto(`${origin}/login`, { waitUntil: 'networkidle0' })
   await page.type('#username', user)
@@ -420,19 +428,19 @@ export function trackWorkers(page) {
 
 // ---------- 壳的模拟 ----------
 
-/** 在页面里执行（会被序列化）：Tauri IPC 的模拟。api_fetch 转给 preview 的 /api 代理；prepare_tiles 只回 queued。 */
-function installTauriMock() {
-  const version = '0.1.0'
-  const serverUrl = 'http://127.0.0.1:9080'
-  // 页面里在途的 img 协议请求（dzi、tile，按快照分组）：同一时间在加载的原图个数、被取消的请求。
+/**
+ * 在页面里执行（会被序列化）：包一层 fetch，统计页面里在途的取图请求（dzi、tile，按快照分组）——同一时间在加载的
+ * 原图个数、被取消的请求（window.__shellImgStats）。
+ */
+function trackShellImages() {
   const inflight = new Map()
   const imgStats = { max: 0, aborted: [] }
   window.__shellImgStats = imgStats
-  const rawFetch = window.fetch.bind(window)
+  const prevFetch = window.fetch
   window.fetch = (input, init) => {
-    const url = typeof input === 'string' ? input : input.url
-    const m = url.startsWith('http://img.localhost/') && decodeURIComponent(new URL(url).pathname.slice(1)).match(/^(dzi|tile)\/[^/]+\/([^/]+)/)
-    if (!m) return rawFetch(input, init)
+    const url = new URL(typeof input === 'string' || input instanceof URL ? String(input) : input.url, location.href)
+    const m = url.origin === location.origin && url.pathname.match(/^\/shell\/img\/(dzi|tile)\/[^/]+\/([^/]+)/)
+    if (!m) return prevFetch(input, init)
     const sid = m[2]
     inflight.set(sid, (inflight.get(sid) ?? 0) + 1)
     imgStats.max = Math.max(imgStats.max, [...inflight.values()].filter((n) => n > 0).length)
@@ -445,7 +453,7 @@ function installTauriMock() {
     }
     // 页面一取消（signal abort，同步发生）就算结束，不等 fetch 的 Promise 之后才 reject。
     init?.signal?.addEventListener('abort', () => done(true), { once: true })
-    return rawFetch(input, init).then(
+    return prevFetch(input, init).then(
       (r) => {
         done(false)
         return r
@@ -456,174 +464,52 @@ function installTauriMock() {
       },
     )
   }
-
-  let nextId = 1
-  window.__TAURI_INTERNALS__ = {
-    transformCallback(callback) {
-      const id = nextId++
-      window[`_${id}`] = callback
-      return id
-    },
-    unregisterCallback(id) {
-      delete window[`_${id}`]
-    },
-    convertFileSrc(p, protocol = 'asset') {
-      return `http://${protocol}.localhost/${encodeURIComponent(p)}`
-    },
-    async invoke(cmd, args) {
-      switch (cmd) {
-        case 'shell_info':
-          return { version, server_url: serverUrl, data_dir: 'C:\\Users\\review01\\AppData\\Local\\Doclite', platform: 'windows', smoke: false }
-        case 'check_server':
-          return {
-            server_url: serverUrl,
-            reachable: true,
-            error: null,
-            server_version: version,
-            min_version: null,
-            latest_version: null,
-            download_url: null,
-            client_version: version,
-            upgrade_required: false,
-          }
-        case 'api_fetch': {
-          const req = args.req
-          const qs = new URLSearchParams(req.query).toString()
-          const res = await fetch(qs ? `${req.path}?${qs}` : req.path, { method: req.method, headers: req.headers, body: req.body })
-          return { status: res.status, headers: {}, body: await res.text() }
-        }
-        case 'prepare_tiles':
-          return { status: 'queued', code: null, message: null }
-        case 'open_external':
-          return null
-        default:
-          throw { kind: 'internal', message: `截图模拟里没有命令 ${cmd}` }
-      }
-    },
-  }
 }
 
 /**
- * 页面以为自己在壳里（Windows 的 `http://img.localhost/`），img 协议由截图脚本回答：
- * - cover：用记录下的预签名 URL 取（没有 CORS 头，和壳一样）；
- * - dzi：第一次用 tiles-bench 切块（原图先下载到 cacheDir），之后命中；`dziDelayMs` 让每次描述都晚这么久才回
- *   （模拟第一次打开要等壳下载原图、切块）；`fail` 里的 file_id 返回 422（如 too_large）；
- * - tile：从切好的目录里读，带 `Access-Control-Allow-Origin: *`。
- * 返回统计：每个快照请求过的块（按级号、坐标去重）和描述。
+ * 壳模式（页面要用 shellOrigin 的地址打开）：Wails 桥的模拟 + 统计页面里的取图请求。取图地址（/shell/img/）由
+ * devshell 用客户端的 Go 代码回答（下载、本机缓存、切块，和打包的壳同一份）；这里只拦截它们做统计和故障注入：
+ * - `fail`：file_id → {code, message}，这些文件的分块描述回 422（例如 too_large）；
+ * - `dziDelayMs`：每次分块描述都晚这么久才放行（模拟第一次打开要等壳下载原图、切块）；
+ * - `stats.tileFail(sid, level, name)` 返回非 0 时这一块回那个状态码（模拟壳取块失败，例如 503）。
+ * 返回统计：每个快照请求过的块（按级号、坐标去重）、每块被请求的次数、分块描述的请求次数和内容。
+ * cacheDir 不再用（缓存在 devshell 的 -cache 目录里），留着参数是为了调用处不用改。
  */
-export async function installShellMock(page, { cacheDir, fail = new Map(), dziDelayMs = 0 } = {}) {
-  assert(existsSync(TILES_BENCH), `没有 ${TILES_BENCH}，先在 shell/src-tauri 下 cargo build --release --example tiles-bench`)
-  mkdirSync(cacheDir, { recursive: true })
-  await page.evaluateOnNewDocument(installTauriMock)
+export async function installShellMock(page, { fail = new Map(), dziDelayMs = 0 } = {}) {
+  await installWailsMock(page, { serverUrl: 'http://127.0.0.1:9080', dataDir: 'C:\\Users\\review01\\AppData\\Local\\Doclite' })
+  await page.evaluateOnNewDocument(trackShellImages)
   await page.setRequestInterception(true)
 
-  const sources = new Map() // sid → {fid, cover_url, original_url, mime_type}
-  const tiling = new Map() // sid → Promise<{dir, info}>
-  // tileFail：(sid, level, name) → 状态码（0 正常回答），模拟壳取块失败（例如 503 缓存暂时不可用）；
-  // tileAttempts：每一块（sid/级/名字）被请求的次数（含查看器的自动重试）。
+  // tileFail：(sid, level, name) → 状态码（0 正常回答）；tileAttempts：每一块（sid/级/名字）被请求的次数（含查看器的自动重试）。
   const stats = { tiles: new Map(), dzi: new Map(), descriptors: new Map(), tileFail: null, tileAttempts: new Map() }
 
   page.on('response', async (res) => {
-    const url = res.url()
-    if (!/\/api\/files\/batch$|\/api\/files\/[0-9a-f-]+\/snapshots$/.test(new URL(url).pathname)) return
+    const u = new URL(res.url())
+    const m = u.pathname.match(/^\/shell\/img\/dzi\/[^/]+\/([^/]+)$/)
+    if (!m || res.status() !== 200) return
     try {
-      const body = await res.json()
-      if (body.items) {
-        for (const it of body.items) sources.set(it.snapshot_id, { fid: it.file_id, ...it })
-      } else if (body.snapshots) {
-        for (const s of body.snapshots) sources.set(s.snapshot_id, { fid: body.file_id, ...s })
-      }
+      stats.descriptors.set(m[1], await res.json())
     } catch {
-      // 不是 JSON（错误响应）就不记。
+      // 页面取消了请求、响应体读不到，就不记。
     }
   })
 
-  async function tilesFor(sid) {
-    let p = tiling.get(sid)
-    if (!p) {
-      p = (async () => {
-        const src = sources.get(sid)
-        const ext = src.mime_type === 'image/tiff' ? 'tif' : src.mime_type === 'image/png' ? 'png' : 'jpg'
-        const file = path.join(cacheDir, `${sid}.${ext}`)
-        if (!existsSync(file)) {
-          const r = await fetch(src.original_url)
-          assert(r.ok, `下载原图失败：${r.status}`)
-          writeFileSync(file, Buffer.from(await r.arrayBuffer()))
-        }
-        const dir = path.join(cacheDir, `${sid}.tiles`)
-        let hit = true
-        if (!existsSync(path.join(dir, 'info.json'))) {
-          hit = false
-          await promisify(execFile)(TILES_BENCH, ['run', file, '--out', dir], { maxBuffer: 1 << 20 })
-        }
-        return { dir, info: JSON.parse(readFileSync(path.join(dir, 'info.json'), 'utf8')), hit }
-      })()
-      tiling.set(sid, p)
-      p.catch(() => tiling.delete(sid))
-    }
-    return p
-  }
-
-  const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'x-doclite-cache, x-doclite-error' }
   const json = (status, body, extra = {}) => ({
     status,
     contentType: 'application/json; charset=utf-8',
-    headers: { ...cors, 'Cache-Control': 'no-store', ...extra },
+    headers: { 'Cache-Control': 'no-store', ...extra },
     body: JSON.stringify(body),
   })
 
-  async function answer(url) {
-    const u = new URL(url)
-    const p = decodeURIComponent(u.pathname.slice(1))
-    const [kind, fid, sid, ...rest] = p.split('/')
-    const src = sources.get(sid)
-    if (!src || src.fid !== fid) {
-      return kind === 'dzi'
-        ? json(404, { code: 'not_found', message: '不在来源记录里' }, { 'X-Doclite-Error': 'not_found' })
-        : { status: 404, contentType: 'text/plain; charset=utf-8', body: 'not found' }
-    }
-    if (kind === 'cover') {
-      const r = await fetch(src.cover_url)
-      return { status: r.status, contentType: 'image/jpeg', headers: { 'Cache-Control': 'no-store', 'X-Doclite-Cache': 'hit' }, body: Buffer.from(await r.arrayBuffer()) }
-    }
+  async function handle(req) {
+    const u = new URL(req.url())
+    const [kind, fid, sid, level, name] = u.pathname.slice('/shell/img/'.length).split('/')
     if (kind === 'dzi') {
       stats.dzi.set(sid, (stats.dzi.get(sid) ?? 0) + 1)
-      const f = fail.get(fid)
-      if (f) {
-        if (dziDelayMs) await sleep(dziDelayMs)
-        return json(422, { code: f.code, message: f.message }, { 'X-Doclite-Error': f.code })
-      }
-      const { info, hit } = await tilesFor(sid)
       if (dziDelayMs) await sleep(dziDelayMs)
-      const d = {
-        Image: {
-          xmlns: 'http://schemas.microsoft.com/deepzoom/2008',
-          Url: `http://img.localhost/tile/${fid}/${sid}/`,
-          Format: info.format,
-          Overlap: String(info.overlap),
-          TileSize: String(info.tile_size),
-          Size: { Width: String(info.width), Height: String(info.height) },
-        },
-        width: info.width,
-        height: info.height,
-        tile_size: info.tile_size,
-        overlap: info.overlap,
-        levels: info.max_level + 1,
-        max_level: info.max_level,
-        format: info.format,
-        mode: info.mode,
-        tile_count: info.tile_count,
-        tiles_bytes: info.tiles_bytes,
-        streamed: info.streamed,
-        elapsed_ms: info.elapsed_ms,
-        hit,
-      }
-      stats.descriptors.set(sid, d)
-      return json(200, d, { 'X-Doclite-Cache': hit ? 'hit' : 'miss' })
-    }
-    if (kind === 'tile') {
-      const { dir, info } = await tilesFor(sid)
-      const [level, name] = rest
+      const f = fail.get(fid)
+      if (f) return req.respond(json(422, { code: f.code, message: f.message }, { 'X-Doclite-Error': f.code }))
+    } else if (kind === 'tile') {
       const set = stats.tiles.get(sid) ?? new Set()
       stats.tiles.set(sid, set)
       set.add(`${level}/${name}`)
@@ -631,35 +517,30 @@ export async function installShellMock(page, { cacheDir, fail = new Map(), dziDe
       stats.tileAttempts.set(key, (stats.tileAttempts.get(key) ?? 0) + 1)
       const failStatus = stats.tileFail?.(sid, Number(level), name) ?? 0
       if (failStatus) {
-        return {
+        return req.respond({
           status: failStatus,
-          contentType: 'text/plain; charset=utf-8',
-          headers: { ...cors, 'Cache-Control': 'no-store', 'X-Doclite-Error': 'unavailable' },
-          body: '本机图片缓存暂时不可用（截图模拟）',
-        }
-      }
-      const file = path.join(dir, level, name)
-      if (!existsSync(file)) return { status: 404, contentType: 'text/plain', headers: { 'X-Doclite-Error': 'not_found' }, body: 'no tile' }
-      return {
-        status: 200,
-        contentType: info.format === 'png' ? 'image/png' : 'image/jpeg',
-        headers: { ...cors, 'Cache-Control': 'no-store', 'X-Doclite-Cache': 'hit' },
-        body: readFileSync(file),
+          contentType: 'application/json; charset=utf-8',
+          headers: { 'Cache-Control': 'no-store', 'X-Doclite-Error': 'unavailable' },
+          body: JSON.stringify({ code: 'unavailable', message: '本机图片缓存暂时不可用（截图模拟）' }),
+        })
       }
     }
-    return { status: 404, contentType: 'text/plain', body: 'unknown' }
+    return req.continue()
   }
 
   page.on('request', (req) => {
-    const url = req.url()
-    if (!url.startsWith('http://img.localhost/')) {
+    let u
+    try {
+      u = new URL(req.url())
+    } catch {
       req.continue().catch(() => {})
       return
     }
-    answer(url)
-      .then((r) => req.respond(r))
-      .catch((e) => req.respond({ status: 500, contentType: 'text/plain', body: String(e?.message ?? e) }).catch(() => {}))
-      .catch(() => {})
+    if (!u.pathname.startsWith('/shell/img/')) {
+      req.continue().catch(() => {})
+      return
+    }
+    handle(req).catch(() => req.continue().catch(() => {}))
   })
   return stats
 }

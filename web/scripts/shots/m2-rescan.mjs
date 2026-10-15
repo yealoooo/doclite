@@ -1,9 +1,10 @@
 // M2-7 的截图清单和断言：待重扫列表（/scan 侧栏）和上传重扫件（/scan、/files 的 RescanDialog）。
 //
 //   INIT_ADMIN_PASSWORD=admin123456 \
-//     npm run screenshots -- --spec scripts/shots/m2-rescan.mjs --base http://localhost:<preview 端口>
+//     npm run screenshots -- --spec scripts/shots/m2-rescan.mjs --base <devshell 的地址>
 //
-// 前端地址是 vite preview（/api 代理到 server）或托管了 web/dist 的 server。要先有：
+// 前端地址是 devshell（client/cmd/devshell：/api 转给 server，壳模式那张要它的取图地址），浏览器的几张也可以用
+// vite preview 或托管了 web/dist 的 server。要先有：
 // - DEMO-A 下的演示文件夹「M2-7 重扫演示」（盒 003 6 页、盒 001 4 页，seed:files 建的；分给 demo_reviewer，驳回了 5 页），
 //   见 roadmap M2-7 的须知。每张截图在它下面建一个「截图验证 M2-7 … <时间>」临时文件夹、用接口上传几页，分给
 //   demo_reviewer 并驳回几页，做完在 after 里删掉（软删除；前面失败了也删），所以可以反复跑，不动演示文件夹里原有的页；
@@ -13,8 +14,8 @@
 // - m2-rescan-list-browser：浏览器里打开 /scan，右侧待重扫列表：角标等于接口的 total；临时文件夹的 2 页在列表里，带
 //   原件位置、审核人、驳回原因（中文）和说明，封面都显示出来；提示"重扫件不要扫进热文件夹"。页面之外再驳回一页、重扫
 //   一页，3 秒内列表和角标跟着变（SSE）。
-// - m2-rescan-shell-done（另存 m2-rescan-list-shell.png）：壳模式（注入 Tauri IPC 的模拟，img 协议的封面经请求拦截
-//   转给预签名 URL）：/scan 左边是热文件夹和上传队列，右边是同样的待重扫列表。点一页的"上传重扫件"→"选择重扫件…"，
+// - m2-rescan-shell-done（另存 m2-rescan-list-shell.png）：壳模式（壳模式的地址 + Wails 桥的模拟，scripts/lib/wails-mock.mjs；
+//   封面经 devshell 的取图地址，即客户端的本机缓存代码）：/scan 左边是热文件夹和上传队列，右边是同样的待重扫列表。点一页的"上传重扫件"→"选择重扫件…"，
 //   页面调 `pick_and_rescan {fileId}`（模拟的命令像壳一样带 sha 和封面发 multipart 到真实 server，返回壳的结果），
 //   对话框写"已重扫：现在是 v2，待审核（第 2 轮）""自动分给 演示审核员"，列表里这一页消失；接口核对 v2 快照、封面、
 //   自动再分配和 rescan 日志。
@@ -39,8 +40,10 @@
 //   「M2-7 重扫演示/盒 003/IMG_0002.png」，接口核对 v2 快照、封面、自动再分配和 rescan 日志（给端到端核对用）。
 
 import { createHash } from 'node:crypto'
+import { mkdirSync } from 'node:fs'
 
 import { makeScanPage } from '../lib/scan-pages.mjs'
+import { installWailsMock, useShellSession } from '../lib/wails-mock.mjs'
 
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
 const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
@@ -51,7 +54,13 @@ const SCANNER = 'demo_scanner'
 const MANAGER = 'demo_manager'
 const REV = 'demo_reviewer'
 const IDLE = 'networkidle2'
-const OUT = '../docs/screenshots/m2'
+// 另存的截图放在 --out（和清单的截图同一个目录；默认 docs/screenshots/m2）。
+const OUT = (() => {
+  const i = process.argv.indexOf('--out')
+  const dir = i > 0 ? process.argv[i + 1] : '../docs/screenshots/m2'
+  mkdirSync(dir, { recursive: true })
+  return dir
+})()
 const TEMP_REMARK = '3 号库 A 架 14 层（M2-7 截图脚本临时建的，做完会删掉）'
 const SERVER = 'http://127.0.0.1:9080'
 
@@ -356,16 +365,18 @@ async function waitNoToast(page) {
   await page.waitForFunction(() => document.querySelectorAll('[data-sonner-toast]').length === 0, { timeout: 8000 }).catch(() => {})
 }
 
-// ---------- 壳模式：注入 Tauri IPC 的模拟 ----------
+// ---------- 壳模式：Wails 桥的模拟 ----------
 
 /** 页面里的模拟（会被序列化，不能引用外部变量）。 */
-function installTauriMock(scenario) {
-  const version = '0.1.0'
+function rescanShellMock(scenario) {
   const GB = 1024 ** 3
-  const state = { calls: [] }
-  const listeners = new Map()
-  let nextId = 1
-  let nextEventId = 1
+  const shell = window.__shell
+  // 页面调过的壳命令（不含 api_fetch）。
+  const state = {
+    get calls() {
+      return shell.calls.filter((c) => c.cmd !== 'api_fetch')
+    },
+  }
   const b64 = (s) => {
     const bin = atob(s)
     const bytes = new Uint8Array(bin.length)
@@ -373,147 +384,58 @@ function installTauriMock(scenario) {
     return bytes
   }
   window.__mock = { state }
-  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
-    unregisterListener(event, id) {
-      listeners.get(event)?.delete(id)
-    },
-  }
-  window.__TAURI_INTERNALS__ = {
-    transformCallback(callback) {
-      const id = nextId++
-      window[`_${id}`] = callback
-      return id
-    },
-    unregisterCallback(id) {
-      delete window[`_${id}`]
-    },
-    convertFileSrc(path, protocol = 'asset') {
-      return `http://${protocol}.localhost/${encodeURIComponent(path)}`
-    },
-    async invoke(cmd, args) {
-      if (!cmd.startsWith('plugin:event') && cmd !== 'api_fetch') state.calls.push({ cmd, args })
-      switch (cmd) {
-        case 'plugin:event|listen': {
-          const id = nextEventId++
-          if (!listeners.has(args.event)) listeners.set(args.event, new Map())
-          listeners.get(args.event).set(id, args.handler)
-          return id
-        }
-        case 'plugin:event|unlisten':
-          listeners.get(args.event)?.delete(args.eventId)
-          return null
-        case 'shell_info':
-          return { version, server_url: scenario.serverUrl, data_dir: 'C:\\Users\\scan01\\AppData\\Local\\Doclite', platform: 'windows', smoke: false }
-        case 'check_server':
-          return {
-            server_url: scenario.serverUrl,
-            reachable: true,
-            error: null,
-            server_version: version,
-            min_version: null,
-            latest_version: null,
-            download_url: null,
-            client_version: version,
-            upgrade_required: false,
-          }
-        case 'api_fetch': {
-          const req = args.req
-          const qs = new URLSearchParams(req.query).toString()
-          const res = await fetch(qs ? `${req.path}?${qs}` : req.path, { method: req.method, headers: req.headers, body: req.body })
-          return { status: res.status, headers: {}, body: await res.text() }
-        }
-        case 'api_stream':
-          return 1
-        case 'api_stream_cancel':
-          return null
-        case 'cache_stats':
-          return {
-            dir: 'C:\\Users\\scan01\\AppData\\Local\\Doclite\\image-cache',
-            available: true,
-            error: null,
-            total_bytes: Math.round(1.3 * GB),
-            file_count: 15230,
-            limit_bytes: 2 * GB,
-            projects: [],
-            counters: { hits: 0, misses: 0, downloads: 0, download_bytes: 0, rejected: 0, errors: 0 },
-          }
-        case 'upload_status':
-          return scenario.status
-        case 'upload_recent':
-          return scenario.items
-        case 'hotfolder_status':
-          return scenario.hotfolder
-        case 'pick_and_rescan': {
-          // 像壳一样：（系统对话框选好了 scenario.pick）→ 带 sha 和封面，按 file_name、content_sha256、cover、file 的顺序
-          // 发 multipart 到重扫接口（这里经 preview 的 /api 代理到真实 server），同步返回壳的结果。
-          const pick = scenario.pick
-          if (!pick) return { cancelled: true, local_name: null, size: null, sha256: null, cover: null, attempts: 0, result: null, error: null, elapsed_ms: 0 }
-          const started = performance.now()
-          // 像壳一样发 rescan:progress（核对文件 → 生成封面 → 上传 0、一半……传完）。
-          const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-          const progress = (phase, sent) => {
-            for (const [id, cb] of listeners.get('rescan:progress') ?? []) {
-              window[`_${cb}`]?.({ event: 'rescan:progress', id, payload: { file_id: args.fileId, phase, sent, size: pick.size } })
-            }
-          }
-          progress('hashing', 0)
-          await sleep(200)
-          progress('cover', 0)
-          await sleep(200)
-          progress('uploading', 0)
-          await sleep(100)
-          progress('uploading', Math.floor(pick.size / 2))
-          await sleep(scenario.uploadHold ?? 1200)
-          const form = new FormData()
-          form.append('file_name', pick.name)
-          form.append('content_sha256', pick.sha256)
-          form.append('cover', new Blob([b64(pick.cover)], { type: 'image/jpeg' }), 'cover.jpg')
-          form.append('file', new Blob([b64(pick.png)], { type: 'application/octet-stream' }), 'file')
-          const res = await fetch(`/api/files/${args.fileId}/rescan`, { method: 'POST', body: form })
-          const body = await res.json()
-          progress('uploading', pick.size)
-          const ok = res.status === 201
-          return {
-            cancelled: false,
-            local_name: pick.name,
-            size: pick.size,
-            sha256: pick.sha256,
-            cover: { status: 'included', reason: null, ms: 38 },
-            attempts: 1,
-            result: ok ? body : null,
-            error: ok ? null : { status: res.status, code: body.code, message: body.message, details: body.details ?? null },
-            elapsed_ms: Math.round(performance.now() - started),
-          }
-        }
-        default:
-          throw { kind: 'internal', message: `截图模拟里没有命令 ${cmd}` }
+  Object.assign(shell.commands, {
+    cache_stats: () => ({
+      dir: 'C:\\Users\\scan01\\AppData\\Local\\Doclite\\image-cache',
+      available: true,
+      error: null,
+      total_bytes: Math.round(1.3 * GB),
+      file_count: 15230,
+      limit_bytes: 2 * GB,
+      projects: [],
+      counters: { hits: 0, misses: 0, downloads: 0, download_bytes: 0, rejected: 0, errors: 0 },
+    }),
+    upload_status: () => scenario.status,
+    upload_recent: () => scenario.items,
+    hotfolder_status: () => scenario.hotfolder,
+    async pick_and_rescan(args) {
+      // 像壳一样：（系统对话框选好了 scenario.pick）→ 带 sha 和封面，按 file_name、content_sha256、cover、file 的顺序
+      // 发 multipart 到重扫接口（这里经 devshell 的 /api 到真实 server），同步返回壳的结果。
+      const pick = scenario.pick
+      if (!pick) return { cancelled: true, local_name: null, size: null, sha256: null, cover: null, attempts: 0, result: null, error: null, elapsed_ms: 0 }
+      const started = performance.now()
+      // 像壳一样发 rescan:progress（核对文件 → 生成封面 → 上传 0、一半……传完）。
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+      const progress = (phase, sent) => shell.emit('rescan:progress', { file_id: args.fileId, phase, sent, size: pick.size })
+      progress('hashing', 0)
+      await sleep(200)
+      progress('cover', 0)
+      await sleep(200)
+      progress('uploading', 0)
+      await sleep(100)
+      progress('uploading', Math.floor(pick.size / 2))
+      await sleep(scenario.uploadHold ?? 1200)
+      const form = new FormData()
+      form.append('file_name', pick.name)
+      form.append('content_sha256', pick.sha256)
+      form.append('cover', new Blob([b64(pick.cover)], { type: 'image/jpeg' }), 'cover.jpg')
+      form.append('file', new Blob([b64(pick.png)], { type: 'application/octet-stream' }), 'file')
+      const res = await fetch(`/api/files/${args.fileId}/rescan`, { method: 'POST', body: form })
+      const body = await res.json()
+      progress('uploading', pick.size)
+      const ok = res.status === 201
+      return {
+        cancelled: false,
+        local_name: pick.name,
+        size: pick.size,
+        sha256: pick.sha256,
+        cover: { status: 'included', reason: null, ms: 38 },
+        attempts: 1,
+        result: ok ? body : null,
+        error: ok ? null : { status: res.status, code: body.code, message: body.message, details: body.details ?? null },
+        elapsed_ms: Math.round(performance.now() - started),
       }
     },
-  }
-}
-
-/** 壳里的封面走 img 协议（`http://img.localhost/cover%2F<fid>%2F<sid>`）：拦下来，按 batch 的预签名 URL 取回封面。 */
-async function serveImgProtocol(page, ctx) {
-  await page.setRequestInterception(true)
-  page.on('request', async (req) => {
-    const url = req.url()
-    if (!url.startsWith('http://img.localhost/')) {
-      void req.continue()
-      return
-    }
-    try {
-      const [kind, fileId] = decodeURIComponent(new URL(url).pathname.slice(1)).split('/')
-      const batch = await ctx.scanner('POST', '/api/files/batch', { file_ids: [fileId] })
-      const src = kind === 'cover' ? batch.items[0]?.cover_url : batch.items[0]?.original_url
-      if (!src) {
-        await req.respond({ status: 404, body: '' })
-        return
-      }
-      const res = await fetch(src)
-      await req.respond({ status: 200, contentType: res.headers.get('content-type') ?? 'image/jpeg', body: Buffer.from(await res.arrayBuffer()) })
-    } catch {
-      await req.respond({ status: 502, body: '' }).catch(() => {})
-    }
   })
 }
 
@@ -579,14 +501,13 @@ const shots = [
   {
     name: 'm2-rescan-shell-done',
     path: '/scan',
+    shell: true,
     waitUntil: IDLE,
     async init(page) {
       const ctx = await context()
       shellTemp = await makeTemp(ctx, '壳', 3, [2, 3])
       const pick = pageBytes(shellTemp.seed, 102)
-      const [name, value] = ctx.scanner.cookie().split('=')
-      await page.setCookie({ name, value, url: BASE })
-      await serveImgProtocol(page, ctx)
+      await useShellSession(page, BASE, ctx.scanner.cookie())
       const MB = 1024 * 1024
       const now = Date.now()
       const item = (id, file_name, over = {}) => ({
@@ -618,7 +539,7 @@ const shots = [
         finished_at: null,
         ...over,
       })
-      await page.evaluateOnNewDocument(installTauriMock, {
+      await installWailsMock(page, { serverUrl: SERVER }, rescanShellMock, {
         serverUrl: SERVER,
         status: {
           server_url: SERVER,
@@ -656,7 +577,7 @@ const shots = [
       const target = shellTemp.files[1]
       assert(items.some((i) => i.file_id === target.file_id && i.cover === 'loaded'), '壳模式的列表里要有临时文件夹的页，封面经 img 协议显示')
       await page.screenshot({ path: `${OUT}/m2-rescan-list-shell.png` })
-      console.log(`  ✓ 壳模式：左边热文件夹和上传队列，右边待重扫 ${api.total} 项（封面走 img 协议）`)
+      console.log(`  ✓ 壳模式：左边热文件夹和上传队列，右边待重扫 ${api.total} 项（封面走壳的取图地址）`)
 
       await page.click(`[data-testid=rescan-item][data-file-id="${target.file_id}"] [data-testid=rescan-item-upload]`)
       await page.waitForSelector(`[data-testid=rescan-dialog][data-file-id="${target.file_id}"]`, { timeout: 5000 })

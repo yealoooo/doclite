@@ -4,11 +4,11 @@
 // 改名、复制文件，移动文件夹，删除含已归类文件的文件夹被拒）前后用 SQL 对比挂接和档号；最后还原 3 个文件的全过程。
 //
 //   INIT_ADMIN_PASSWORD=admin123456 SHOTS_TMP=<临时目录> \
-//   M3_ACCEPT_SHELL=<打包的壳>/Doclite.app/Contents/MacOS/doclite-shell \
+//   M3_ACCEPT_SHELL=<打包的壳>/Doclite.app/Contents/MacOS/Doclite \
 //     npm run screenshots -- --spec scripts/shots/m3-accept.mjs --base http://127.0.0.1:<server 端口> [--out <目录>]
 //
 // --base 直接指向托管了 web/dist 的 server。壳的几步（M3_ACCEPT_SHELL）用打包的 release 壳跑 `--smoke` 的 rescan 一步：
-// 数据目录用 SHOTS_TMP 下的隔离 HOME，不碰 ~/Library/Application Support/Doclite；服务器地址是 M3_ACCEPT_SERVER（默认同
+// 数据目录用 SHOTS_TMP 下的隔离目录（DOCLITE_DATA_DIR，另设隔离的 HOME），不碰 ~/Library/Application Support/Doclite；服务器地址是 M3_ACCEPT_SERVER（默认同
 // --base 的 origin，必须是 server 本身）。tiles、viewer 两步有意让它们立即失败（viewer 要求窗口看得见，锁屏时会卡住整个
 // 自检，见 runShell），其余各步都要通过。
 // 没给 M3_ACCEPT_SHELL 时，壳的重扫改用接口模拟（带 content_sha256，同壳的字段）。审计没有读接口，核对审计和"整理前后的
@@ -606,12 +606,16 @@ async function runShell(label, env) {
     env: {
       ...process.env,
       HOME: home,
+      DOCLITE_DATA_DIR: path.join(home, 'Doclite'),
+      // 后台模式：不激活、不进 Dock，不抢用户的焦点。
+      DOCLITE_BACKGROUND: '1',
       DOCLITE_SMOKE_SERVER: process.env.M3_ACCEPT_SERVER ?? state.origin,
       DOCLITE_SMOKE_USERNAME: SCANNER,
       DOCLITE_SMOKE_PASSWORD: demoPassword,
       DOCLITE_SMOKE_TIMEOUT_SECS: '300',
       DOCLITE_SMOKE_IMG_PROJECT: PROJECT,
-      DOCLITE_SMOKE_IMG_FOLDER: 'M1-11 缓存冒烟',
+      // 上一版的「M1-11 缓存冒烟」Go 版的库里没有，取图缓存一步用 M2-3 的样本。
+      DOCLITE_SMOKE_IMG_FOLDER: 'M2-3 分块冒烟',
       // tiles、viewer 两步这里不需要（M2-8 验过）：viewer 要求窗口看得见，窗口被挡住或锁屏时 WebKit 停掉页面的定时器，
       // 整个自检卡到超时。--smoke 没有跳过某一步的开关，所以给一个没有 TIFF 的文件夹，让 tiles 立即失败、viewer 没有
       // 目标也立即失败（两步都只记下来、不中断），后面的 ui、scan_page、rescan 照常跑。

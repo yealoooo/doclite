@@ -3,12 +3,14 @@
 // 分配——再用接口还原 3 个文件的全过程，最后在浏览器和壳里各打开 G4 TIFF 和 200 MB TIFF，记下耗时和内存。
 //
 //   INIT_ADMIN_PASSWORD=admin123456 SHOTS_TMP=<临时目录> \
-//   M2_ACCEPT_SHELL=<打包的壳>/Doclite.app/Contents/MacOS/doclite-shell \
-//     npm run screenshots -- --spec scripts/shots/m2-accept.mjs --base http://127.0.0.1:<server 端口> [--out <目录>]
+//   M2_ACCEPT_SHELL=<打包的壳>/Doclite.app/Contents/MacOS/Doclite M2_ACCEPT_SERVER=http://127.0.0.1:<server 端口> \
+//   M2_ACCEPT_SHELL_MOCK=1 \
+//     npm run screenshots -- --spec scripts/shots/m2-accept.mjs --base http://127.0.0.1:<devshell 端口> [--out <目录>]
 //
-// --base 直接指向托管了 web/dist 的 server（也可以是 vite preview）。壳的几步（M2_ACCEPT_SHELL）用打包的壳跑 `--smoke`：
-// 数据目录用 SHOTS_TMP 下的隔离 HOME，不碰 ~/Library/Application Support/Doclite；服务器地址是 M2_ACCEPT_SERVER（默认
-// 同 --base 的 origin，必须是 server 本身）。没给 M2_ACCEPT_SHELL 时，壳的重扫改用接口模拟（带 content_sha256，同壳的
+// --base 指向 devshell（client/cmd/devshell，壳模式的两步要用；不跑壳模式时也可以是托管了 web/dist 的 server）。
+// 壳的几步（M2_ACCEPT_SHELL）用打包的壳跑 `--smoke`：数据目录用 SHOTS_TMP 下的隔离目录（DOCLITE_DATA_DIR，另设隔离的
+// HOME），不碰 ~/Library/Application Support/Doclite，后台模式不抢焦点；服务器地址是 M2_ACCEPT_SERVER（默认同 --base
+// 的 origin；--base 是 devshell 时要另给 server 本身的地址）。没给 M2_ACCEPT_SHELL 时，壳的重扫改用接口模拟（带 content_sha256，同壳的
 // 字段），壳的大图一步跳过。壳的 viewer 一步要求窗口看得见：被别的窗口挡住时这一步失败，记下来，不算这张截图失败。
 //
 // 演示数据（只能走一遍；再跑要换一个新的文件夹）：DEMO-A 下「M2 验收演示 <日期>」（M2_ACCEPT_FOLDER 指定名字，默认取
@@ -28,7 +30,7 @@
 //  2. m2-accept-reassign：在盒 03 全选 20 页，批量改派给 demo_reviewer2；接口核对旧行 cancelled、新行 open、reassign_review。
 //  3. m2-accept-review-browser：demo_reviewer 在浏览器的 /review 只用键盘审完 80 页（A 通过，R → 数字勾原因 → Tab 写
 //     说明 → Enter 驳回），驳回 4 页；接口核对每个文件的结论、原因、说明、所审快照和日志。
-//  4. m2-accept-review-shell：demo_reviewer2 在壳模式（Tauri IPC 和 img 协议模拟，分块由 tiles-bench 现场切）只用键盘审完
+//  4. m2-accept-review-shell：demo_reviewer2 在壳模式（Wails 桥的模拟，分块由 devshell 用客户端的 Go 代码现场切）只用键盘审完
 //     20 页，驳回 3 页；断言用的是分块、给下一张调了 prepare_tiles。打包的壳里的键盘操作没法自动化，写在给用户的演示步骤里。
 //  5. m2-accept-rescan-browser：demo_scanner 在浏览器的 /scan 待重扫列表里重扫 3 页（2 页回到 demo_reviewer、1 页回到
 //     demo_reviewer2）；接口核对 v2 快照、封面、自动再分配（assigned_by 沿用驳回那一行）和 rescan 日志。
@@ -59,10 +61,12 @@ import path from 'node:path'
 import { makeScanPage } from '../lib/scan-pages.mjs'
 import {
   apiClient,
+  apiOrigin,
   assert,
   installShellMock,
   login as loginPage,
   openFolder,
+  pageOrigin,
   openViewer,
   sampleMemory,
   settle,
@@ -87,8 +91,8 @@ const outArg = process.argv.indexOf('--out')
 const OUT_DIR = path.resolve(outArg > 0 ? process.argv[outArg + 1] : OUT)
 const SHELL = process.env.M2_ACCEPT_SHELL ?? ''
 /**
- * 壳模式的两步（m2-accept-review-shell、m2-accept-round2-shell）注入的是 Tauri IPC 的模拟；M6-1 起页面按 wails: 协议判断
- * 是不是在壳里，这个模拟不再起作用（M6-4 换成 Wails 的写法）。M2_ACCEPT_SHELL_MOCK=1 才按原样跑；默认（M5-3）这两步改在
+ * 壳模式的两步（m2-accept-review-shell、m2-accept-round2-shell）：M2_ACCEPT_SHELL_MOCK=1 时以壳模式的地址打开、注入 Wails
+ * 桥的模拟（scripts/lib/wails-mock.mjs，--base 要指向 devshell），核对分块和 prepare_tiles；不设时（M5-3 的做法）这两步改在
  * 浏览器里由同一个人做同样的键盘审核和接口核对，只是不核对分块和 prepare_tiles，后面的步骤照常接着做。
  */
 const SHELL_MOCK = process.env.M2_ACCEPT_SHELL_MOCK === '1'
@@ -137,7 +141,7 @@ const state = { timings: {}, shellRuns: [], rescanned: {} }
 /** 登录几个账号，找到 DEMO-A、演示文件夹（4 个盒）、全部文件和用户 id（只做一次）。 */
 function context(page) {
   ctxPromise ??= (async () => {
-    const origin = new URL(page.url()).origin
+    const origin = apiOrigin(page)
     const adminApi = await as(origin, admin, adminPassword)
     const projects = await adminApi('GET', '/api/projects')
     const project = projects.find((p) => p.project_code === PROJECT)
@@ -308,8 +312,8 @@ async function confirmAlert(page) {
 // /review-assign
 
 async function openAssign(page, folderId) {
-  const ctx = await context(page)
-  await page.goto(`${ctx.origin}/review-assign?folder=${folderId}`, { waitUntil: IDLE })
+  await context(page)
+  await page.goto(`${pageOrigin(page)}/review-assign?folder=${folderId}`, { waitUntil: IDLE })
   await page.waitForSelector('[data-testid=review-assign-page][data-list=ready][data-stream=open]', { timeout: 15000 })
   await page.waitForSelector('[data-testid=reviewer-row]', { timeout: 10000 })
   await waitCovers(page)
@@ -351,8 +355,9 @@ async function panelLogs(page, fileId, minCount, firstAction) {
 // /review
 
 async function openReview(page, folderId, { tab } = {}) {
-  const ctx = await context(page)
-  await page.goto(`${ctx.origin}/review?folder=${folderId}`, { waitUntil: IDLE })
+  await context(page)
+  // 用页面现在的地址（壳模式那两步是 wails.localhost，跳到别的地址就离开了壳模式）。
+  await page.goto(`${pageOrigin(page)}/review?folder=${folderId}`, { waitUntil: IDLE })
   await page.waitForSelector('[data-testid=review-page][data-list=ready][data-stream=open]', { timeout: 15000 })
   if (tab) {
     await page.click(`[data-testid=review-tab][data-state=${tab}]`)
@@ -595,12 +600,16 @@ async function runShell(label, env) {
     env: {
       ...process.env,
       HOME: home,
+      DOCLITE_DATA_DIR: path.join(home, 'Doclite'),
+      // 后台模式：不激活、不进 Dock，不抢用户的焦点。
+      DOCLITE_BACKGROUND: '1',
       DOCLITE_SMOKE_SERVER: process.env.M2_ACCEPT_SERVER ?? state.origin,
       DOCLITE_SMOKE_USERNAME: SCANNER,
       DOCLITE_SMOKE_PASSWORD: demoPassword,
       DOCLITE_SMOKE_TIMEOUT_SECS: '300',
       DOCLITE_SMOKE_IMG_PROJECT: PROJECT,
-      DOCLITE_SMOKE_IMG_FOLDER: 'M1-11 缓存冒烟',
+      // 上一版的「M1-11 缓存冒烟」Go 版的库里没有，用 M2-3 的样本（2 个文件）。
+      DOCLITE_SMOKE_IMG_FOLDER: 'M2-3 分块冒烟',
       DOCLITE_SMOKE_TILES_FOLDER: 'M2-3 分块冒烟',
       ...env,
     },
@@ -643,7 +652,7 @@ function step(run, name) {
   return run.steps.find((s) => s.name === name)
 }
 
-// ---------- 壳模式（IPC 和 img 协议模拟，同 m2-review.mjs 的 shellShot） ----------
+// ---------- 壳模式（Wails 桥的模拟，同 m2-review.mjs 的 shellShot） ----------
 
 function shellModeShot(name, user, run) {
   if (!SHELL_MOCK) {
@@ -662,59 +671,19 @@ function shellModeShot(name, user, run) {
   return {
     name,
     path: '/login',
+    shell: true,
     waitFor: '#username',
     async init(page) {
-      await installShellMock(page, { cacheDir: shotsTmp('m2-accept-shell-mock') })
-      // 在 M2-4 的模拟之上：记下 prepare_tiles 的调用；api_stream（实时事件）转给同源的 /api，逐块经 Channel 推给页面。
+      await installShellMock(page)
+      // prepare_tiles 照常交给 devshell（真的提前切块），这里只把调用的参数列出来。
       await page.evaluateOnNewDocument(() => {
-        const t = window.__TAURI_INTERNALS__
-        const invoke = t.invoke.bind(t)
-        window.__prepareCalls = []
-        const streams = new Map()
-        let nextStream = 1
-        t.invoke = async (cmd, args) => {
-          if (cmd === 'prepare_tiles') window.__prepareCalls.push(args)
-          if (cmd === 'api_stream') {
-            const id = nextStream++
-            const ctrl = new AbortController()
-            streams.set(id, ctrl)
-            const send = (m) => {
-              if (!ctrl.signal.aborted) args.onEvent.onmessage(m)
-            }
-            const req = args.req
-            const qs = new URLSearchParams(req.query).toString()
-            void (async () => {
-              try {
-                const res = await fetch(qs ? `${req.path}?${qs}` : req.path, { headers: req.headers, signal: ctrl.signal })
-                send({ event: 'open', status: res.status, headers: {} })
-                const reader = res.body.getReader()
-                const dec = new TextDecoder()
-                for (;;) {
-                  const { done, value } = await reader.read()
-                  if (done) break
-                  send({ event: 'chunk', data: dec.decode(value, { stream: true }) })
-                }
-                send({ event: 'end' })
-              } catch (e) {
-                send({ event: 'error', kind: 'network', message: String(e) })
-              } finally {
-                streams.delete(id)
-              }
-            })()
-            return id
-          }
-          if (cmd === 'api_stream_cancel') {
-            streams.get(args.id)?.abort()
-            streams.delete(args.id)
-            return null
-          }
-          return invoke(cmd, args)
-        }
+        Object.defineProperty(window, '__prepareCalls', {
+          get: () => window.__shell.calls.filter((c) => c.cmd === 'prepare_tiles').map((c) => c.args),
+        })
       })
     },
     async prepare(page) {
-      const origin = new URL(page.url()).origin
-      await loginPage(page, origin, user, demoPassword)
+      await loginPage(page, pageOrigin(page), user, demoPassword)
       await page.waitForSelector('[data-testid=side-nav]')
       const ctx = await context(page)
       await run(page, ctx, { browser: false })
@@ -724,8 +693,8 @@ function shellModeShot(name, user, run) {
 }
 
 /**
- * 壳模式里打开审核台：模拟的来源记录是 Node 这边收到 batch、snapshots 响应后才记下的，页面一打开就要的封面、分块描述
- * 可能抢在前面（404）。先打开一次让模拟记下，再重新打开（同 m2-review.mjs 的 shellOpenTwice）。
+ * 壳模式里打开审核台（同 m2-review.mjs 的 shellOpenTwice）：上一版的模拟要先打开一次记下来源；devshell 和壳一样在转发
+ * 响应前就记好了，打开两次只是沿用原来的步骤。
  */
 async function shellOpenTwice(page, ctx, tab) {
   for (let i = 0; i < 2; i++) {

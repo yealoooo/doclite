@@ -1,16 +1,18 @@
 // M1-13 扫描上传页（/scan）的截图和断言：
 //
-//   INIT_ADMIN_PASSWORD=admin123456 npm run screenshots -- --spec scripts/shots/m1-scan.mjs --base http://localhost:<preview 端口>
+//   INIT_ADMIN_PASSWORD=admin123456 npm run screenshots -- --spec scripts/shots/m1-scan.mjs --base <devshell 的地址>
 //
-// 壳模式的几张和 m1-shell.mjs、m1-cache.mjs 一样，在页面脚本运行前注入 Tauri IPC 的模拟（window.__TAURI_INTERNALS__）：
-// - shell_info / check_server：已配置服务器、连得上（Windows 的数据目录）；api_fetch 转给 preview 的 /api 代理（真实 server）；
+// 壳模式的几张和 m1-shell.mjs、m1-cache.mjs 一样，以壳模式的地址打开、注入 Wails 桥的模拟（scripts/lib/wails-mock.mjs）：
+// - shell_info / check_server：已配置服务器、连得上（Windows 的数据目录）；api_fetch 转给 devshell 的 /api（真实 server）；
 // - 上传队列和热文件夹的命令（upload_status、upload_recent、upload_retry_failed、upload_resume、hotfolder_*）在页面里
-//   模拟一份队列；`plugin:event|listen` 记下页面订阅的事件，脚本用 `window.__mock.emit(事件, 数据)` 推事件（壳的
-//   upload:item、upload:progress、upload:state……）；
+//   模拟一份队列；脚本用 `window.__mock.emit(事件, 数据)` 推壳的事件（upload:item、upload:progress、upload:state……，
+//   即 Wails 的 _wails.dispatchWailsEvent）；
 // - cache_stats：头部的缓存摘要（1.3 GB / 2.0 GB）。
-// 登录：脚本在页面之外登录，把会话 Cookie 放进浏览器上下文，直接打开 /scan。
+// 登录：脚本在页面之外登录，把会话 Cookie 放进浏览器上下文（壳模式的地址），直接打开 /scan。
 // 账号：demo_scanner / demo123456（只能进 DEMO-A）；新建文件夹那张用 admin（INIT_ADMIN_USERNAME / INIT_ADMIN_PASSWORD），
-// 在 HOTFOLDER-TEST 项目里建一个临时文件夹，截图后删掉。目标文件夹用 DEMO-A 的 /2025 文书档案/盒 WS-2025-004（只读）。
+// 在 DEMO-B 里建一个临时文件夹（上一版用 M1-9 的 HOTFOLDER-TEST 项目，Go 版的库里没有），截图后删掉。
+// 目标文件夹用 DEMO-A 的 /2025 文书档案/盒 WS-2025-004（只读），备注要是"3 号库 A 架 14 层"（新库上先补：
+// npm run seed:files -- --user admin:<密码> --project DEMO-A --folder "2025 文书档案/盒 WS-2025-004" --count 0 --remark "3 号库 A 架 14 层"）。
 //
 // 截图：
 // - scan-shell-uploading：热文件夹运行中，上传中（进度 64%），含内容重复、低 DPI、无封面、失败的行；之后点失败行的
@@ -28,6 +30,8 @@
 //   进入运行状态；再换到 DEMO-A，已保存的目标仍显示它自己的项目名（不是当前项目）；
 // - scan-browser：浏览器里打开 /scan，说明热文件夹只能在客户端里用，引导到文件目录。
 
+import { installWailsMock, useShellSession } from '../lib/wails-mock.mjs'
+
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
 const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
 const scanner = 'demo_scanner'
@@ -41,6 +45,8 @@ const BASE = (() => {
 const SERVER = 'http://127.0.0.1:9080'
 const WATCH = 'D:\\Scan\\Out'
 const TARGET_PATH = ['2025 文书档案', '盒 WS-2025-004']
+/** 新建文件夹那张在哪个项目里建临时文件夹（要和 DEMO-A 不同，用来看换项目）。 */
+const NEW_FOLDER_PROJECT = 'DEMO-B'
 const IDLE = 'networkidle2'
 
 // ---------- 页面之外调接口 ----------
@@ -84,10 +90,9 @@ async function findFolder(cookie, rootId, names) {
   return api(cookie, 'GET', `/api/folders/${id}`)
 }
 
-/** 把会话 Cookie 放进浏览器上下文（页面经模拟的 api_fetch 用同源 fetch 访问 /api）。 */
+/** 把会话 Cookie 放进浏览器上下文（壳模式的地址；页面经模拟的 api_fetch 用同源 fetch 访问 /api）。 */
 async function useSession(page, cookie) {
-  const [name, ...rest] = cookie.split('=')
-  await page.setCookie({ name, value: rest.join('='), url: BASE })
+  await useShellSession(page, BASE, cookie)
 }
 
 let scannerCtx = null
@@ -221,24 +226,21 @@ function hotfolderStatus(target, running) {
 
 // ---------- 页面里的模拟（会被序列化，不能引用外部变量） ----------
 
-function installTauriMock(scenario) {
-  const version = '0.1.0'
+function scanMock(scenario) {
   const GB = 1024 ** 3
+  const shell = window.__shell
   const state = {
     status: scenario.status,
     hotfolder: scenario.hotfolder,
     items: scenario.items,
-    calls: [],
+    // 页面调过的壳命令（不含 api_fetch）。
+    get calls() {
+      return shell.calls.filter((c) => c.cmd !== 'api_fetch')
+    },
   }
-  const listeners = new Map()
-  let nextId = 1
-  let nextEventId = 1
 
   function emit(event, payload) {
-    for (const [eventId, cb] of listeners.get(event) ?? []) {
-      const fn = window[`_${cb}`]
-      if (fn) fn({ event, id: eventId, payload })
-    }
+    shell.emit(event, payload)
   }
 
   function emitState() {
@@ -275,146 +277,84 @@ function installTauriMock(scenario) {
   }
 
   window.__mock = { emit, state }
-  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
-    unregisterListener(event, id) {
-      listeners.get(event)?.delete(id)
-    },
-  }
-  window.__TAURI_INTERNALS__ = {
-    transformCallback(callback) {
-      const id = nextId++
-      window[`_${id}`] = callback
-      return id
-    },
-    unregisterCallback(id) {
-      delete window[`_${id}`]
-    },
-    convertFileSrc(path, protocol = 'asset') {
-      return `http://${protocol}.localhost/${encodeURIComponent(path)}`
-    },
-    async invoke(cmd, args) {
-      if (!cmd.startsWith('plugin:event') && cmd !== 'api_fetch') state.calls.push({ cmd, args })
-      switch (cmd) {
-        case 'plugin:event|listen': {
-          const id = nextEventId++
-          if (!listeners.has(args.event)) listeners.set(args.event, new Map())
-          listeners.get(args.event).set(id, args.handler)
-          return id
-        }
-        case 'plugin:event|unlisten':
-          listeners.get(args.event)?.delete(args.eventId)
-          return null
-        case 'shell_info':
-          return {
-            version,
-            server_url: scenario.serverUrl,
-            data_dir: 'C:\\Users\\scan01\\AppData\\Local\\Doclite',
-            platform: 'windows',
-            smoke: false,
-          }
-        case 'check_server':
-          return {
-            server_url: scenario.serverUrl,
-            reachable: true,
-            error: null,
-            server_version: version,
-            min_version: null,
-            latest_version: null,
-            download_url: null,
-            client_version: version,
-            upgrade_required: false,
-          }
-        case 'api_fetch': {
-          const req = args.req
-          const qs = new URLSearchParams(req.query).toString()
-          const res = await fetch(qs ? `${req.path}?${qs}` : req.path, {
-            method: req.method,
-            headers: req.headers,
-            body: req.body,
-          })
-          // 壳在登录成功后自动解除"需要重新登录"的暂停（commands.rs 的 api_fetch）。
-          if (req.method === 'POST' && req.path === '/api/auth/login' && res.ok && state.status.paused?.reason === 'auth_required') {
-            state.status = { ...state.status, paused: null }
-            setTimeout(emitState, 0)
-          }
-          return { status: res.status, headers: {}, body: await res.text() }
-        }
-        case 'api_stream':
-          return 1
-        case 'api_stream_cancel':
-          return null
-        case 'open_external':
-          return null
-        case 'cache_stats':
-          return {
-            dir: 'C:\\Users\\scan01\\AppData\\Local\\Doclite\\image-cache',
-            available: true,
-            error: null,
-            total_bytes: Math.round(1.3 * GB),
-            file_count: 15230,
-            limit_bytes: 2 * GB,
-            projects: [],
-            counters: { hits: 0, misses: 0, downloads: 0, download_bytes: 0, rejected: 0, errors: 0 },
-          }
-        case 'upload_status':
-          return slowly(cmd, state.status)
-        case 'upload_recent': {
-          const want = args.status
-          const list = state.items
-            .filter((i) => !want || want.includes(i.status))
-            .sort((a, b) => b.updated_at - a.updated_at)
-            .slice(0, args.limit ?? 100)
-          return slowly(cmd, list)
-        }
-        case 'upload_retry_failed': {
-          const ids = args.ids
-          let n = 0
-          for (const i of state.items) {
-            if (i.status !== 'failed' || (ids && !ids.includes(i.id))) continue
-            Object.assign(i, { status: 'waiting', error_code: null, error_message: null, updated_at: Date.now() })
-            n++
-            setTimeout(() => emit('upload:item', { ...i }), 50)
-          }
-          const s = state.status.stats
-          state.status = { ...state.status, stats: { ...s, failed: s.failed - n, waiting: s.waiting + n } }
-          setTimeout(emitState, 60)
-          return n
-        }
-        case 'upload_resume':
-          state.status = { ...state.status, paused: null }
-          setTimeout(emitState, 0)
-          return slowly(cmd, state.status)
-        case 'hotfolder_status':
-          return slowly(cmd, state.hotfolder)
-        case 'hotfolder_pick_dir':
-          return 'D:\\Scan\\Out'
-        case 'hotfolder_set':
-          state.hotfolder = {
-            ...state.hotfolder,
-            config: {
-              watch_dir: args.watchDir,
-              target_folder_id: args.targetFolderId,
-              server_url: scenario.serverUrl,
-              scan_interval_secs: 15,
-              running: state.hotfolder.running,
-            },
-          }
-          setTimeout(() => emit('hotfolder:state', state.hotfolder), 0)
-          return state.hotfolder
-        case 'hotfolder_start':
-          state.hotfolder = { ...state.hotfolder, running: true, watching: true, last_scan_at: Date.now(), scans: 1, config: { ...state.hotfolder.config, running: true } }
-          state.status = { ...state.status, paused_sources: [] }
-          setTimeout(() => emit('hotfolder:state', state.hotfolder), 0)
-          return state.hotfolder
-        case 'hotfolder_pause':
-          state.hotfolder = { ...state.hotfolder, running: false, watching: false, config: { ...state.hotfolder.config, running: false } }
-          setTimeout(() => emit('hotfolder:state', state.hotfolder), 0)
-          return slowly(cmd, state.hotfolder)
-        default:
-          throw { kind: 'internal', message: `截图模拟里没有命令 ${cmd}` }
+  const apiFetch = shell.commands.api_fetch
+  Object.assign(shell.commands, {
+    async api_fetch(args) {
+      const req = args.req
+      const res = await apiFetch(args)
+      // 壳在登录成功后自动解除"需要重新登录"的暂停（client/internal/shell/upload.go 的 observeUploads）。
+      if (req.method === 'POST' && req.path === '/api/auth/login' && res.status < 300 && state.status.paused?.reason === 'auth_required') {
+        state.status = { ...state.status, paused: null }
+        setTimeout(emitState, 0)
       }
+      return res
     },
-  }
+    cache_stats: () => ({
+      dir: 'C:\\Users\\scan01\\AppData\\Local\\Doclite\\image-cache',
+      available: true,
+      error: null,
+      total_bytes: Math.round(1.3 * GB),
+      file_count: 15230,
+      limit_bytes: 2 * GB,
+      projects: [],
+      counters: { hits: 0, misses: 0, downloads: 0, download_bytes: 0, rejected: 0, errors: 0 },
+    }),
+    upload_status: (args) => slowly('upload_status', state.status),
+    upload_recent(args) {
+      const want = args.status
+      const list = state.items
+        .filter((i) => !want || want.includes(i.status))
+        .sort((a, b) => b.updated_at - a.updated_at)
+        .slice(0, args.limit ?? 100)
+      return slowly('upload_recent', list)
+    },
+    upload_retry_failed(args) {
+      const ids = args.ids
+      let n = 0
+      for (const i of state.items) {
+        if (i.status !== 'failed' || (ids && !ids.includes(i.id))) continue
+        Object.assign(i, { status: 'waiting', error_code: null, error_message: null, updated_at: Date.now() })
+        n++
+        setTimeout(() => emit('upload:item', { ...i }), 50)
+      }
+      const s = state.status.stats
+      state.status = { ...state.status, stats: { ...s, failed: s.failed - n, waiting: s.waiting + n } }
+      setTimeout(emitState, 60)
+      return n
+    },
+    upload_resume() {
+      state.status = { ...state.status, paused: null }
+      setTimeout(emitState, 0)
+      return slowly('upload_resume', state.status)
+    },
+    hotfolder_status: () => slowly('hotfolder_status', state.hotfolder),
+    hotfolder_pick_dir: () => 'D:\\Scan\\Out',
+    hotfolder_set(args) {
+      state.hotfolder = {
+        ...state.hotfolder,
+        config: {
+          watch_dir: args.watchDir,
+          target_folder_id: args.targetFolderId,
+          server_url: scenario.serverUrl,
+          scan_interval_secs: 15,
+          running: state.hotfolder.running,
+        },
+      }
+      setTimeout(() => emit('hotfolder:state', state.hotfolder), 0)
+      return state.hotfolder
+    },
+    hotfolder_start() {
+      state.hotfolder = { ...state.hotfolder, running: true, watching: true, last_scan_at: Date.now(), scans: 1, config: { ...state.hotfolder.config, running: true } }
+      state.status = { ...state.status, paused_sources: [] }
+      setTimeout(() => emit('hotfolder:state', state.hotfolder), 0)
+      return state.hotfolder
+    },
+    hotfolder_pause() {
+      state.hotfolder = { ...state.hotfolder, running: false, watching: false, config: { ...state.hotfolder.config, running: false } }
+      setTimeout(() => emit('hotfolder:state', state.hotfolder), 0)
+      return slowly('hotfolder_pause', state.hotfolder)
+    },
+  })
 }
 
 /** 壳模式：登录 demo_scanner，注入队列的模拟。 */
@@ -422,7 +362,7 @@ function shellScenario(build) {
   return async (page) => {
     const ctx = await scannerContext()
     await useSession(page, ctx.cookie)
-    await page.evaluateOnNewDocument(installTauriMock, { serverUrl: SERVER, ...build(ctx) })
+    await installWailsMock(page, { serverUrl: SERVER }, scanMock, { serverUrl: SERVER, ...build(ctx) })
   }
 }
 
@@ -451,6 +391,7 @@ export default {
     {
       name: 'scan-shell-uploading',
       path: '/scan',
+      shell: true,
       waitUntil: IDLE,
       init: shellScenario(({ target }) => ({
         status: status(UPLOADING_STATS),
@@ -512,6 +453,7 @@ export default {
     {
       name: 'scan-shell-race',
       path: '/scan',
+      shell: true,
       waitUntil: IDLE,
       init: shellScenario(({ target }) => ({
         status: status(
@@ -574,6 +516,7 @@ export default {
     {
       name: 'scan-shell-backlog',
       path: '/scan',
+      shell: true,
       waitUntil: IDLE,
       init: shellScenario(({ target }) => ({
         status: status({ waiting: 0, queued: 300, uploading: 0, done: 0, duplicate: 0, failed: 0, retrying: 0, total: 300 }),
@@ -621,6 +564,7 @@ export default {
     {
       name: 'scan-shell-auth-paused',
       path: '/scan',
+      shell: true,
       waitUntil: IDLE,
       init: shellScenario(({ target }) => ({
         status: status(
@@ -643,6 +587,7 @@ export default {
     {
       name: 'scan-shell-auth-resumed',
       path: '/scan',
+      shell: true,
       waitUntil: IDLE,
       init: shellScenario(({ target }) => ({
         status: status(
@@ -670,6 +615,7 @@ export default {
     {
       name: 'scan-shell-upgrade-paused',
       path: '/scan',
+      shell: true,
       waitUntil: IDLE,
       init: shellScenario(({ target }) => ({
         status: status(
@@ -698,18 +644,19 @@ export default {
       delay: 500,
     },
     {
-      // 还没设置热文件夹（admin，在 HOTFOLDER-TEST 里新建一个临时文件夹，截图后删掉）。
+      // 还没设置热文件夹（admin，在 DEMO-B 里新建一个临时文件夹，截图后删掉）。
       name: 'scan-shell-new-folder',
       path: '/scan',
+      shell: true,
       waitUntil: IDLE,
       async init(page) {
         const { cookie, me } = await login(admin, adminPassword)
         const projects = await api(cookie, 'GET', '/api/projects')
-        const project = projects.find((p) => p.project_code === 'HOTFOLDER-TEST')
-        if (!project) throw new Error('找不到项目 HOTFOLDER-TEST（M1-9 的端到端项目）')
+        const project = projects.find((p) => p.project_code === NEW_FOLDER_PROJECT)
+        if (!project) throw new Error(`找不到项目 ${NEW_FOLDER_PROJECT}（先跑 seed:demo）`)
         newFolderCtx = { cookie, project, name: `M1-13 截图 ${Date.now()}` }
         await useSession(page, cookie)
-        // 项目切换器选中 HOTFOLDER-TEST（stores/project.ts 记在 localStorage 的上次所选项目）。
+        // 项目切换器选中 DEMO-B（stores/project.ts 记在 localStorage 的上次所选项目）。
         await page.evaluateOnNewDocument(
           (key, id) => {
             try {
@@ -721,7 +668,7 @@ export default {
           `doclite.lastProject.${me.id}`,
           project.id,
         )
-        await page.evaluateOnNewDocument(installTauriMock, {
+        await installWailsMock(page, { serverUrl: SERVER }, scanMock, {
           serverUrl: SERVER,
           status: status({ waiting: 0, queued: 0, uploading: 0, done: 0, duplicate: 0, failed: 0, retrying: 0, total: 0 }),
           hotfolder: { config: null, running: false, watching: false, error: null, last_scan_at: null, scans: 0 },
@@ -786,13 +733,13 @@ export default {
           expect(remark[0]?.includes('3 号库 B 架 2 层'), `卡片要显示新文件夹的备注：${remark}`)
           await waitPickerGone()
 
-          // 换到 DEMO-A：还没保存的目标属于 HOTFOLDER-TEST，清掉。
+          // 换到 DEMO-A：还没保存的目标属于 DEMO-B，清掉。
           await switchTo('DEMO-A')
           const cleared = await targetText()
           expect(!cleared.includes(newFolderCtx.name) && cleared.includes('还没选'), `换项目后没保存的目标应该清掉：${cleared}`)
 
           // 换回来，重新选这个文件夹，开始监听。
-          await switchTo('HOTFOLDER-TEST')
+          await switchTo(NEW_FOLDER_PROJECT)
           await page.click('[data-testid=hotfolder-pick-target]')
           const row = await page.waitForSelector(`[data-testid=folder-picker] [data-testid=tree-folder][data-folder-id="${newFolderCtx.id}"]`, { timeout: 5000 })
           await row.click()

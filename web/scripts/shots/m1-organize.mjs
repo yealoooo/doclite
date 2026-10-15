@@ -23,11 +23,13 @@
 //   接口核对；根文件夹只能改备注。
 // - files-context-menu 截图后点"下载原图"：新窗口打开预签名的 original_url；files-shell-upload 截图后点"下载原图"：
 //   调 `open_external`。
-// - files-shell-upload：壳里（注入 IPC 模拟）两个上传按钮调 `pick_and_enqueue_upload`，提示"已加入上传队列"。
+// - files-shell-upload：壳里（壳模式的地址 + Wails 桥的模拟，scripts/lib/wails-mock.mjs；--base 要指向 devshell）两个上传
+//   按钮调 `pick_and_enqueue_upload`，提示"已加入上传队列"。
 
 import path from 'node:path'
 
 import { checkCovers, injectFiles, orientedTiff, sample, scanPng, waitUploadDone } from '../lib/upload-samples.mjs'
+import { installWailsMock, shellOrigin } from '../lib/wails-mock.mjs'
 
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
 const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
@@ -63,7 +65,10 @@ let ctxPromise = null
 /** 登录 admin，取 DEMO-A 和演示文件夹（只做一次）。 */
 export function context(page) {
   ctxPromise ??= (async () => {
-    const origin = new URL(page.url()).origin
+    // 壳模式的页面（wails.localhost）也从同一个 devshell 调接口，用 127.0.0.1（Windows 上 node 不一定解析 *.localhost）。
+    const u = new URL(page.url())
+    if (u.hostname === 'wails.localhost') u.hostname = '127.0.0.1'
+    const origin = u.origin
     await api(origin, 'POST', '/api/auth/login', { username: admin, password: adminPassword })
     const projects = await api(origin, 'GET', '/api/projects')
     const project = projects.find((p) => p.project_code === PROJECT)
@@ -268,67 +273,20 @@ export async function uploadSampleFolder(page, ctx, prefix = '  ') {
   return { top, uploaded, byPath }
 }
 
-// ---------- 壳的 IPC 模拟（files-shell-upload） ----------
+// ---------- 壳的模拟（files-shell-upload） ----------
 
-/** 在页面里执行（会被序列化，不能引用外部变量）。只实现文件目录页用到的命令，记下每次调用。 */
-function installShellMock() {
-  const version = '0.1.0'
-  const server = 'http://192.168.1.10:9080'
-  let nextId = 1
-  window.__shellCalls = []
-  window.__TAURI_INTERNALS__ = {
-    transformCallback(callback) {
-      const id = nextId++
-      window[`_${id}`] = callback
-      return id
-    },
-    unregisterCallback(id) {
-      delete window[`_${id}`]
-    },
-    convertFileSrc(path, protocol = 'asset') {
-      return `http://${protocol}.localhost/${encodeURIComponent(path)}`
-    },
-    async invoke(cmd, args) {
-      window.__shellCalls.push({ cmd, args: cmd === 'api_fetch' ? { path: args.req.path } : args })
-      switch (cmd) {
-        case 'shell_info':
-          return { version, server_url: server, data_dir: 'C:\\Users\\scan01\\AppData\\Local\\Doclite', platform: 'windows', smoke: false }
-        case 'check_server':
-          return {
-            server_url: server,
-            reachable: true,
-            error: null,
-            server_version: version,
-            min_version: null,
-            latest_version: null,
-            download_url: null,
-            client_version: version,
-            upgrade_required: false,
-          }
-        case 'api_fetch': {
-          const req = args.req
-          const qs = new URLSearchParams(req.query).toString()
-          const res = await fetch(qs ? `${req.path}?${qs}` : req.path, { method: req.method, headers: req.headers, body: req.body })
-          return { status: res.status, headers: {}, body: await res.text() }
-        }
-        case 'api_stream':
-          // 实时通道：只连上，不推事件。
-          return nextId++
-        case 'api_stream_cancel':
-        case 'plugin:event|listen':
-        case 'plugin:event|unlisten':
-        case 'open_external':
-          return null
-        case 'pick_and_enqueue_upload':
-          // 模拟用户在系统对话框里选了 3 个文件（文件夹模式另有 1 个不支持的被跳过）。
-          await new Promise((r) => setTimeout(r, 200))
-          return args.mode === 'folder'
-            ? { cancelled: false, added: [21, 22, 23, 24, 25], skipped: [{ path: 'D:\\扫描\\盒 006\\说明.txt', reason: '不支持的扩展名' }] }
-            : { cancelled: false, added: [11, 12, 13], skipped: [] }
-        default:
-          throw { kind: 'internal', message: `截图模拟里没有命令 ${cmd}` }
-      }
-    },
+/** 在页面里执行（会被序列化，不能引用外部变量）。只补文件目录页用到的命令；window.__shellCalls 是每次调用（api_fetch 只记路径）。 */
+function organizeShellMock() {
+  const shell = window.__shell
+  Object.defineProperty(window, '__shellCalls', {
+    get: () => shell.calls.map((c) => ({ cmd: c.cmd, args: c.cmd === 'api_fetch' ? { path: c.args.req.path } : c.args })),
+  })
+  shell.commands.pick_and_enqueue_upload = async (args) => {
+    // 模拟用户在系统对话框里选了 3 个文件（文件夹模式另有 1 个不支持的被跳过）。
+    await new Promise((r) => setTimeout(r, 200))
+    return args.mode === 'folder'
+      ? { cancelled: false, added: [21, 22, 23, 24, 25], skipped: [{ path: 'D:\\扫描\\盒 006\\说明.txt', reason: '不支持的扩展名' }] }
+      : { cancelled: false, added: [11, 12, 13], skipped: [] }
   }
 }
 
@@ -860,11 +818,12 @@ export default {
       },
       delay: 400,
     },
-    // 壳里（注入 IPC 模拟）：上传按钮调 pick_and_enqueue_upload，提示"已加入上传队列"。
+    // 壳里（Wails 桥的模拟）：上传按钮调 pick_and_enqueue_upload，提示"已加入上传队列"。
     {
       name: 'files-shell-upload',
       path: '/login',
-      init: (page) => page.evaluateOnNewDocument(installShellMock),
+      shell: true,
+      init: (page) => installWailsMock(page, { serverUrl: 'http://192.168.1.10:9080' }, organizeShellMock),
       waitFor: '#username',
       async prepare(page) {
         await page.type('#username', admin)
@@ -873,7 +832,7 @@ export default {
         await page.waitForSelector('[data-testid=side-nav]', { timeout: 15000 })
         const ctx = await context(page)
         const folderId = ctx.folders[BOX3].id
-        await page.goto(`${ctx.origin}/files?folder=${folderId}`, { waitUntil: IDLE })
+        await page.goto(`${shellOrigin(ctx.origin)}/files?folder=${folderId}`, { waitUntil: IDLE })
         await page.waitForSelector('[data-testid=files-page][data-list=ready]', { timeout: 15000 })
         await page.click('[data-testid=upload-folder]')
         await waitToast(page, '已加入上传队列：5 个文件')
