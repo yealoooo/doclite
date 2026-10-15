@@ -5,10 +5,12 @@
 //
 // handler 返回 error：
 //   - [*Error] 按它的状态码和错误码输出；
+//   - 客户端已经断开造成的（[clientGone]）不算错误：只写状态码 499，日志不报错；
 //   - 其他错误一律 500 `internal`，细节只写日志，不返回给调用方。
 package httpx
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -110,10 +112,30 @@ type errorBody struct {
 	Details any    `json:"details,omitempty"`
 }
 
-// WriteError 输出错误体。不是 *Error 的错误写日志（带请求的方法和路径）后返回 500 `internal`。
+// StatusClientClosedRequest 是客户端在拿到响应之前就断开时记的状态码（nginx 的约定，不是标准状态码）。
+// 只是为了访问日志：客户端已经不在了，写出去也没人收。
+const StatusClientClosedRequest = 499
+
+// clientGone 判断 err 是不是客户端断开造成的：请求的 context 已经被取消（不是超时），并且 err 的链里有 context.Canceled
+// （查库、读写 S3 时 context 被取消）。
+//
+// 请求的 context 只在客户端断开时被取消（HTTP/1 关连接、HTTP/2 取消流）：http.Server 没有设置会被取消的 BaseContext、
+// ConnContext，也没有 TimeoutHandler、WriteTimeout。服务端自己的超时（DeadlineExceeded）、handler 里自己派生又取消的
+// context（这时请求的 context 还没取消）都不算，仍按 500 记 ERROR。
+func clientGone(r *http.Request, err error) bool {
+	return errors.Is(context.Cause(r.Context()), context.Canceled) && errors.Is(err, context.Canceled)
+}
+
+// WriteError 输出错误体。不是 *Error 的错误：客户端已经断开的（[clientGone]）只写状态码 499、日志记 Debug；
+// 其他的写 Error 日志（带请求的方法和路径）后返回 500 `internal`。
 func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	e, ok := AsError(err)
 	if !ok {
+		if clientGone(r, err) {
+			LoggerFrom(r.Context()).Debug("客户端已断开，请求没有处理完", "method", r.Method, "path", r.URL.Path, "error", err)
+			w.WriteHeader(StatusClientClosedRequest)
+			return
+		}
 		LoggerFrom(r.Context()).Error("请求处理失败", "method", r.Method, "path", r.URL.Path, "error", err)
 		e = NewError(http.StatusInternalServerError, CodeInternal, "服务器内部错误，请稍后重试或联系管理员")
 	}

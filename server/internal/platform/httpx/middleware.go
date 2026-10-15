@@ -21,6 +21,7 @@ func LoggerFrom(ctx context.Context) *slog.Logger {
 }
 
 // Logging 是请求日志：每个 `/api` 请求一行（方法、路径、状态码、耗时、响应字节数），5xx 用 Error 级别；
+// 客户端中途断开的记 499（[WriteError]），和 4xx 一样用 Info 级别；SSE 被客户端断开时 handler 正常返回，记 200。
 // 网页的静态文件只在 Debug 级别记录。不记录请求体、Cookie 和查询参数。
 //
 // 同时把 log 放进请求的 context（[LoggerFrom]），并且兜住 handler 的 panic：返回 500 `internal`、记下调用栈。

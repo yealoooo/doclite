@@ -205,6 +205,12 @@ type Env struct {
 // NewEnv 建测试环境。opts 可以改 server 的配置（客户端版本、Cookie Secure、网页目录……）。
 func NewEnv(t *testing.T, opts ...func(*app.Options)) *Env {
 	t.Helper()
+	return NewEnvWithLog(t, testLogger(), opts...)
+}
+
+// NewEnvWithLog 同 [NewEnv]，server 的日志写到 log（要检查日志的测试用，见 logCapture）。
+func NewEnvWithLog(t *testing.T, log *slog.Logger, opts ...func(*app.Options)) *Env {
+	t.Helper()
 	dsn := cloneDB(t)
 	ctx := context.Background()
 	pool, err := db.Open(ctx, dsn)
@@ -220,7 +226,7 @@ func NewEnv(t *testing.T, opts ...func(*app.Options)) *Env {
 	for _, o := range opts {
 		o(&options)
 	}
-	a, err := app.New(pool, options, testLogger())
+	a, err := app.New(pool, options, log)
 	if err != nil {
 		t.Fatal(err)
 	}

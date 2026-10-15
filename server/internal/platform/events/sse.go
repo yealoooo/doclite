@@ -57,7 +57,12 @@ func Serve(w http.ResponseWriter, r *http.Request, bus *Bus, projectID uuid.UUID
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	if err := rc.Flush(); err != nil {
-		log.Warn("SSE 不能刷出响应", "error", err)
+		if r.Context().Err() != nil {
+			// 写连接失败时 net/http 会取消请求的 context：客户端已经断开，不是服务端的问题。
+			log.Debug("SSE 连上就被客户端断开", "project_id", projectID, "error", err)
+		} else {
+			log.Warn("SSE 不能刷出响应", "error", err)
+		}
 		return
 	}
 
