@@ -83,17 +83,28 @@
 
 ## M2 文件目录和上传
 
-### [~] M2-1 文件目录、上传、图片信息、日志
+### [x] M2-1 文件目录、上传、图片信息、日志（commit b119da4）
 - **范围：** 文件夹树和列表（children）、新建、改名、备注、移动、复制、删除、批量移动删除（5.5）；上传（5.6：multipart 字段顺序、流式写临时文件和 sha256、文件头、封面校验、查重和断网重试、预检 `files:check`、内容锁）；`files/batch`、`snapshots`（5.7）；文件日志；`files.changed`、`folders.changed` 事件。重扫接口放到 M3-1。
 - **完成标志：** API 测试覆盖主流程和主要错误码；**并发**：同内容并发上传只入库一个；截图脚本 `m1-files.mjs`、`m1-organize.mjs`（浏览器上传部分）通过。
 - **前置：** M1-2、M1-3。
 - **先读：** requirements 3、5.5、5.6、5.7、7；key-queries 的上传、path_code 分配、移动、软删除。
 
+- **结果：** 三项检查通过（加 `-race` 也通过）；API 测试新增 9 个（apitest 共 37 个）、封面校验单元测试 13 例；**并发**：同内容并发上传只入库一个（临时去掉内容锁时测试失败，证明有效）；`m1-files.mjs` 10/10、`m1-organize.mjs` 10/10。doclite_dev 的 DEMO-A 灌了 2025 文书档案下的盒 WS-2025-001（2000 页）、002（48 页）、003（24 页 + 补扫 6 页、附件 4 页）和空的盒 004，对象在 `doclite/DEMO-A/` 下。
+- **自定细节：** 内容锁用 PG 事务级咨询锁 `(6003, fnv32(项目 id + sha))`（提交时自动释放）；临时文件 `TMP_DIR/uploads/upload-*.part`，启动只清这个目录，封面放内存；上传路由最外层 `UploadBody` 中间件先读完剩余请求体再写响应、60 秒空闲按 400；对象带 `x-amz-meta-original-name` 和 `Cache-Control: private, max-age=<预签名有效期>, immutable`；快照 `created_at` 用 `clock_timestamp()`；复制的快照 `parent_snapshot_id` 指向源、`edit_ops` 记来源；snapshots 进不了项目 404，logs 403；批量检查顺序 空或 > 500 → 跨项目 400 → 授权 403 → 不存在 404（details.ids 是 folder_files id）；文件夹审计 target `folder`（create、update、move、delete）；文件日志 detail 见 `internal/file`。
+- **遗留：** 重扫的"同一文件串行"锁（M3-1 做）；孤儿对象只记日志不清理；children 不分页；删文件夹遇到已归类的 409 不带 details.ids；M4-2 合入前详情面板的归类信息显示"文件已不存在"。
+- **须知（给 M3-1、M4-2、M5-2）：**
+  - **模块依赖方向：** folder 引用 file 的包级函数（`LockFiles`、`WriteLogs`、`Current`、`InsertCopy`）和 `file.Slot`；file 通过接口 `file.Folders`（由 `folder.Service` 实现，在 app.New 注入）领位置、插入 folder_files、取路径。两个包不互相 import。
+  - **路径和反查：** `folderSvc.Path(ctx, q, folderID)`、`Paths(ctx, q, ids)`（`项目名/…/文件夹`）；`folderSvc.ProjectOf`（文件夹）、`ProjectOfEntry`（folder_files id）、`fileSvc.ProjectOfFile`（file_id，文件、文件夹、项目都要未删除，否则 404）。
+  - **当前快照：** `file.Current(ctx, q, fid)`、`file.CurrentOf(ctx, q, ids)`。
+  - **锁文件：** 事务里 `project.LockFileTree(ctx, tx, pid, false)` → `file.LockFiles(ctx, tx, ids)`（id 升序 FOR NO KEY UPDATE）→ 重读 folder_files（未删除、所在文件夹未删除）。
+  - **文件日志：** `file.WriteLogs(ctx, tx, file.Log{ProjectID, FileID, Action: file.ActionApprove, OperatorID, Detail})`（多条一次 INSERT，保持顺序；action 常量在 file 包）。
+  - **改 `folder_files.review_status`（M3-1）：** folder 模块现在没有对外的写方法，M3-1 在 folder 里加一个，或者在 review 的 store 里写明跨模块写的例外。
+  - **重扫复用上传：** 路由 `httpx.Chain(fileSvc.UploadBody(), g.InProject(...))`；`u, err := fileSvc.Receive(r)`（`defer u.Close()`）；之后用 `context.WithoutCancel`；事务外 `storageSvc.DefaultTarget` → `file.ProjectCode` → `file.KeysFor(prefix, code, fid, v, u.Info.Format)` → `fileSvc.PutObjects`；事务内 文件树锁 → `LockFiles` → 重读、查状态和版本 → `storageSvc.LockForSnapshot` → `file.LockContent` → `fileSvc.FindDuplicate(ctx, tx, pid, u.SHA256, &fid)` → `file.InsertSnapshot(&file.NewSnapshot{SnapshotType: file.SnapshotRescan, …})` → 写日志 → 提交后发 `files.changed`。
 ---
 
 ## M3 审核
 
-### [ ] M3-1 审核分配、审核、重扫
+### [~] M3-1 审核分配、审核、重扫
 - **范围：** requirements 5.8 全部（分配、改派、审核、批量通过、撤回通过、读接口、审核设置）和 5.6 的重扫、待重扫列表；状态流转表；事件。
 - **完成标志：** API 测试覆盖状态流转表的每一格和主要错误码；**并发**：审核和整理（移动、删除）同时操作不死锁；截图脚本 `m2-assign.mjs`、`m2-review.mjs`、`m2-rescan.mjs`（浏览器部分）通过。
 - **前置：** M2-1。
@@ -113,7 +124,7 @@
 - **自定细节：** 新的咨询锁类别 **6005（档号）**：共享归类锁下写档号（新建、移动、改件号）先按（项目, 档号）拿 `pg_advisory_xact_lock(6005, …)` 再查占用，后到的等前一个提交，不会撞 `ux_archive_items_no`（排在节点行、条目行之后，每个事务最多一个；批量重算拿归类树排他锁，不用它）；批量重算在应用里分档，先把"旧号正好是别人新号"的置空，再一条 `UPDATE … FROM unnest`；审计按条批量写；件号到 999999999 之后 409 `invalid_state`。条目列表 limit 默认 500（1–2000），cursor `<件号>_<id>`；删除可带 `?row_version=`。
 - **临时处理（M4-2 替换）：** 有页的条目删除返回 409 `invalid_state`（`TODO(M4-2)`）；新建条目带非空 `file_ids` 返回 400。
 - **须知（给 M4-2）：** 锁顺序 `project.LockCatalogTree(ctx, tx, pid, false)` → 分配件号时锁节点行（`lockCategories`）→ 条目行（`lockItem`、`lockItems`，`FOR NO KEY UPDATE`，id 升序）→ 之后才拿文件树锁和 files 行；锁住后依次查 已删除 404 → 状态（`errLockedEdit`）→ `row_version`（`staleVersion`）。定稿判断 `item_state.go` 的 `lockBlocker`，页数和审核状态来自 `itemPageStats`（读 `archive_item_files`、`folder_files`，不锁文件），挂接做好后不用改。档号：单个 `assignArchiveNo`（撞号留空、返回撞了谁），子树 `renumberSubtree`（要排他锁），空档号原因 `emptyReason`。`readItem`、`itemPages` 已能读页（文件名、路径、版本、"定稿后有新版本"），`page_counts`、`locked_at` 已算好。测试里的 `addPage` 直接写库造页，M4-2 后改走 `PUT /files`。
-### [ ] M4-2 挂接、页序、归类信息、看板
+### [~] M4-2 挂接、页序、归类信息、看板
 - **范围：** requirements 5.9 的"挂接"（PUT files、新建条目带 file_ids、删除条目一并移出、日志、reorder 审计）、"归类信息"（placements、`files/{fid}/catalog`）、定稿前置里和页相关的条件、5.10 看板。
 - **完成标志：** API 测试覆盖挂接的主要错误码；**并发**：两个条目抢同一个文件只有一个成功、审核和挂接同时进行不互相等（加锁顺序见 3.6）；截图脚本 `m3-catalog.mjs`、`m3-workbench.mjs`、`m3-dashboard.mjs`、`m3-catalog-info.mjs`、`m3-catalog-settings.mjs` 通过。
 - **前置：** M4-1、M2-1（M3-1 合入后再跑审核相关的截图）。
