@@ -3,8 +3,8 @@
 //   INIT_ADMIN_PASSWORD=admin123456 [SHOTS_TMP=<临时目录>] \
 //     npm run screenshots -- --spec scripts/shots/m1-organize.mjs --base http://localhost:<preview 端口>
 //
-// 前端地址是 vite preview（/api 代理到 server）或托管了 web/dist 的 server。合成的样本要先跑 M1-9 的
-// `cargo run --example gen-samples`（shell/src-tauri，第一次要编译），见 scripts/lib/upload-samples.mjs。
+// 前端地址是 vite preview（/api 代理到 server）或托管了 web/dist 的 server。JPEG、TIFF 样本读仓库里的
+// `server/testdata/samples/`，见 scripts/lib/upload-samples.mjs。
 // 局域网地址（非安全上下文）上的上传另见 m1-upload-lan.mjs。
 //
 // 只看界面的截图（右键菜单、移动对话框、多选、删除确认、错误提示）用 M1-10 的演示文件夹，不提交改动；
@@ -252,7 +252,7 @@ export async function uploadSampleFolder(page, ctx, prefix = '  ') {
   for (const it of uploaded) assert(it.hasCover === true, `${it.path} 应该带上了封面：${it.text}`)
   const ms = (p) => byPath.get(`${top}/${p}`)?.coverMs
   console.log(
-    `${prefix}上传文件夹：${uploaded.length} 个入库、1 个不支持的格式忽略、Thumbs.db 不上传；封面耗时 JPEG(A4 300dpi 灰度) ${ms('JPEG_A4.jpg')} ms、` +
+    `${prefix}上传文件夹：${uploaded.length} 个入库、1 个不支持的格式忽略、Thumbs.db 不上传；封面耗时 JPEG(A4 200dpi 灰度) ${ms('JPEG_A4.jpg')} ms、` +
       `JPEG EXIF6 ${ms('盒 001/卷内/JPEG_exif6.jpg')} ms、TIFF 无压缩 ${ms('盒 001/TIFF_none.tif')} ms、TIFF LZW 彩色 ${ms('盒 001/卷内/TIFF_lzw.tif')} ms、` +
       `TIFF G4 ${ms('盒 001/卷内/TIFF_g4.tif')} ms（G4 生成了封面）、PNG ${ms('盒 001/IMG_1.png')} ms`,
   )
@@ -626,7 +626,7 @@ export default {
           { name: 'IMG_0002.png', data: b.png },
           // 低 DPI（150）。
           { name: 'IMG_0003.png', data: scanPng(`${seed}#d`, 3, 150).png },
-          // A4 300 DPI 的 JPEG（gen-samples），DPI 正常。
+          // A4 300 DPI 的 JPEG（server/testdata/samples），DPI 正常。
           { name: 'JPEG_A4.jpg', data: await sample('jpeg-rgb.jpg') },
           // 方向 6 的 TIFF：浏览器里不生成封面，照样入库。
           { name: 'TIFF_方向6.tif', data: orientedTiff(seed) },

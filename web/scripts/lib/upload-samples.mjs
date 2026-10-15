@@ -1,54 +1,76 @@
 // 浏览器上传的截图脚本用的合成文件和助手（M1-12）。都是真能解码的图片：
-// - JPEG、TIFF（无压缩、LZW、1 位 CCITT G4……）来自 M1-9 的 `cargo run --example gen-samples`（shell/src-tauri），
-//   A4 300 DPI，每次运行内容随机（不会和上一次的判为内容重复）；
+// - JPEG、TIFF（无压缩、LZW、1 位 CCITT G4……）、PNG 样本来自仓库里的 `server/testdata/samples/`（清单、格式、
+//   尺寸、DPI、方向见那里的 README.md；原来是每次现场调 cargo 跑上一版的 gen-samples，M1-2 起改为读提交的文件）。
+//   `sample(name)` 每个进程第一次调用时读进内存，并往每个样本里加一段这次运行特有的注释（JPEG 加 COM 段、PNG 加
+//   tEXt 块、TIFF 在末尾追加），图片不变、内容各次运行不同，不会和以前上传过的判为内容重复；同一进程里多次取同一个
+//   样本得到同样的字节。
 // - PNG 用 scan-pages.mjs 的 makeScanPage（和 seed:files 同一份代码），可以指定 DPI（150 就是低 DPI）；
 // - 方向标记为 6 的 TIFF 用 UTIF.encodeImage 现场编（浏览器里不转正，不生成封面，用来看"无封面"）。
 //
 // 页面里用 `injectFiles(page, mode, files)` 把文件交给文件目录页：在隐藏的选择框上派发 `doclite-inject-files`
 // 事件（detail 是 File[]；上传文件夹的带 webkitRelativePath），走和选择框完全相同的代码。
-//
-// gen-samples 的临时目录放在 SHOTS_TMP（默认系统临时目录）下，读完就删。
 
-import { execFile } from 'node:child_process'
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
-import os from 'node:os'
+import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
+import { crc32 } from 'node:zlib'
 
 import UTIF from 'utif'
 
 import { makeScanPage } from './scan-pages.mjs'
 
-const SHELL_DIR = fileURLToPath(new URL('../../../shell/src-tauri/', import.meta.url))
+/** 提交在仓库里的样本目录。 */
+export const SAMPLES_DIR = fileURLToPath(new URL('../../../server/testdata/samples/', import.meta.url))
 
-let samplesPromise = null
+/** 这次运行的标记：写进每个样本，让内容和以前的运行不同。只用 ASCII（PNG 的 tEXt 是 Latin-1）。 */
+const RUN_TAG = `doclite-shots ${Date.now()} ${Math.random().toString(36).slice(2)}`
 
-/** 调 gen-samples 生成 18 种样本，返回 Map<文件名, Buffer>。每个进程只跑一次（第一次要编译，约 1–3 分钟）。 */
-export function genSamples() {
-  samplesPromise ??= (async () => {
-    const dir = mkdtempSync(path.join(process.env.SHOTS_TMP ?? os.tmpdir(), 'gen-samples-'))
-    try {
-      const t0 = Date.now()
-      await promisify(execFile)('cargo', ['run', '--quiet', '--example', 'gen-samples', '--', '--out', dir], {
-        cwd: SHELL_DIR,
-        maxBuffer: 16 * 1024 * 1024,
-      })
-      const map = new Map()
-      for (const name of readdirSync(dir)) map.set(name, readFileSync(path.join(dir, name)))
-      console.log(`  gen-samples：${map.size} 个样本（${((Date.now() - t0) / 1000).toFixed(0)} 秒）`)
-      return map
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })()
-  return samplesPromise
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+/** 往样本里加一段注释，图片本身不变。 */
+function withRunTag(name, buf) {
+  const tag = Buffer.from(`${RUN_TAG} ${name}`, 'latin1')
+  if (buf[0] === 0xff && buf[1] === 0xd8) {
+    // JPEG：在 SOI 和紧跟的 APPn 段（JFIF、EXIF）之后插一个 COM 段。
+    let i = 2
+    while (i + 4 <= buf.length && buf[i] === 0xff && buf[i + 1] >= 0xe0 && buf[i + 1] <= 0xef) i += 2 + buf.readUInt16BE(i + 2)
+    const head = Buffer.from([0xff, 0xfe, 0, 0])
+    head.writeUInt16BE(tag.length + 2, 2)
+    return Buffer.concat([buf.subarray(0, i), head, tag, buf.subarray(i)])
+  }
+  if (buf.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    // PNG：在 IEND（最后 12 字节）之前插一个 tEXt 块。
+    const data = Buffer.concat([Buffer.from('Comment\0', 'latin1'), tag])
+    const chunk = Buffer.alloc(12 + data.length)
+    chunk.writeUInt32BE(data.length, 0)
+    chunk.write('tEXt', 4, 'latin1')
+    data.copy(chunk, 8)
+    chunk.writeUInt32BE(crc32(chunk.subarray(4, 8 + data.length)), 8 + data.length)
+    const at = buf.length - 12
+    return Buffer.concat([buf.subarray(0, at), chunk, buf.subarray(at)])
+  }
+  // TIFF：偏移都是从文件开头算的，末尾多出的字节阅读器不看。
+  return Buffer.concat([buf, tag])
 }
 
-/** gen-samples 的一个样本。 */
+let samples = null
+
+/** 读 server/testdata/samples 里的全部样本（加了这次运行的标记），返回 Map<文件名, Buffer>。每个进程只读一次。 */
+export function loadSamples() {
+  if (!samples) {
+    samples = new Map()
+    for (const name of readdirSync(SAMPLES_DIR)) {
+      if (name === 'README.md') continue
+      samples.set(name, withRunTag(name, readFileSync(path.join(SAMPLES_DIR, name))))
+    }
+  }
+  return samples
+}
+
+/** 一个样本（文件名见 server/testdata/samples/README.md，例如 `jpeg-rgb.jpg`、`tiff-g4-1bit.tif`）。 */
 export async function sample(name) {
-  const buf = (await genSamples()).get(name)
-  if (!buf) throw new Error(`gen-samples 没有输出 ${name}`)
+  const buf = loadSamples().get(name)
+  if (!buf) throw new Error(`server/testdata/samples 里没有 ${name}（有：${[...loadSamples().keys()].join('、')}）`)
   return buf
 }
 
