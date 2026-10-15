@@ -104,12 +104,16 @@
 
 ## M3 审核
 
-### [~] M3-1 审核分配、审核、重扫
+### [x] M3-1 审核分配、审核、重扫（commit 84f5082）
 - **范围：** requirements 5.8 全部（分配、改派、审核、批量通过、撤回通过、读接口、审核设置）和 5.6 的重扫、待重扫列表；状态流转表；事件。
 - **完成标志：** API 测试覆盖状态流转表的每一格和主要错误码；**并发**：审核和整理（移动、删除）同时操作不死锁；截图脚本 `m2-assign.mjs`、`m2-review.mjs`、`m2-rescan.mjs`（浏览器部分）通过。
 - **前置：** M2-1。
 - **先读：** requirements 3.6、5.6（重扫）、5.8；key-queries 的分配审核、通过。
 
+- **结果：** 三项检查通过；apitest 新增 6 个（权限表 14 接口 × 10 角色、状态流转表 28 格 + 2 格、分配改派、审核/批量/撤回/我的审核、重扫、并发）；**并发**：审核、改派、撤回和批量移动、移动文件夹、删除同时跑不死锁、5 条 SQL 一致性检查通过；同一文件同时两个重扫串行（临时去掉互斥时测试失败）。截图 `m0.mjs` 13/13（reviewer-nav 通过）、`m2-assign.mjs` 6/6、`m2-review.mjs` 浏览器部分 13/13（`shell-review`、`shell-review-compare` 要客户端，留给 M6）、`m2-rescan.mjs` 6/6（另跑了 `M27_E2E=1` 的 e2e）。doclite_dev：新建 demo_reviewer2，DEMO-A 授权 demo_reviewer、demo_reviewer2；演示文件夹「M2-5 分配演示」40 页、「M2-6 审核演示」30 页、「M2-7 重扫演示」10 页。
+- **自定细节：** 改审核状态在 `internal/folder/review_state.go` 加对外写方法 `folderSvc.SetReviewStatus(ctx, tx, fileIDs, status)`、`SetReviewState(ctx, tx, fileID, status, round)`，review 不直接写 folder_files；读接口 cursor `<path_code>_<sort_no>_<file_id>`；`reviewed_at` 用 `statement_timestamp()`；重扫后新开的分配 `assigned_by` 沿用被驳回那一行；批量里不在本项目的文件 404（details.ids 是 file_id）；撤回通过先查状态 409 再查是不是自己通过的 403 `not_assignee`；驳回原因个数按请求算、不超过项目列表长度和 64、之后去重；日志 `skipped_reviewer` 写原审核人的显示名；大的读查询用 `pgx.QueryExecModeDescribeExec`（EXPLAIN 确认"我的审核"走 0002 的索引）；重扫串行用进程内按 file_id 的互斥（从预检、传 S3 到提交整段在锁里）。
+- **遗留：** 重扫"版本号对不上 409"的路径测不到（重扫已串行，以后插件追加快照才会走到）；没做 10 万文件的性能测量；重扫写库失败的对象只记警告；`is_current` 取 id 最大的那一行（撤回给了不能再审的人时，原审核人的"通过"仍标为 is_current）。
+- **须知（给 M4-2、M5-2）：** 审核状态读 `folder_files.review_status`、`review_round`（常量 `folder.ReviewUnassigned/Pending/Approved/Rejected`），其他模块只读不锁，只有 review 经 `folderSvc.SetReview*` 写；审核只拿"文件树共享锁 → files 行"，不改 `archive_items.row_version`；"最近一次通过/驳回"按 `file_reviews` id 倒序，同一文件同时只有一行 open；审的是哪一版 = 最近一次 done 行的 `snapshot_id`；file_logs action assign_review、reassign_review、approve、reject、reopen、rescan，detail 带 `version_no`、`review_round`；测试辅助 `apitest/reviews_fixtures_test.go` 的 `newReviewEnv`、`fileIn(state, name)` 造任意审核状态的文件。
 ---
 
 ## M4 归类和看板
