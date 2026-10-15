@@ -16,8 +16,8 @@
 **排期：**
 1. M1-1 ∥ M1-2
 2. M1-3 ∥ M5-1
-3. M2-1
-4. M3-1 ∥ M4-1
+3. M2-1 ∥ M4-1
+4. M3-1 ∥ M4-2
 5. M5-2
 6. M5-3 服务端验收 → 向用户报告
 7. M6 → M7
@@ -55,7 +55,7 @@
 - **完成标志：** 单元测试覆盖样本文件的解析结果、名称规则、模板的合法与非法写法。
 - **先读：** requirements 5.3、5.5、5.6、5.9；上一版 `../bak/doclite-v3/server/crates/doclite-infra/src/images/` 只作规则参考。
 
-### [~] M1-3 项目和授权、存储配置、预签名、实时通道
+### [x] M1-3 项目和授权、存储配置、预签名、实时通道（commit efb9b7f）
 - **范围：** 项目和授权（5.3，含版本检查 `expected_updated_at`、建项目时建根文件夹和归类根）；存储配置（5.4：加密密钥、测试连接、默认、状态）；首次启动登记默认存储；预签名（5.7：按天取整的签名时间、`public_endpoint`）；项目授权检查（4）；实时通道 `GET /api/projects/{pid}/stream`（7：保活、复核会话、resync；事件总线供后面的模块发事件）。
 - **完成标志：** API 测试覆盖以上；截图脚本 `m0-storage.mjs`、`m1-projects.mjs` 通过。
 - **前置：** M1-1。
@@ -68,11 +68,22 @@
   - `archiveno`：`Parse(template) (*Template, error)`（错误以"档号模板不对："开头）、`Render(chain []Node, itemNo int) (archiveNo string, missing []CategoryType)`、`Levels()`、`Separators()`、`ItemNoWidth()`、`NearestCode()`、`DefaultTemplate`、`FallbackSeparators`、`CategoryType` 常量、`AssignableTypes`、`Label()`。
   - imagehdr 里的 IFD 读取没导出；M5-1 需要压缩方式、条带等细节时扩展或自己读。
   - **遗留：** `m1-accept.mjs` 还自己调 gen-samples（M5-3 改）；bak 里的 gen-samples 要用已编译好的 `target/release/examples/gen-samples`（搬家后 cargo 重新编译会失败）；JPEG 段之间的多余字节按读不出来处理（遇到真实扫描件这样写再放宽）。
+- **结果：** 三项检查通过；API 测试 28 个、单元测试新增 5 个（events 和 stream 加 `-race` 也通过）；`m0-storage.mjs` 3/3、`m1-projects.mjs` 6/6；`m0.mjs` 12/13（reviewer-nav 只缺 M3-1 的 `GET /api/me/reviews`、`GET /api/projects/{pid}/review-settings`）。依赖 aws-sdk-go-v2 v1.47.3、credentials、service/s3、smithy-go（Apache-2.0）。doclite_dev 现在有默认存储"SeaweedFS（随系统部署）"（前缀 `doclite/`）和 DEMO-A、DEMO-B。
+- **自定细节：** `expected_updated_at` 用 `time.Equal` 比较（换时区相同、截到毫秒不同）；项目改名加锁顺序 归类树锁（共享）→ 归类根行 → 文件树锁（共享）→ 项目行 → 根文件夹，发 `folders.changed`（根文件夹）；删项目只写 `projects.deleted_at`；PATCH 忽略 `project_code`；settings 存原文、读时补默认、已知键校验（错误以"settings 不对："开头，著录项带 `item_fields[i]`）；授权每类 ≤ 1000，不存在的 id 400 `details.ids`；密文 `0x01|key_id|nonce|密文+tag`，AAD 绑定行 id；存储写操作进程内互斥；测试连接用自己签的原生 HTTP 请求。**坑：SDK 的 v4 签名器按"access_key + 日期"缓存派生密钥、不看 secret_key，共用签名器会拿到旧密钥的签名——每次签名都要新建签名器。**
+- **遗留：** `s3.PresignGet` 还不能带 `response-content-disposition`（M5-2 扩展）；SDK 客户端每次新建、没有缓存；分片上传没做（`Put` 要 `io.ReadSeeker`）；`reject_reasons` 读时"空列表按默认"留给 M3-1。
+- **须知（后面所有任务）：**
+  - **提交后发事件：** `s.events.InTx(ctx, s.pool, func(tx pgx.Tx, out *events.Pending) error { …; out.Add(events.FilesChanged(pid, folderIDs, fileIDs)); return nil })`；不在事务里的用 `bus.Publish(...)`。构造函数 `FoldersChanged(pid, ids...)`、`FilesChanged(pid, folderIDs, fileIDs)`（> 500 只带 folder_ids）、`CatalogChanged(pid, catIDs, itemIDs)`（无条目输出 `[]`，> 500 不带）、`ExportChanged(pid, ids...)`、`Resync(pid)`。
+  - **项目授权：** `g.InProject(g.AnyMenu(auth.MenuX), auth.PathProject("pid"))`；资源 id 参数时自己写 `func(r *http.Request) (uuid.UUID, error)` 反查项目（不存在或已删除 404）；handler 里 `auth.ProjectID(ctx)`；请求体带项目用 `authSvc.CheckProjectAccess(ctx, uid, pid)`，批量用 `authSvc.AccessibleProjects(ctx, uid, ids)`。
+  - **树锁：** `project.LockFileTree(ctx, tx, pid, exclusive)`、`project.LockCatalogTree(...)`（事务级咨询锁 6001、6002，键是 pid 的 FNV-32），顺序见 `project/locks.go` 注释和 requirements 3.6。
+  - **存储：** `storageSvc.DefaultTarget(ctx)` → `{ProfileID, PathPrefix, URLExpireHours, Client}`（没有默认 409 `storage_unavailable`）；写快照的事务里先 `storageSvc.LockForSnapshot(ctx, tx, profileID)`（不再是 active 默认 409 `storage_changed`）；`storageSvc.Client(ctx, profileID)`；`s3.Client` 有 `Put`（`io.ReadSeeker`，可设 ContentType、CacheControl、Metadata）、`Get`、`Delete`、`List`、`DeletePrefix`。
+  - **预签名：** `s3.PresignGet(cfg, key, urlExpireHours, now)`、`s3.SignTime(now)`、`s3.PresignExpiry(h)`；快照用 `storageSvc.ImageURLs(ctx, []storage.ObjectRef{...})` → 带 `cover_url`、`original_url`、`url_expires_at`、`url_error?` 的结构，可以直接嵌进 batch、snapshots 的响应。
+  - **给 M4：** `project.EffectiveSettings`、`IsValidDateValue`、`CheckTextValue`、`DefaultTextMaxLength`、`MaxTextMaxLength`、`TitleKey`、`DefaultRejectReasons`。
+  - **apitest：** `env.UseS3()` → `(profileID, prefix)`；`S3Client(t)`；`S3Prefix(t)`（结束时清理前缀）；`PutObject`、`env.CreateProject(code)`、`env.GrantProject(pid, users...)`；`openStream`、`openStreamStatus`；`NewEnv(t, fastStream)`。
 ---
 
 ## M2 文件目录和上传
 
-### [ ] M2-1 文件目录、上传、图片信息、日志
+### [~] M2-1 文件目录、上传、图片信息、日志
 - **范围：** 文件夹树和列表（children）、新建、改名、备注、移动、复制、删除、批量移动删除（5.5）；上传（5.6：multipart 字段顺序、流式写临时文件和 sha256、文件头、封面校验、查重和断网重试、预检 `files:check`、内容锁）；`files/batch`、`snapshots`（5.7）；文件日志；`files.changed`、`folders.changed` 事件。重扫接口放到 M3-1。
 - **完成标志：** API 测试覆盖主流程和主要错误码；**并发**：同内容并发上传只入库一个；截图脚本 `m1-files.mjs`、`m1-organize.mjs`（浏览器上传部分）通过。
 - **前置：** M1-2、M1-3。
@@ -92,12 +103,17 @@
 
 ## M4 归类和看板
 
-### [ ] M4-1 归类树、档号、条目、挂接、归类信息、看板
-- **范围：** requirements 5.9 全部（节点、档号和件号含撞号规则、条目状态和著录校验、定稿解锁和批量定稿、挂接和页序、删除条目、归类信息、catalog-settings、按新模板重新生成）和 5.10 看板；`catalog.changed` 事件（7）。
-- **完成标志：** API 测试覆盖条目状态表、档号生成和撞号、挂接的主要错误码；**并发**：两个条目抢同一个文件只有一个成功、审核和挂接同时进行不互相等（加锁顺序见 3.6）；截图脚本 `m3-catalog.mjs`、`m3-workbench.mjs`、`m3-dashboard.mjs`、`m3-catalog-info.mjs`、`m3-catalog-settings.mjs` 通过。
-- **前置：** M2-1（和 M3-1 并行）。
-- **先读：** requirements 3.6、5.9、5.10、7。
+### [~] M4-1 归类树、档号、条目、著录、定稿
+- **范围：** requirements 5.9 里不涉及文件的部分：节点（增删改移、编码和类型、按需加载）、档号和件号（含撞号规则、按新模板重新生成、空档号原因）、条目（增删改移、状态、著录校验、旧值规则、定稿和解锁、批量定稿）、`catalog-settings`；`catalog.changed` 事件（7）。删除条目、定稿前置里"≥ 1 页""全部页通过"先按"没有挂接行"处理（挂接在 M4-2）。
+- **完成标志：** API 测试覆盖条目状态表、档号生成和撞号、著录校验；截图脚本 `m3-catalog.mjs` 里不涉及挂接的部分通过（有挂接的步骤 M4-2 再跑）。
+- **前置：** M1-3（和 M2-1 并行）。
+- **先读：** requirements 3.6、5.9、7。
 
+### [ ] M4-2 挂接、页序、归类信息、看板
+- **范围：** requirements 5.9 的"挂接"（PUT files、新建条目带 file_ids、删除条目一并移出、日志、reorder 审计）、"归类信息"（placements、`files/{fid}/catalog`）、定稿前置里和页相关的条件、5.10 看板。
+- **完成标志：** API 测试覆盖挂接的主要错误码；**并发**：两个条目抢同一个文件只有一个成功、审核和挂接同时进行不互相等（加锁顺序见 3.6）；截图脚本 `m3-catalog.mjs`、`m3-workbench.mjs`、`m3-dashboard.mjs`、`m3-catalog-info.mjs`、`m3-catalog-settings.mjs` 通过。
+- **前置：** M4-1、M2-1（M3-1 合入后再跑审核相关的截图）。
+- **先读：** requirements 3.6、5.9、5.10、7。
 ---
 
 ## M5 导出
@@ -120,7 +136,7 @@
 ### [ ] M5-2 导出任务、执行、下载
 - **范围：** requirements 5.11 其余部分：范围和预检、冻结、交付后变更、补交、取消、后台任务执行器（单服务器版：心跳查取消，启动时把 running 的放回队列，重试和退避）、下载、到期清理；`export.changed` 事件。
 - **完成标志：** API 测试覆盖预检、冻结（建任务后重扫不影响这次导出）、交付后变更的几种原因、执行和下载的端到端（下载 zip 核对清单和明细）；**并发/恢复**：执行中重启 server 后能接着完成；截图脚本 `m4-export.mjs` 通过。
-- **前置：** M4-1、M5-1。
+- **前置：** M4-2、M5-1。
 - **先读：** requirements 3.6、5.11、7。
 
 ### [ ] M5-3 服务端验收
