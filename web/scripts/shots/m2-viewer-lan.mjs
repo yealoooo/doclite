@@ -8,7 +8,7 @@
 // 断言：
 // - window.isSecureContext 为 false，crypto.subtle、crypto.randomUUID 都是 undefined；地址不是 localhost、127.0.0.1；
 // - /files 右键"查看原图"打开 LZW 的 TIFF，Worker 下载、解码，原图画完（data-state=ready、data-mode=worker）；
-//   再切到 G4 的 TIFF，同样画完；JPEG（整图模式）也能显示。
+//   再切到 G4 的 TIFF，同样画完（先后按文件夹里的顺序）；JPEG（整图模式）也能显示。
 // 样本同 m2-viewer.mjs（DEMO-A 的"M2-3 分块冒烟"、M1 验收的 JPEG），不改数据。
 
 import { assert, openFolder, openViewer, settle, viewerContext, waitViewer } from '../lib/viewer-shots.mjs'
@@ -51,18 +51,23 @@ export default {
         assert(d.state === 'ready' && d.mode === 'image', `局域网地址上 JPEG 应该能显示：${d.state} ${d.mode}`)
         console.log('  断言 局域网地址上 JPEG：整图模式画完')
 
-        // TIFF：LZW → 切到 G4（同一个文件夹，"下一个"）。
+        // TIFF：G4 和 LZW 在同一个文件夹，先打开排在前面的那个，再"下一个"切到另一个（M5-3：文件夹重建过时两个的
+        // 先后可能和上一版的数据不同，按 sort_no 定先后，原来写死了 G4 在前）。
+        const tiffs = [
+          { name: 'tiff-g4-1bit.tif', label: 'G4' },
+          { name: 'tiff-lzw-rgb.tif', label: 'LZW' },
+        ].sort((x, y) => ctx.files[x.name].sort_no - ctx.files[y.name].sort_no)
         await openFolder(page, origin, ctx.files['tiff-lzw-rgb.tif'].folder_id)
-        await openViewer(page, 'tiff-g4-1bit.tif')
+        await openViewer(page, tiffs[0].name)
         d = await waitViewer(page, ['ready', 'failed', 'too_large', 'unsupported'])
-        assert(d.state === 'ready' && d.mode === 'worker', `局域网地址上 G4 TIFF 应该能显示：${d.state} ${d.mode}`)
-        console.log('  断言 局域网地址上 G4 TIFF：Worker 解码、画完')
+        assert(d.state === 'ready' && d.mode === 'worker', `局域网地址上 ${tiffs[0].label} TIFF 应该能显示：${d.state} ${d.mode}`)
+        console.log(`  断言 局域网地址上 ${tiffs[0].label} TIFF：Worker 解码、画完`)
         await page.click('[data-testid=viewer-next]')
         await page.waitForFunction(() => document.querySelector('[data-testid=image-viewer]')?.dataset.state === 'loading', { timeout: 5000, polling: 20 }).catch(() => {})
         d = await waitViewer(page, ['ready', 'failed', 'too_large', 'unsupported'])
         const title = await page.$eval('[data-testid=viewer-title]', (el) => el.textContent)
-        assert(title === 'tiff-lzw-rgb.tif' && d.state === 'ready' && d.mode === 'worker', `局域网地址上 LZW TIFF 应该能显示：${title} ${d.state} ${d.mode}`)
-        console.log('  断言 局域网地址上 LZW TIFF：Worker 解码、画完')
+        assert(title === tiffs[1].name && d.state === 'ready' && d.mode === 'worker', `局域网地址上 ${tiffs[1].label} TIFF 应该能显示：${title} ${d.state} ${d.mode}`)
+        console.log(`  断言 局域网地址上 ${tiffs[1].label} TIFF：Worker 解码、画完`)
         await settle(page)
       },
       delay: 400,

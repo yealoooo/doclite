@@ -27,9 +27,14 @@ const RUN_TAG = `doclite-shots ${Date.now()} ${Math.random().toString(36).slice(
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
-/** 往样本里加一段注释，图片本身不变。 */
+/** 往样本里加一段这次运行的注释，图片本身不变。 */
 function withRunTag(name, buf) {
-  const tag = Buffer.from(`${RUN_TAG} ${name}`, 'latin1')
+  return addComment(buf, `${RUN_TAG} ${name}`)
+}
+
+/** 往图片里加一段注释（只用 ASCII），图片本身不变。 */
+function addComment(buf, text) {
+  const tag = Buffer.from(text, 'latin1')
   if (buf[0] === 0xff && buf[1] === 0xd8) {
     // JPEG：在 SOI 和紧跟的 APPn 段（JFIF、EXIF）之后插一个 COM 段。
     let i = 2
@@ -72,6 +77,14 @@ export async function sample(name) {
   const buf = loadSamples().get(name)
   if (!buf) throw new Error(`server/testdata/samples 里没有 ${name}（有：${[...loadSamples().keys()].join('、')}）`)
   return buf
+}
+
+/**
+ * 同一个样本的第 n 个变体：在 `sample(name)` 的基础上再加一段注释，图片不变、字节各不相同（M5-3：m1-accept 原来用
+ * gen-samples --pages 3 现场生成多页，改为读提交的样本时用它造"第 1–3 页"，免得被判为内容重复）。
+ */
+export async function sampleVariant(name, n) {
+  return addComment(await sample(name), `${RUN_TAG} ${name} page ${n}`)
 }
 
 /** 合成扫描页（PNG，A4，dpi 写进 pHYs）和按封面规格画的 JPEG 封面。 */
@@ -143,7 +156,11 @@ export async function injectFiles(page, mode, files) {
   )
 }
 
-/** 等最新的上传任务结束，返回它每一项的状态（来自结果列表上的 data 属性）。 */
+/**
+ * 等最新的上传任务结束，返回它每一项的状态（来自结果列表上的 data 属性）。
+ * 明细是虚拟列表（UploadJobItems，最高 400 像素），一次只渲染看得见的几十行：从头到尾滚一遍，按行号收齐全部行，
+ * 最后滚回顶部（M5-3：21 个文件时最后一行没渲染，原来只读 DOM 里已有的行会漏掉）。
+ */
 export async function waitUploadDone(page, timeout = 120000) {
   await page.waitForSelector('[data-testid=upload-job]', { timeout: 10000 })
   await page.waitForFunction(
@@ -153,8 +170,9 @@ export async function waitUploadDone(page, timeout = 120000) {
     },
     { timeout },
   )
-  return page.$$eval('[data-testid=upload-job]:first-of-type [data-testid=upload-item]', (els) =>
-    els.map((e) => ({
+  return page.evaluate(async () => {
+    const job = document.querySelector('[data-testid=upload-job]')
+    const read = (e) => ({
       name: e.dataset.name,
       path: e.dataset.path,
       state: e.dataset.state,
@@ -165,8 +183,29 @@ export async function waitUploadDone(page, timeout = 120000) {
       warnings: e.dataset.warnings ? e.dataset.warnings.split(',') : [],
       errorCode: e.dataset.errorCode || null,
       text: e.textContent.replace(/\s+/g, ' ').trim(),
-    })),
-  )
+    })
+    const box = job.querySelector('[data-testid=upload-items]')
+    if (!box) return [...job.querySelectorAll('[data-testid=upload-item]')].map(read)
+    const rows = new Map()
+    const collect = () => {
+      for (const w of box.querySelectorAll('[data-index]')) {
+        const e = w.querySelector('[data-testid=upload-item]')
+        if (e) rows.set(Number(w.dataset.index), read(e))
+      }
+    }
+    const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    box.scrollTop = 0
+    await frames()
+    collect()
+    for (let guard = 0; box.scrollTop + box.clientHeight < box.scrollHeight - 1 && guard < 10000; guard++) {
+      box.scrollTop += Math.max(20, Math.floor(box.clientHeight / 2))
+      await frames()
+      collect()
+    }
+    box.scrollTop = 0
+    await frames()
+    return [...rows.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v)
+  })
 }
 
 /** JPEG 的 SOF 宽高（不对时返回 null）。 */

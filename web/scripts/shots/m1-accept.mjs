@@ -8,37 +8,31 @@
 // 要用 admin 读各项目的授权（INIT_ADMIN_PASSWORD，默认 change-me-now）。
 //
 // - accept-upload：在 DEMO-A 根下建临时文件夹"M1-14 浏览器上传和整理 <时间>"，用"上传文件夹"（注入合成的
-//   File 列表，和选择框同一段代码）传 gen-samples --pages 3 的样本：JPEG（彩色、灰度）、PNG（带 alpha、1 位）、
-//   TIFF（无压缩、LZW、CCITT G4），各 3 页，分在 JPEG、PNG、TIFF 三个子文件夹里。断言全部入库、都带上了封面，
+//   File 列表，和选择框同一段代码）传 server/testdata/samples 里的样本：JPEG（彩色、灰度）、PNG（带 alpha、1 位）、
+//   TIFF（无压缩、LZW、CCITT G4），各 3 页（同一个样本加不同的注释，字节不同），分在 JPEG、PNG、TIFF 三个子文件夹里。断言全部入库、都带上了封面，
 //   batch 的封面是 JPEG、长边 ≤ 400、方向和原图一致。
 // - accept-organize：把 PNG 移到 JPEG 下面，删除 TIFF 里的一个文件，再删除 JPEG（连同 PNG）。断言：路径编码换了
 //   前缀；目录树和计数正确；batch 把删掉的文件都放进 missing；被删文件的日志接口返回 404，剩下的文件日志只有 upload。
 //   最后一行 `ACCEPT_IDS {...}` 给外面的 SQL 核对（file_logs、audit_logs、path_code）。after 里软删除临时文件夹。
 // - accept-demo-folder / accept-demo-box：热文件夹演示的文件夹（默认 DEMO-A 根下最新的"M1 验收演示 …"，可用
-//   ACCEPT_DEMO 指定名字）有 5 个盒，每盒 100 页；打开第 3 个盒看封面。
+//   ACCEPT_DEMO 指定名字）有 5 个盒，每盒 100 页；打开第 3 个盒看封面。没有热文件夹演示的数据时可以用 seed:files 造
+//   （M5-3：npm run seed:files -- --base … --user demo_scanner:demo123456 --project DEMO-A --folder "M1 验收演示 <日期>/盒 01"
+//   --count 100，盒 01–05 各一次）。
 // - accept-perm-scanner / -reviewer / -cataloger：三个人看到的项目不同（切换器截图）；直接调别人项目的接口返回 403，
 //   审核员能进的项目正好是授权给他的（个人授权或他的角色被授权，按 admin 读到的授权算；M3-8 起不再写死"只有 DEMO-B"），
 //   demo_noproject 用 batch 取 DEMO-A 的文件全部落在 missing（batch 登录即可，只返回能进的项目里的文件）。截图名
 //   accept-perm-cataloger 不变。
 //
-// gen-samples 优先用已编译的 release 示例（shell/src-tauri/target/release/examples/gen-samples），没有时
-// `cargo run --release --example gen-samples`（第一次要编译几分钟）。样本放在 SHOTS_TMP（默认系统临时目录），用完删掉。
-
-import { execFile } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
+// 样本原来每次现场调上一版的 gen-samples（Rust）生成；M5-3 起读仓库里的 server/testdata/samples（见
+// scripts/lib/upload-samples.mjs），不再依赖 Rust 工具链。
 
 import { apiLogin } from '../lib/m3-demo.mjs'
-import { checkCovers, injectFiles, waitUploadDone } from '../lib/upload-samples.mjs'
+import { checkCovers, injectFiles, sampleVariant, waitUploadDone } from '../lib/upload-samples.mjs'
 
 const demo = 'demo123456'
 const adminUser = process.env.INIT_ADMIN_USERNAME ?? 'admin'
 const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
 const IDLE = 'networkidle2'
-const SHELL_DIR = fileURLToPath(new URL('../../../shell/src-tauri/', import.meta.url))
 
 /** 跨截图共用的状态（截图按清单顺序执行）。 */
 const state = {}
@@ -106,25 +100,16 @@ async function openSwitcher(page) {
   await page.waitForSelector('[data-testid=project-option]')
 }
 
-/** gen-samples --pages 3，返回 Map<文件名, Buffer>。 */
-async function genSamples3() {
-  const dir = mkdtempSync(path.join(process.env.SHOTS_TMP ?? os.tmpdir(), 'm1-accept-samples-'))
-  try {
-    const seed = String(Date.now() % 1_000_000_000)
-    const bin = path.join(SHELL_DIR, 'target/release/examples/gen-samples')
-    const [cmd, args] = existsSync(bin)
-      ? [bin, []]
-      : ['cargo', ['run', '--quiet', '--release', '--example', 'gen-samples', '--']]
-    await promisify(execFile)(cmd, [...args, '--out', dir, '--pages', '3', '--seed', seed], {
-      cwd: SHELL_DIR,
-      maxBuffer: 16 * 1024 * 1024,
-    })
-    const map = new Map()
-    for (const name of readdirSync(dir)) map.set(name, readFileSync(path.join(dir, name)))
-    return map
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
+const EXT = { jpeg: 'jpg', png: 'png', tiff: 'tif' }
+
+/** 每种样本 3 页（文件名同 gen-samples --pages 3：`<样本>-p<n>.<扩展名>`），返回 Map<文件名, Buffer>。 */
+async function samples3() {
+  const map = new Map()
+  for (const stem of Object.values(KINDS).flat()) {
+    const ext = EXT[stem.split('-')[0]]
+    for (let n = 1; n <= 3; n++) map.set(`${stem}-p${n}.${ext}`, await sampleVariant(`${stem}.${ext}`, n))
   }
+  return map
 }
 
 const KINDS = {
@@ -156,7 +141,7 @@ export default {
           })
         ).data
         state.temp = temp
-        const samples = await genSamples3()
+        const samples = await samples3()
         const top = '浏览器样本'
         const files = []
         for (const [sub, stems] of Object.entries(KINDS)) {

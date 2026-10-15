@@ -86,8 +86,15 @@ const OUT = '../docs/screenshots/m2'
 const outArg = process.argv.indexOf('--out')
 const OUT_DIR = path.resolve(outArg > 0 ? process.argv[outArg + 1] : OUT)
 const SHELL = process.env.M2_ACCEPT_SHELL ?? ''
+/**
+ * 壳模式的两步（m2-accept-review-shell、m2-accept-round2-shell）注入的是 Tauri IPC 的模拟；M6-1 起页面按 wails: 协议判断
+ * 是不是在壳里，这个模拟不再起作用（M6-4 换成 Wails 的写法）。M2_ACCEPT_SHELL_MOCK=1 才按原样跑；默认（M5-3）这两步改在
+ * 浏览器里由同一个人做同样的键盘审核和接口核对，只是不核对分块和 prepare_tiles，后面的步骤照常接着做。
+ */
+const SHELL_MOCK = process.env.M2_ACCEPT_SHELL_MOCK === '1'
 const BENCH_FOLDER = 'M2-3 分块实测'
-const BIG_G4 = 'a4-600-g4.tif'
+// M2-3 分块实测 重建过时 G4 样本的名字可能不同（M5-3 时 doclite_dev 里是 300 DPI 的 a4-g4-1bit.tif），用 M2_ACCEPT_BIG_G4 指定。
+const BIG_G4 = process.env.M2_ACCEPT_BIG_G4 ?? 'a4-600-g4.tif'
 const BIG_200 = 'a3-600-none-rgb.tif'
 
 /** 驳回：键（1–9 按项目原因列表的顺序：模糊、倾斜、裁切过度、污渍、缺页、重页、方向、其他）、原因代码、说明。 */
@@ -639,6 +646,19 @@ function step(run, name) {
 // ---------- 壳模式（IPC 和 img 协议模拟，同 m2-review.mjs 的 shellShot） ----------
 
 function shellModeShot(name, user, run) {
+  if (!SHELL_MOCK) {
+    return {
+      name,
+      user,
+      path: '/review',
+      waitFor: '[data-testid=review-page]',
+      async prepare(page) {
+        console.log('  （没有设置 M2_ACCEPT_SHELL_MOCK=1：壳模式这一步改在浏览器里做，不核对分块）')
+        await run(page, await context(page), { browser: true })
+      },
+      delay: 400,
+    }
+  }
   return {
     name,
     path: '/login',
@@ -697,7 +717,7 @@ function shellModeShot(name, user, run) {
       await loginPage(page, origin, user, demoPassword)
       await page.waitForSelector('[data-testid=side-nav]')
       const ctx = await context(page)
-      await run(page, ctx)
+      await run(page, ctx, { browser: false })
     },
     delay: 400,
   }
@@ -724,7 +744,7 @@ let reassignUnassignedDone = false
 
 export default {
   out: OUT,
-  accounts: { [MANAGER]: demoPassword, [REV1]: demoPassword, [SCANNER]: demoPassword, [admin]: adminPassword },
+  accounts: { [MANAGER]: demoPassword, [REV1]: demoPassword, [REV2]: demoPassword, [SCANNER]: demoPassword, [admin]: adminPassword },
   waitUntil: IDLE,
   shots: [
     {
@@ -835,21 +855,28 @@ export default {
         await rest(page)
       },
     },
-    shellModeShot('m2-accept-review-shell', REV2, async (page, ctx) => {
+    shellModeShot('m2-accept-review-shell', REV2, async (page, ctx, { browser }) => {
       const items = await openItems(ctx, ctx.rev2, ctx.demo.id)
       assert(items.length === 20, `${REV2} 应有 20 个待审：${items.length}`)
-      await shellOpenTwice(page, ctx, 'open')
+      if (browser) await openReview(page, ctx.demo.id, { tab: 'open' })
+      else await shellOpenTwice(page, ctx, 'open')
       await rest(page)
       const ms = await keyboardReview(page, items, REJECTS_REV2)
       state.timings.rev2 = ms
       const mode = await page.$eval('[data-testid=image-viewer]', (e) => e.dataset.mode).catch(() => null)
-      const calls = await page.evaluate(() => window.__prepareCalls)
-      const prepared = new Set(calls.map((c) => c.fileId))
-      const nextOnes = items.slice(1).filter((f) => prepared.has(f.file_id)).length
-      assert(nextOnes >= items.length - 3, `给下一张调 prepare_tiles 的只有 ${nextOnes} 次：${JSON.stringify(calls).slice(0, 300)}`)
+      let nextOnes = null
+      if (!browser) {
+        const calls = await page.evaluate(() => window.__prepareCalls)
+        const prepared = new Set(calls.map((c) => c.fileId))
+        nextOnes = items.slice(1).filter((f) => prepared.has(f.file_id)).length
+        assert(nextOnes >= items.length - 3, `给下一张调 prepare_tiles 的只有 ${nextOnes} 次：${JSON.stringify(calls).slice(0, 300)}`)
+      }
       const v = await verifyReviewed(ctx, items, REJECTS_REV2, REV2)
       assert(v.approved === 17 && v.rejected === 3, `通过 ${v.approved}、驳回 ${v.rejected}`)
-      console.log(`  ✓ ${REV2} 在壳模式里只用键盘审完 20 页（${(ms / 1000).toFixed(1)} 秒，查看器 ${mode} 模式，给下一张提前切块 ${nextOnes} 次）：通过 17、驳回 3；接口核对同上`)
+      console.log(
+        `  ✓ ${REV2} 在${browser ? '浏览器（代替壳模式）' : '壳模式'}里只用键盘审完 20 页（${(ms / 1000).toFixed(1)} 秒，查看器 ${mode} 模式` +
+          `${browser ? '' : `，给下一张提前切块 ${nextOnes} 次`}）：通过 17、驳回 3；接口核对同上`,
+      )
       await waitNoToast(page)
       await rest(page)
     }),
@@ -975,14 +1002,18 @@ export default {
         await rest(page)
       },
     },
-    shellModeShot('m2-accept-round2-shell', REV2, async (page, ctx) => {
+    shellModeShot('m2-accept-round2-shell', REV2, async (page, ctx, { browser }) => {
       const items = await openItems(ctx, ctx.rev2, ctx.demo.id)
       const want = ['盒 03/IMG_0004.png', '盒 03/IMG_0010.png']
       assert(JSON.stringify(items.map((f) => f.key)) === JSON.stringify(want), `${REV2} 的第 2 轮待审：${items.map((f) => f.key)}`)
-      await shellOpenTwice(page, ctx, 'open')
+      if (browser) await openReview(page, ctx.demo.id, { tab: 'open' })
+      else await shellOpenTwice(page, ctx, 'open')
       for (const f of items) {
-        const r = await compareAndApprove(page, ctx, f, REV2, REJECTS_REV2[f.key], { mode: 'tiles', shot: f.key === FILE_B ? 'm2-accept-round2-shell-compare' : null })
-        console.log(`  ✓ 壳模式 ${f.key}：${r.banner}；C 对比（两侧分块）左「${r.left}」右「${r.right}」；A 通过 v2`)
+        const r = await compareAndApprove(page, ctx, f, REV2, REJECTS_REV2[f.key], {
+          mode: browser ? undefined : 'tiles',
+          shot: f.key === FILE_B ? 'm2-accept-round2-shell-compare' : null,
+        })
+        console.log(`  ✓ ${browser ? '浏览器（代替壳模式）' : '壳模式'} ${f.key}：${r.banner}；C 对比${browser ? '' : '（两侧分块）'}左「${r.left}」右「${r.right}」；A 通过 v2`)
       }
       await waitNoToast(page)
       await rest(page)

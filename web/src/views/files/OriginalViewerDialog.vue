@@ -22,7 +22,9 @@ import { openExternal, shellErrorMessage } from '@/lib/shell'
 import type { ViewerImageInfo } from '@/lib/viewer/load-original'
 import { useImageInfoStore } from '@/stores/image-info'
 
-const props = defineProps<{
+// 布尔型的 prop 不传时 Vue 按 false 处理，canReadLogs 的默认值要显式写成 true（M5-3：原来 /files 的对比一直不取日志，
+// 左侧只显示"上一版"、没有驳回原因）。
+const props = withDefaults(defineProps<{
   /** 当前文件夹里的文件（按列表的顺序），左右切换在它们之间。 */
   files: FileEntry[]
   /** 打开时看哪个文件。 */
@@ -32,7 +34,7 @@ const props = defineProps<{
    * 没有 files 菜单的人传 false，不调 `/logs`（403 forbidden 会走全局处理、跳无权提示页），按前一版对比、不显示原因。
    */
   canReadLogs?: boolean
-}>()
+}>(), { canReadLogs: true })
 const open = defineModel<boolean>('open', { required: true })
 
 const images = useImageInfoStore()
