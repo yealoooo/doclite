@@ -178,7 +178,7 @@
 
 **做法：** 客户端放在 `client/`（Go 模块 `doclite/client`，加进 `go.work`），界面就是 `web/` 的构建产物。前端和壳之间的接口沿用上一版：约 26 个命令（`shell_info`、`probe_server`、`check_server`、`set_server`、`api_fetch`、`api_stream`、`api_stream_cancel`、`open_external`、`tray_status`、`upload_*`、`hotfolder_*`、`pick_and_enqueue_upload`、`pick_and_rescan`、`cache_*`、`prepare_tiles`、`smoke_*`）、1 个事件（`rescan:progress`）、1 个取图协议（上一版是 `img://`）。前端只改适配层（`web/src/lib/shell.ts`、`stores/shell.ts`、`api/http.ts`、`api/stream.ts`、`lib/image-url.ts` 等），去掉 `@tauri-apps/api`，换成 Wails 的前端运行时；其余页面不动。需求见 requirements 第 6 节。
 
-**排期：** M6-1 → M6-2 ∥ M6-3 → M6-4。
+**排期：** M6-1 → M6-2 ∥ M6-3 → M6-3b → M6-4。
 
 ### [x] M6-1 客户端骨架、连接和会话代理、托盘（commit bd5d915）
 - **范围：** `client/` 的 Wails v3 应用：窗口加载 `web/dist`；单实例（再启动聚焦已有窗口）；数据目录（`~/Library/Application Support/Doclite/`、`%LOCALAPPDATA%\Doclite\`）、设置、日志按天滚动；首次启动填服务器地址（`probe_server`、`check_server`、`set_server`）；**会话代理**：`api_fetch`、`api_stream`（SSE 逐块转发）、`api_stream_cancel`——只许已配置 server 的 `/api/` 路径，Cookie 由壳保存（退出或换服务器清空），页面拿不到令牌，壳加 `X-Client-Type: desktop`、`X-Client-Version`；`shell_info`；`open_external`（只许 http、https）；导航保护（页面不能跳到外部地址）；页面里的 HTML5 拖放要能用（壳不接管文件拖放）；托盘（状态提示、打开、退出；关窗缩到托盘，只有"退出"真退出）；`--smoke` 的基础步骤（登录、`me`、菜单、实时通道、托盘、界面）。前端适配层改成调 Wails。
@@ -203,10 +203,19 @@
 - **结构：** `client/internal/upload/`（纯 Go，不依赖 Wails）：`store.go`（本机库 SQLite，按状态计数、按"服务器 + 目标 + 子路径"分组取自然顺序队首）、`engine.go`、`process.go`、`hotfolder.go`、`settle.go`、`cover.go`、`multipart.go`、`api.go`、`rescan.go`，`lock_*`（`upload-queue.lock`，flock/LockFileEx，一个数据目录一个进程）、`attr_*`（隐藏、系统属性，独占打开）；`client/internal/shell/{upload,hotfolder,rescan,upload_tray}.go`；`proxy/attach.go`（壳自己发的请求和页面共用 Jar、请求头）。
 - **遗留（Windows 上验证，M7）：** 独占打开的判断对扫描软件写入的影响；隐藏和系统属性；LockFileEx；fsnotify 的目录句柄对删除、改名的影响；对话框的文件类型筛选；中文用户名和长路径；托盘提示 127 字上限和菜单改文字后刷新。**其他：** macOS kqueue 每个文件一个句柄，几千个文件以上可能用完；426 暂停没实测；被拒绝的子文件夹不记账；换服务器后热文件夹最多 15 秒内停下；封面一次一张、解码内存上限 512 MiB；对话框相关的路径和托盘"暂停 / 继续"没有自动化测试。
 - **须知（给 M6-4）：** smoke 重扫件用 `DOCLITE_SMOKE_RESCAN_PATH`、`DOCLITE_SMOKE_RESCAN_FILE_ID`、`DOCLITE_SMOKE_RESCAN_PROJECT`、`DOCLITE_SMOKE_RESCAN_EXPECT=incomplete`（重扫件内容在项目里不能重复，可往 JPEG 里插 COM 注释区分；每跑一次 done 用掉一页已驳回的文件，「M2-7 重扫演示/盒 003/IMG_0001.png」已用掉）；不点界面跑热文件夹：在数据目录的 `upload-queue.db` 写入热文件夹配置（running=1）并放好 `cookies.json`、`settings.json`；删掉 `upload-queue.db` 就是重置队列。
-### [~] M6-3 本机图片缓存、大图切块
+### [x] M6-3 本机图片缓存、大图切块（commit 1cce987）
 - **范围：** 取图协议（Wails 下的写法实现者定，页面里的地址形式随之改 `lib/image-url.ts`）：先查本机缓存，没有用预签名 URL 下载并存下；按 snapshot_id 存；LRU（默认 2 GB）；只认来源记录；`cache_*`；大图切块 `prepare_tiles`（DZI 512、重叠 1，转正后原尺寸，JPEG 质量 90 / 1 位 PNG）；`--smoke` 的 img、img_cache、tiles、viewer 步骤。
 - **前置：** M6-1（和 M6-2 并行）。
 
+- **结果：** 检查通过（含 `GOOS=windows go vet`、imagecache 和 tiles 的 `-race`）、`npm run build`、`wails3 package`；单元测试 9 个；`--smoke` 打开 images、csp 后 cold、warm 两遍各 18 步全过（img、img_cache 8 张、tiles G4 61 块 74 ms / LZW 14 块 21 ms、viewer 只取 17/61 块、direct_blocked、csp），`DOCLITE_SMOKE_PAGES=1` 14 个页面在 CSP 下无错；200 MB 的 TIFF 取描述 1.1–1.6 s、查看器只取 388 块里的 9 块；没有抢焦点（viewer 一步也不用留给 M6-4）。`m2-viewer.mjs` 浏览器部分 10/11（`viewer-compare` 左侧标签不显示驳回原因，换回改动前的网页构建一样失败，是前端原有问题，待查）。
+- **做法：** 取图挂在资产服务器上、和页面同源（在 `spaHandler` 之前）：`/shell/img/{cover|original}/<fid>/<sid>`、`/shell/img/dzi/<fid>/<sid>`（JSON 描述）、`/shell/img/tile/<fid>/<sid>/<级>/<x>_<y>.<jpg|png>`、`/shell/img/test/probe.png`；失败返回 JSON + `X-Doclite-Error`（404/422/502/503/500）。来源记录用 `Proxy.Observe` 记 batch、snapshots 的 200 响应（内存、≤ 1 万个），命中缓存也要在记录里，登录、退出、换服务器清空。缓存 `<数据目录>/image-cache/`：`index.json`（JSON + 内存，延迟写盘）、`<fid>/<sid>.cover.jpg`、`.original.<ext>`、`.tiles/…`；默认 2 GB（100 MB–1 TB），LRU 淘汰到 90%，大于上限一半的不存；原图核对大小和 sha256（≤ 512 MiB）。切块：整张解码（image/jpeg、png、x/image/tiff），8 种方向转正，DZI 512、重叠 1，灰度彩色 JPEG 90、1 位最高级 1 位 PNG；同一快照只切一次、同时 ≤ 2 张；内存估算超过 1.5 GiB 返回 422（200 MB A3 600 DPI 实际峰值约 1 GB），120 秒超时。CSP 由资产服务器加：`script-src 'self'`、`connect-src 'self'`、`img-src 'self' data: blob:`、`style-src 'self' 'unsafe-inline'` 等。
+- **遗留：** **JPEG 压缩的 TIFF、多页 TIFF 切块返回 422（只显示封面）；M6-2 的封面生成对 JPEG 压缩的 TIFF 也不出封面** → M6-3b 补。Windows（M7）：WebView2 是否认响应头里的 CSP；大原图经资产服务器会整块进内存；被读着的文件删不掉（淘汰时残留）；自检窗口在非 Mac 上会直接显示；切块的内存峰值。其他：退出再登录那一瞬间在途的 batch 响应可能在登录后才被记下；解码做到一半不能打断；和 M6-2 封面生成在解码、转正上有重复（`tiles` 包这部分没导出）。
+- **须知（给 M6-4）：** 自检环境变量 `DOCLITE_SMOKE_CACHE`（cold/warm）、`DOCLITE_SMOKE_IMG_PROJECT`、`DOCLITE_SMOKE_IMG_FOLDER`、`DOCLITE_SMOKE_IMG_COUNT`、`DOCLITE_SMOKE_TILES_PROJECT`、`DOCLITE_SMOKE_TILES_FOLDER`、`DOCLITE_SMOKE_TILES_FILES`；推荐 `DOCLITE_DATA_DIR=<临时目录> DOCLITE_SMOKE_SERVER=… DOCLITE_SMOKE_USERNAME=admin DOCLITE_SMOKE_PASSWORD=admin123456 DOCLITE_SMOKE_IMG_PROJECT=DEMO-A DOCLITE_SMOKE_TILES_FOLDER="M6-3 切块自检" bin/Doclite.app/Contents/MacOS/Doclite --smoke`；`m2-viewer.mjs` 里壳的部分依赖 Tauri 模拟和 tiles-bench，要改写或跳过；**并行任务在 scratchpad 里要各用自己的子目录和进程名**（同名的 server 进程曾被别的任务停掉）。doclite_dev 的 DEMO-A 下有「M6-3 切块自检」（6 个样本）、「M2-3 分块实测」（含 200 MB 的 TIFF）等样本文件夹。
+
+### [~] M6-3b 客户端补：JPEG 压缩 TIFF 的封面和切块
+- **范围：** JPEG 压缩的 TIFF（compression 7，以及能定位到完整 JPEG 的旧式 6）在客户端也要能解码：把各条带或分块的 JPEG 数据（拼上 JPEGTables）交给 `image/jpeg` 解码再拼成整张，YCbCr、RGB、CMYK、灰度都要对；M6-2 的封面生成和 M6-3 的切块共用这一份解码（抽成客户端里的一个包，顺便消掉两边在解码、转正上的重复）。多页 TIFF 仍然拒绝（上传时 server 已拒）。
+- **完成标志：** 单元测试用 `server/testdata/samples/tiff-jpeg-ycbcr.tif` 和 M5-1 的 `bundle/testdata` 里 JPEG 压缩的夹具，检查封面和切块的像素（和同一页的 LZW 样本比较平均颜色）；`--smoke` 的 tiles 一步加上这张样本。
+- **前置：** M6-2、M6-3。
 ### [ ] M6-4 客户端验收（Mac）
 - **范围：** 打包的客户端连 Go server 走一遍上传（热文件夹、壳里上传）、审核看大图、归类、导出下载（交给系统浏览器）；`--smoke` 全部步骤；截图脚本里依赖壳的部分（m1-shell、m1-scan、m1-cache、m2-viewer 等）。Windows 上的验收在 M7。
 - **前置：** M6-1 到 M6-3，以及服务端 M5。
