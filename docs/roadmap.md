@@ -26,7 +26,7 @@
 
 ## M1 骨架和系统管理
 
-### [~] M1-1 server 骨架、登录会话、用户和角色
+### [x] M1-1 server 骨架、登录会话、用户和角色（commit 833976d）
 - **范围：**
   - `go.work`、`server` 模块的目录结构（按 CLAUDE.md）；
   - 配置（沿用上一版的环境变量名：`DATABASE_URL`、`LISTEN_ADDR`、`TMP_DIR`、`MASTER_KEY`、`S3_*`、`INIT_ADMIN_*`、`SESSION_TTL_HOURS`、`COOKIE_SECURE`……，日志级别改用 `LOG_LEVEL`）、`server/.env.example`；
@@ -38,6 +38,14 @@
 - **完成标志：** API 测试覆盖登录、会话、用户、角色、菜单权限；用 Go server 托管前端，跑截图脚本 `m0.mjs`（登录、导航、用户、角色）通过。
 - **先读：** CLAUDE.md；requirements 1、2、3.1、4、5.1、5.2、8；`server/migrations/0001_init.sql`；前端 `web/src/api/{http,auth,system}*.ts`、`web/src/api/types.ts`。
 
+- **结果：** 三项检查通过；API 测试 17 个（约 2 秒）+ semver 单元测试 2 个；`m0.mjs` 13 张里 12 张通过（`reviewer-nav` 要项目和"我的审核"，M1-3、M3-1 之后再跑）。依赖：pgx/v5 v5.11.0、google/uuid、x/crypto v0.55.0（**x/crypto v0.56 起要 go 1.26，加依赖用 `GOTOOLCHAIN=local go get …`，别让 go.mod 升到 1.26**）。doclite_dev 已执行 0001–0003，有 admin / admin123456 和 seed-demo 建的演示用户。
+- **自定细节：** 客户端版本检查（426、`invalid_client_version`）已做；`/api/projects` 已按授权查询；登录在 auth 的事务里写 `users.last_login_at`（跨模块例外，store 里注明）；JSON 请求体要 application/json、上限 1 MiB（413）、未知字段忽略；`/api` 下没有的路径 JSON 404、方法不对 JSON 405；时间按 UTC 输出；argon2id m=19 MiB t=2 p=1，同时计算数 = CPU 核数（2–16），排队超 5 秒 503 `busy`，登录名不存在也做占位校验；停用、重置密码同一事务撤销会话；用户、角色的写事务先锁 admin 角色那一行（防提权和"最后一个管理员"在并发下绕不过去），都写审计；`.env` 只读当前目录，`WEB_DIR` 不设就不托管网页，`RUST_LOG` 不再读（用 `LOG_LEVEL`）。迁移执行器：咨询锁 `(6000,1)`，已执行的文件核对 sha256，库里有不认识的版本拒绝启动。
+- **须知（后面所有任务）：**
+  - **路由：** 在 `app.New` 里建 Service、Handler，`xxx.NewHandler(svc).Routes(api, gate)`；Routes 里 `r.Handle("GET /api/folders/{id}", g.AnyMenu(auth.MenuScan, auth.MenuFiles), h.get)`、`g.AllMenus(...)`、`g.Public`、`g.Login`（访问控制必须给，nil 启动 panic）；当前用户 `auth.Current(ctx)`。
+  - **handler：** `func(w, r) error`；`httpx.PathUUID(r, "id")`、`httpx.ParsePage(r)`、`httpx.ReadJSON(r, &req)`、`httpx.WriteJSON(w, 201, v)`、`httpx.NewPage(items, total, page)`。
+  - **错误：** `httpx.Invalid(...)`、`httpx.NotFound("文件夹")`、`httpx.Conflict("tree_cycle", "…")`、`httpx.AdminRequired`、`httpx.NewError(...).WithDetails(...)`；其他错误一律 500 `internal`（细节只进日志）。
+  - **数据库：** `db.InTx(ctx, pool, func(tx pgx.Tx) error {...})`、`db.NewID()`、`db.UniqueViolation(err, "约束名")`；审计 `audit.Write(ctx, tx, audit.Entry{...})`；store 是包内函数，第一个参数 `db.Querier`。
+  - **API 测试：** `t.Parallel(); env := NewEnv(t)`（自己的库、httptest server、admin / `admin-pass-123`）；`env.Admin()`、`env.Login`、`env.Anon()`、`env.As("reviewer" | "none" | "system.users" | "catalog+review_assign")`、`env.CreateUser`、`env.CreateRole`、`env.Exec`、`QueryValue[T]`；`.Expect(201)`、`.ExpectError(409, "last_admin")`、`.JSON(&v)`、`.ID()`；权限表 `CheckPerms(t, env, table)`（表头为角色码、`none`、菜单码组合，可选 `anon`；`Y` 放行、`-` 403、`anon` 401）。`S3Env()`、`S3Prefix(t)`（**M1-3 加 S3 客户端后在这里注册清理前缀**）。测试库：模板 `doclite_test_tpl_<迁移哈希>`，克隆 `doclite_test_<随机>`，强杀可能留下克隆库，可手工删。
 ### [x] M1-2 shared 库：文件头解析、名称规则、档号模板（commit 4b442fd）
 - **范围：** `shared` 模块（纯函数，不碰数据库和网络）：
   - `imagehdr`：JPEG、PNG、TIFF 文件头解析（requirements 5.6"文件头"：格式、宽高、DPI、颜色模式、方向、多页 TIFF、像素上限；不解码像素）；
@@ -47,7 +55,7 @@
 - **完成标志：** 单元测试覆盖样本文件的解析结果、名称规则、模板的合法与非法写法。
 - **先读：** requirements 5.3、5.5、5.6、5.9；上一版 `../bak/doclite-v3/server/crates/doclite-infra/src/images/` 只作规则参考。
 
-### [ ] M1-3 项目和授权、存储配置、预签名、实时通道
+### [~] M1-3 项目和授权、存储配置、预签名、实时通道
 - **范围：** 项目和授权（5.3，含版本检查 `expected_updated_at`、建项目时建根文件夹和归类根）；存储配置（5.4：加密密钥、测试连接、默认、状态）；首次启动登记默认存储；预签名（5.7：按天取整的签名时间、`public_endpoint`）；项目授权检查（4）；实时通道 `GET /api/projects/{pid}/stream`（7：保活、复核会话、resync；事件总线供后面的模块发事件）。
 - **完成标志：** API 测试覆盖以上；截图脚本 `m0-storage.mjs`、`m1-projects.mjs` 通过。
 - **前置：** M1-1。
