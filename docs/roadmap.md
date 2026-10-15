@@ -166,9 +166,19 @@
 - **做法：** 执行器 `internal/platform/jobs`（`jobs.go` 类型和工具、`executor.go` 执行器）：短事务 `FOR UPDATE SKIP LOCKED` 领取（先登记"领取中"），进程内信号量控制并发，心跳查取消，`Interrupt` 立即通知；可重试的失败按 `backoff × 4^(n−1)`（≤ 1 小时）排队，最多 3 次；**定期回收**（周期 = 心跳）：库里 running 但不在本进程执行或领取中的 job，已取消的收尾、次数用完的 failed、其余放回；**单实例保护**：执行器在专用连接上持有会话级 `pg_try_advisory_lock(6006, 0)`，拿不到就不执行、不回收、不清导出临时目录（HTTP 照常），连接断了重拿、拿不到就停；启动顺序 先 `net.Listen` → 清临时目录 → `StartBackground`。所有改状态的事务 job 行 → 任务行，改任务一律 `WHERE status='running'`；完成时先写 file_logs 再锁行，任务已取消就回滚并删导出物；每次执行先用 `WithoutCancel` 删上一次的导出物，删不掉返回 Retry、不覆盖旧 key；分片上传（自己写的，默认每片 8 MiB，内存约 2 片）出错、取消、panic 都 Abort。冻结用 REPEATABLE READ + COPY 写明细，payload 存条目当时的状态（`payload_version` 1）。下载 `PresignGetWith` + content-disposition（ASCII 兜底名 + RFC 5987）。到期清理宽限期 `expires_at + url_expire_hours + 24h`。临时盘不够时第 1 次执行重试。咨询锁 6000–6006 的列表登记在 `internal/project/locks.go`。清单表头"版本"改成"版本号"（和上一版、截图脚本一致）。
 - **遗留：** 2000 件 / 5 万页规模下建任务、交付后变更的耗时没测；160 页带透明的 PNG 转 PDF 约 22 秒（上一版约 10 秒，M5-1 的转换可优化）；进程被杀时没完成的分片上传靠运维 `s3.clean.uploads`；原图有问题时检查剩余页是 4 页并发按 Range 读，20 万页时会慢（只在出错时）；存储已停用时下载 409 的路径没测到。
 - **须知（给 M5-3、M6-4）：** `app.Run` 里 `StartBackground`（`JOB_CONCURRENCY=0` 时不执行也不清理，打 warn）；测试要执行导出用 `newExportEnv(t, code, withProxy)` + `e.start()`（`proxy.delay`、`proxy.failGets`），辅助 `approvedPages`、`lockedItem`、`createTask`、`waitDone`、`zipEntries`、`manifestRows`；`App.Exports.Cleanup(ctx)`；下载返回 JSON，url 是带 content-disposition 的预签名地址，壳交给系统浏览器。**同一个库上只有一个 server 进程执行后台任务**（用户的 9080 和子任务的 2908x 共用 doclite_dev 时，谁先启动谁执行）。
-### [~] M5-3 服务端验收
+### [x] M5-3 服务端验收（commit d7ebfc9）
 - **范围：** 用 Go 服务端把上一版 M1–M4 的主流程截图脚本全部跑一遍（`web/scripts/shots/m1-accept.mjs`、`m2-accept.mjs`、`m3-accept.mjs`，依赖桌面客户端的步骤跳过，留给 M6）；补齐 README（本机开发、跑测试、跑截图脚本）；整理遗留问题。
 - **完成标志：** 总控向用户报告服务端完成情况。
+
+- **结果：** 浏览器能跑的截图 **176/176**（m0、m0-storage、m1-projects/files/organize/upload-lan/accept、m2-assign/review/rescan/viewer/viewer-lan/accept、m3 五个加 m3-accept、m4-export）；服务端代码没改；`go test ./...`（apitest 65 个）、`-tags perf` vet、shared、`npm run build` 都过。依赖壳的部分（Tauri 模拟、tiles-bench）全部跳过，留给 M6-4；`m1-shell`、`m1-scan`、`m1-cache` 没跑。m3-accept：审核和归类并行时写请求中位数 7–16 ms；m2-accept：分配 100 页 175 ms、键盘审 80 页 6.8 s。
+- **性能（`go test -tags perf -run TestPerf ./apitest/`，10 万文件、1000 盒、6 万页挂 2400 件）：** 我的审核 118–149 ms（目标 200）、review-summary 13–28、看板 5–51、placements 7（目标 100）、导出预检 55–89（目标 1 s）、交付后变更 304、**建导出任务（2000 件 / 5 万页）827–985 ms，最慢 1033**，大头是 COPY 5 万行明细（外键检查约 0.3–0.4 s），加索引无用 → 问用户。
+- **改动：** `README.md`（本机开发、测试、perf、截图脚本、客户端打包和自检、后台任务、演示账号）；`server/apitest/perf_test.go`（build tag perf）；脚本 `m1-accept`、`upload-samples`（改读 `server/testdata/samples`，`sampleVariant`；虚拟列表滚动收齐）、`m2-viewer-lan`（按 sort_no）、`m2-accept`（`M2_ACCEPT_SHELL_MOCK`、`M2_ACCEPT_BIG_G4`）；**前端 `OriginalViewerDialog.vue` 的 `canReadLogs` 默认值改成 true**（上一版就有的 bug：/files 对比原图从不取日志、没有驳回原因，即 M6-3 记的 viewer-compare 问题）。
+- **遗留：** Windows 验证项（zip64、导航保护、托盘、证书、CSP、混合内容、热文件夹文件锁、中文长路径、安装包等）和 SeaweedFS 4.45 复验、生产硬件（WSL2 + Docker、PG 18）重测性能 → M7。客户端断开的请求被记成 ERROR / 500（`httpx/errors.go`）→ M5-4。以后再做：S3 客户端无缓存、原图上传不分片、孤儿对象只记日志、children 不分页、删含已归类文件的文件夹 409 不带 details.ids、`is_current` 边角、导出单件 PDF > 9.3 GB 报错、透明 PNG 转换慢、看板暂不加索引、kqueue 每文件一个句柄、图标是占位的。
+- **须知：** 各 worktree 的 `.env` 共用 `TMP_DIR=/tmp/doclite`，server 启动时清空 `uploads/` → 子任务起 server 一律设自己的 `TMP_DIR`（已写进 CLAUDE.md）。doclite_dev 的 DEMO-A 留有「M1 / M2 / M3 验收演示 2026-10-16」、全宗 Z308、8 个导出任务；`doclite_test` 下有 7 个没连接的 `doclite_test_<随机>` 克隆库（测试中断留下的）。
+
+### [~] M5-4 服务端小修：客户端断开不算错误
+- **范围：** 客户端中途断开（翻页、关页面）导致的 `context canceled` 现在记成 `level=ERROR status=500`；改成 info 级别、状态 499（只记日志，不写响应），SSE 正常断开也不报错。
+- **完成标志：** API 测试：请求进行中取消上下文，日志里不出现 ERROR；三项检查通过。
 
 ---
 
