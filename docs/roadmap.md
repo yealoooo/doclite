@@ -26,7 +26,7 @@
 
 ## M1 骨架和系统管理
 
-### [ ] M1-1 server 骨架、登录会话、用户和角色
+### [~] M1-1 server 骨架、登录会话、用户和角色
 - **范围：**
   - `go.work`、`server` 模块的目录结构（按 CLAUDE.md）；
   - 配置（沿用上一版的环境变量名：`DATABASE_URL`、`LISTEN_ADDR`、`TMP_DIR`、`MASTER_KEY`、`S3_*`、`INIT_ADMIN_*`、`SESSION_TTL_HOURS`、`COOKIE_SECURE`……，日志级别改用 `LOG_LEVEL`）、`server/.env.example`；
@@ -38,7 +38,7 @@
 - **完成标志：** API 测试覆盖登录、会话、用户、角色、菜单权限；用 Go server 托管前端，跑截图脚本 `m0.mjs`（登录、导航、用户、角色）通过。
 - **先读：** CLAUDE.md；requirements 1、2、3.1、4、5.1、5.2、8；`server/migrations/0001_init.sql`；前端 `web/src/api/{http,auth,system}*.ts`、`web/src/api/types.ts`。
 
-### [ ] M1-2 shared 库：文件头解析、名称规则、档号模板
+### [~] M1-2 shared 库：文件头解析、名称规则、档号模板
 - **范围：** `shared` 模块（纯函数，不碰数据库和网络）：
   - `imagehdr`：JPEG、PNG、TIFF 文件头解析（requirements 5.6"文件头"：格式、宽高、DPI、颜色模式、方向、多页 TIFF、像素上限；不解码像素）；
   - `names`：文件和文件夹名称规则、Windows 保留名（5.5）；项目编码规则（5.3）；

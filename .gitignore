@@ -7,3 +7,4 @@ client/build/
 *.log
 .DS_Store
 .idea/
+.claude/worktrees/
