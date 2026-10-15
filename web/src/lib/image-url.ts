@@ -1,25 +1,31 @@
 // 图片地址（design §4.4、§4.5）：页面里所有 <img> 的 src 都用 `imageSrc()` 生成。
 // - 浏览器里：直接用 batch / snapshots 接口返回的预签名 URL（直连 S3）；
-// - 壳里：用 `img` 自定义协议交给壳（先查本机缓存，没有再用预签名 URL 下载）。地址由 convertFileSrc 生成，
-//   macOS 上是 `img://localhost/<kind>%2F<file_id>%2F<snapshot_id>`，Windows 上是 `http://img.localhost/…`。
-//   壳的 CSP 不允许页面直连外部地址，所以壳里不能直接用预签名 URL。
+// - 壳里：用壳的取图地址（先查本机缓存，没有再用预签名 URL 下载）。Wails 壳的取图在 M6-3 做：在那之前
+//   `shellImages()` 为 false，壳里也直接用预签名 URL（和浏览器一样）。
 //
-// 壳里（M1-11）：壳只用这个快照最近一次出现在 batch、snapshots 响应里的预签名 URL 下载（Rust 代理转发时记下），
-// 所以 info 必须来自这两个接口；不在记录里的图片 img 协议返回 404（<img> 的 error），存储连不上返回 502。
-// 缓存管理见 lib/image-cache.ts。测试图（SHELL_TEST_IMAGE_PATH）是 M1-2 的最小验证，--smoke 还在用。
+// 壳里（M6-3 起）：壳只用这个快照最近一次出现在 batch、snapshots 响应里的预签名 URL 下载（Go 代理转发时记下），
+// 所以 info 必须来自这两个接口；不在记录里的图片返回 404（<img> 的 error），存储连不上返回 502。
+// 缓存管理见 lib/image-cache.ts。测试图（SHELL_TEST_IMAGE_PATH）给 --smoke 的 img 一步用。
 //
-// 原图分块（M2-3，只在壳里有）：`tileSourceSrc()` 是分块描述的地址，OpenSeadragon 直接当 tile source 用
-// （DZI 的 JSON 写法）。壳从本机缓存的原图切块（还没切就先切，第一次打开大图要等），块地址在描述的 Image.Url 里，
-// 形如 `img://localhost/tile/<file_id>/<snapshot_id>/<级>/<x>_<y>.jpg`。来源和封面、原图一样：info 必须来自
-// batch 或 snapshots 接口。用法：
+// 原图分块（只在壳里有，M6-3）：`tileSourceSrc()` 是分块描述的地址，OpenSeadragon 直接当 tile source 用
+// （DZI 的 JSON 写法）。壳从本机缓存的原图切块（还没切就先切，第一次打开大图要等），块地址在描述的 Image.Url 里。
+// 来源和封面、原图一样：info 必须来自 batch 或 snapshots 接口。用法：
 //   OpenSeadragon({ tileSources: tileSourceSrc(info), crossOriginPolicy: 'Anonymous', ... })
 // 或者先 `await loadTileSource(info)` 拿到描述（能区分失败原因），再把描述对象交给 tileSources。
 // 失败：404 不在记录里；422 切不了（code 为 too_large、timeout、unsupported、corrupt……，页面只显示封面）；503 暂时不行（重试）；
 // 502 下载原图失败。提前给下一张切块用 lib/image-cache.ts 的 `prepareTiles()`。
 
-import { convertFileSrc } from '@tauri-apps/api/core'
+import { shellImages } from './client'
 
-import { isTauri } from './client'
+/**
+ * 壳里取图的地址前缀（M6-3 定稿）：建议由壳的资产服务器中间件处理这个路径——和页面同源，不需要 CORS，
+ * 也不受 CSP 的 connect-src 限制；图片是完整的响应，Windows 上资产服务器整块交给 WebView2 也没问题。
+ */
+const SHELL_IMAGE_BASE = '/shell/img/'
+
+function shellImageUrl(path: string): string {
+  return SHELL_IMAGE_BASE + path
+}
 
 export type ImageKind = 'cover' | 'original'
 
@@ -37,22 +43,22 @@ export interface ImageInfo {
 export function imageSrc(info: ImageInfo, kind: ImageKind): string | null {
   const url = kind === 'cover' ? info.cover_url : info.original_url
   if (!url) return null
-  if (!isTauri()) return url
-  return convertFileSrc(`${kind}/${info.file_id}/${info.snapshot_id}`, 'img')
+  if (!shellImages()) return url
+  return shellImageUrl(`${kind}/${info.file_id}/${info.snapshot_id}`)
 }
 
-/** 壳里打包的测试图（验证 img 协议在 CSP 下能显示）。 */
+/** 壳里打包的测试图（验证取图地址在 CSP 下能显示）。 */
 export const SHELL_TEST_IMAGE_PATH = 'test/probe.png'
 
 export function shellTestImageSrc(): string {
-  return convertFileSrc(SHELL_TEST_IMAGE_PATH, 'img')
+  return shellImageUrl(SHELL_TEST_IMAGE_PATH)
 }
 
-/** 分块描述的地址（M2-3）：壳里是 `img://localhost/dzi%2F<file_id>%2F<snapshot_id>`（Windows 上
- * `http://img.localhost/…`）；浏览器里、没有原图地址（存储不可用）时返回 null。 */
+/** 分块描述的地址（M2-3）：壳里是取图地址下的 `dzi/<file_id>/<snapshot_id>`；浏览器里、壳还没有切块（M6-3 之前）、
+ * 没有原图地址（存储不可用）时返回 null。 */
 export function tileSourceSrc(info: ImageInfo): string | null {
-  if (!isTauri() || !info.original_url) return null
-  return convertFileSrc(`dzi/${info.file_id}/${info.snapshot_id}`, 'img')
+  if (!shellImages() || !info.original_url) return null
+  return shellImageUrl(`dzi/${info.file_id}/${info.snapshot_id}`)
 }
 
 /** 分块描述（壳的 img 协议 `dzi/` 返回的 JSON）：`Image` 一项是 DZI 的 JSON 写法，OpenSeadragon 直接认；

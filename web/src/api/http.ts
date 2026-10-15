@@ -1,7 +1,7 @@
 // 统一的请求封装。所有接口都走 `request()`：
 // - 浏览器里是同源 fetch，带 Cookie（会话是 HttpOnly Cookie `doclite_session`）；
-// - 在 Tauri 壳里由 Rust 代理（`api_fetch`，design §3）：会话 Cookie、`X-Client-Type: desktop`、
-//   `X-Client-Version` 都由 Rust 统一加，页面不自己加；`request()` 的用法两边完全一样；
+// - 在桌面客户端（壳，Wails）里由壳的 Go 端代理（`api_fetch`，requirements 第 6 节"会话"）：会话 Cookie、
+//   `X-Client-Type: desktop`、`X-Client-Version` 都由壳统一加，页面不自己加；`request()` 的用法两边完全一样；
 // - 出错时解析 `{code, message, details?}`，统一抛出 `ApiError`；
 // - 401：交给 `onUnauthorized`（清会话、跳登录页）；登录接口本身和 `authRedirect: false` 的请求除外；
 // - 403 `forbidden`：交给 `onForbidden`（重新拉当前用户和菜单、跳无权提示页），属于路由级处理；
@@ -14,7 +14,7 @@
 
 import { toast } from 'vue-sonner'
 
-import { isTauri } from '@/lib/client'
+import { isShell } from '@/lib/client'
 import { isShellError, shellFetch } from '@/lib/shell'
 
 export class ApiError extends Error {
@@ -165,7 +165,7 @@ interface RawResponse {
   body: string
 }
 
-/** 发出请求：壳里走 Rust 代理，浏览器里是同源 fetch。连不上时抛出 ApiError（status 0）。 */
+/** 发出请求：壳里走 Go 代理，浏览器里是同源 fetch。连不上时抛出 ApiError（status 0）。 */
 async function send(
   method: string,
   path: string,
@@ -173,7 +173,7 @@ async function send(
   headers: Record<string, string>,
   body: string | undefined,
 ): Promise<RawResponse> {
-  if (isTauri()) {
+  if (isShell()) {
     try {
       const res = await shellFetch({ method, path, query: queryPairs(query), headers, body })
       return { status: res.status, body: res.body }
@@ -248,10 +248,10 @@ export interface UploadResult<T> {
  * （浏览器自己定 boundary）。出错时和 `request()` 一样：解析 `{code, message, details?}` 抛 `ApiError`，
  * 401、403、426 走全局处理，其余按 `handle` 决定是否弹 toast。
  *
- * 只给浏览器用：壳里的上传走 Rust 的上传队列（`pick_and_enqueue_upload`，M1-9），页面不经代理发文件。
+ * 只给浏览器用：壳里的上传走壳的上传队列（`pick_and_enqueue_upload`，M6-2），页面不经代理发文件。
  */
 export async function upload<T>(path: string, parts: UploadParts, opts: UploadOptions = {}): Promise<UploadResult<T>> {
-  if (isTauri()) {
+  if (isShell()) {
     throw new ApiError(0, 'unsupported', '客户端里的上传走上传队列，不能直接从页面发送文件')
   }
   const form = new FormData()

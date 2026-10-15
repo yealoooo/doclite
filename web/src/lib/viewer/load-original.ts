@@ -17,7 +17,7 @@
 
 import type { SnapshotImageFields } from '@/api/types'
 
-import { isTauri } from '../client'
+import { shellImages } from '../client'
 import { loadTileSource, TileSourceError } from '../image-url'
 import { acquireBudget, BudgetError, type BudgetLease, VIEWER_BUDGET_BYTES } from './budget'
 import { ViewerLoadError } from './errors'
@@ -184,7 +184,7 @@ export async function loadOriginal(
   if (!info.original_url) {
     throw new ViewerLoadError('no_url', info.url_error?.message ?? '取不到原图地址')
   }
-  if (isTauri()) return loadShellTiles(fileId, info, signal, hooks, options.settleMs ?? 0)
+  if (shellImages()) return loadShellTiles(fileId, info, signal, hooks, options.settleMs ?? 0)
   const known = unopenable.get(info.snapshot_id)
   if (known) throw known
   const format = originalFormat(info.mime_type)

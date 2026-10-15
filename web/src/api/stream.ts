@@ -1,9 +1,10 @@
 // SSE 订阅：`openStream()`。以后的实时订阅（例如 `GET /api/projects/{pid}/stream`）都用它，不用 EventSource。
 // - 浏览器里是同源 fetch + ReadableStream（带 Cookie）；
-// - 壳里走 Rust 的 `api_stream`（tauri Channel 逐块推送；wry 的自定义协议是整块缓冲的，SSE 不能走协议）。
+// - 壳里走壳的 `api_stream`（Wails 的流逐块推送；Windows 上 Wails 的资产服务器是整块缓冲的，SSE 不能走它，
+//   见 client/internal/shell/stream.go）。
 // 两边都用 `SseParser` 解析帧，行为一致。
 
-import { isTauri } from '@/lib/client'
+import { isShell } from '@/lib/client'
 import { shellStream, shellStreamCancel, type ShellStreamEvent } from '@/lib/shell'
 import { SseParser, type SseEvent } from '@/lib/sse'
 
@@ -45,7 +46,7 @@ const STREAM_ERROR_OPTIONS = { handle: true } as const
  * 不自动重连：事件可能在断开期间丢失，调用方重连前应先整体刷新一次。
  */
 export function openStream(path: string, opts: OpenStreamOptions): Promise<void> {
-  return isTauri() ? openShellStream(path, opts) : openBrowserStream(path, opts)
+  return isShell() ? openShellStream(path, opts) : openBrowserStream(path, opts)
 }
 
 function emit(opts: OpenStreamOptions, events: SseEvent[]) {
@@ -151,7 +152,7 @@ function openShellStream(path: string, opts: OpenStreamOptions): Promise<void> {
     )
       .then((id) => {
         streamId = id
-        // invoke 返回之前就被取消了：现在才知道 id，补一次取消。
+        // 流建起来之前就被取消了：现在才知道 id，补一次取消。
         if (aborted) void shellStreamCancel(id).catch(() => {})
       })
       .catch((e: unknown) => finish(shellTransportError(e)))

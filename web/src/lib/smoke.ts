@@ -1,20 +1,24 @@
-// 壳的 `--smoke` 自检（只在壳以 --smoke 启动时运行，见 shell/src-tauri/src/smoke.rs）。
-// 用打包的页面和真实的传输层依次执行：
+// 壳的 `--smoke` 自检（只在壳以 --smoke 启动时运行，见 client/internal/shell/smoke.go）。
+// 用打包的页面和真实的传输层依次执行（壳没有的功能——smoke_config 的 capabilities——对应的步骤跳过，
+// 记为 ok 并在 detail.skipped 写原因；M6-1 的壳跑 probe、login、me、menus、stream、sse、img_direct、tray、ui、
+// （pages）、nav_guard、logout）：
 //   probe   探测服务器（health + shell/latest）
-//   login   用环境变量里的账号登录（api_fetch，Rust 加 X-Client-Type: desktop）
+//   login   用环境变量里的账号登录（api_fetch，壳加 X-Client-Type: desktop）
 //   me      GET /api/me，登录名对得上
 //   menus   GET /api/me/menus
-//   stream  用 api_stream（Channel 逐块推送）再取一次 /api/me/menus，结果和 menus 一致
+//   stream  用 api_stream（Wails 的流逐块推送）再取一次 /api/me/menus，结果和 menus 一致
 //   sse     GET /api/projects 取第一个能进的项目，经 api_stream 订阅 /api/projects/{pid}/stream，
 //           收到 server 的保活心跳（`:` 注释）就断开（M1-3）。server 每 15 秒发一次心跳，第一次在连上后约
 //           15 秒，所以这一步最多等 25 秒。Windows 上它同时验证 UU 端口映射能不能传 SSE。
 //           这一步失败时照样跑完后面各步（最后按 failed 结束）；426 和连不上除外，立即停止。
 //   img     加载 img 协议的测试图
-//   img_cache  本机图片缓存（M1-11）：用 batch 取 N 个文件（项目、文件夹、N 由环境变量指定，见 smoke.rs），
+//   img_cache  本机图片缓存（M1-11）：用 batch 取 N 个文件（项目、文件夹、N 由环境变量指定，见 smoke.go），
 //           按 imageSrc 加载封面（壳的 img 协议），每张 naturalWidth > 0；比较这一步前后的缓存计数：
 //           cold（默认，先清空自检目录的缓存）要求全部未命中、每张下载一次；warm 要求全部命中、下载 0 次
 //           （跑过一次 cold 之后再跑，可以先停掉 S3）。最后请求一张不在记录里的图，要求被拒绝（404）。
 //           这一步失败时也照样跑完后面各步（最后按 failed 结束）。
+//   img_direct  （壳还没有取图协议时，M6-1）看图退回到预签名 URL 直连存储：取第一个有文件的文件夹的前几个文件，
+//           <img> 加载封面，再像浏览器的原图查看器一样用 fetch（CORS）下载一张原图，核对大小。没有文件时跳过
 //   tiles   原图分块（M2-3）：找一张 CCITT G4 和一张 LZW 的 TIFF（文件名含 g4、lzw；文件夹由环境变量指定，
 //           默认按层找），经 batch 记下来源后，用 XHR 取分块描述（和 OpenSeadragon 一样，验证 CSP 的 connect-src 和
 //           CORS），核对格式（G4 是 png、LZW 是 jpg）、宽高和 batch 一致；再用 <img> 加载最高一级的第一块和最后一块、
@@ -35,6 +39,10 @@
 //           并且和 upload_status 的统计一致（自检用 smoke/ 下的队列，一般都是 0）；壳启动后模拟过一次关窗
 //           （close_check），窗口只是隐藏、壳没有退出。失败时照样跑完后面各步。
 //   ui      挂载真正的界面，等业务布局（侧栏导航）出现
+//   pages   （DOCLITE_SMOKE_PAGES=1 才跑）逐个打开账号菜单里的页面：路由没被改走（无权、登录页），1.5 秒内
+//           没有出错提示（toast）和未处理的异常。壳还不支持的功能（"还不支持"）、server 还没有的接口（"接口不存在"，
+//           服务端并行开发时会有）的提示单独记下，不算失败
+//   nav_guard  导航保护：让主页面跳到服务器的网页，要求被壳拦下（页面还在 wails 的地址上）。壳没装上导航保护时跳过
 //   scan_page  打开 /scan（M1-13）：经真实的壳命令和事件读出上传队列、热文件夹和缓存摘要。账号没有"扫描上传"
 //           菜单时跳过（detail 里 skipped）。失败时照样跑完后面各步。
 //   rescan  重扫件（M2-7，lib/smoke-rescan.ts）：设置了 DOCLITE_SMOKE_RESCAN_PATH 才跑，否则跳过。经真实的
@@ -43,7 +51,7 @@
 //   logout  退出登录，之后 GET /api/me 返回 401
 //   direct_blocked  页面自己直连服务器会被 CSP 挡住
 //   csp     整个过程中没有别的 CSP 违规
-// 结果交给 Rust（smoke_report），由 Rust 写到标准输出和日志后退出。
+// 结果交给壳（smoke_report），由壳写到标准输出和日志后退出。
 // outcome：ok；unreachable（连不上）；upgrade_required（版本过低或 426）；failed（其他）。
 
 import { createApp } from 'vue'
@@ -112,6 +120,11 @@ const VIEWER_TIMEOUT_MS = 60_000
 const VIEWER_READY_MS = 25_000
 /** rescan 一步的时限（M2-7）：算 sha、生成封面（debug 壳也优化了图像依赖）、上传一页。 */
 const RESCAN_TIMEOUT_MS = 60_000
+/** pages 一步：每个页面打开后等多久再看有没有出错提示；整步的时限。 */
+const PAGE_SETTLE_MS = 1500
+const PAGES_TIMEOUT_MS = 120_000
+/** nav_guard 一步：让主页面跳走以后等多久（跳走了的话这段时间里页面就没了）。 */
+const NAV_GUARD_WAIT_MS = 3000
 
 function withTimeout<T>(p: Promise<T>, what: string, ms = STEP_TIMEOUT_MS): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -149,7 +162,7 @@ function status(text: string) {
   if (el) el.textContent = text
 }
 
-/** 用 api_stream 取一个普通接口的完整响应（验证 Channel 能把数据逐块送到页面）。 */
+/** 用 api_stream 取一个普通接口的完整响应（验证流能把数据逐块送到页面）。 */
 function streamText(path: string): Promise<{ status: number; body: string; chunks: number }> {
   return new Promise((resolve, reject) => {
     let code = 0
@@ -182,7 +195,7 @@ interface Heartbeat {
 /**
  * 经 api_stream 订阅一个 SSE 接口，等到第一条保活心跳（以 `:` 开头的注释行）就断开。
  * 非 2xx（按错误体转成 ApiError，426 会让自检以 upgrade_required 结束）、服务器提前结束流、连接出错、
- * 超过 HEARTBEAT_TIMEOUT_MS 都算失败。不管结果如何都取消这个流，Rust 端随即断开连接。
+ * 超过 HEARTBEAT_TIMEOUT_MS 都算失败。不管结果如何都取消这个流，壳随即断开连接。
  */
 function waitHeartbeat(path: string): Promise<Heartbeat> {
   return new Promise<Heartbeat>((resolve, reject) => {
@@ -508,7 +521,7 @@ async function checkTiles(cfg: SmokeConfig) {
   let path: string
   let targets: { kind: string; entry: FileEntry; format: 'png' | 'jpg' | null }[]
   if (cfg.tiles.files.length > 0) {
-    // 实测：指定的几个文件（文件夹必须给了，见 smoke.rs）。
+    // 实测：指定的几个文件（文件夹必须给了，见 smoke.go）。
     const named = await findNamed(project.root_folder_id, cfg.tiles.folder ?? '', cfg.tiles.files)
     path = cfg.tiles.folder ?? ''
     targets = named.map((entry) => ({ kind: 'file', entry, format: null }))
@@ -825,7 +838,7 @@ async function checkTray() {
   if (!t.created) throw new Error(`托盘没有建起来：${t.error ?? '原因不明'}`)
   if (!t.close_to_tray) throw new Error('托盘建好了，但关窗不会缩到托盘')
   if (missing.length > 0) throw new Error(`托盘提示里没有 ${missing.join('、')}：${JSON.stringify(t.tooltip)}`)
-  // 壳启动后模拟过一次关窗（Rust 端做，约 1 秒）：窗口只是缩到托盘、再显示回来才算通过。
+  // 壳启动后模拟过一次关窗（壳做，约 2 秒）：窗口只是缩到托盘、没有被销毁才算通过。
   for (let i = 0; i < 40 && !t.close_check; i++) {
     await new Promise((r) => setTimeout(r, 250))
     t = await trayStatus()
@@ -865,6 +878,97 @@ async function checkScanPage() {
     hotfolder_running: card?.getAttribute('data-running') === 'true',
     cache_summary: summary.textContent?.trim() ?? '',
   }
+}
+
+/** img_direct 一步（M6-1，见文件开头）。 */
+async function checkImageDirect(opts: SmokeConfig['image_cache']) {
+  const projects = await request<MyProject[]>('/api/projects', { handle: true })
+  const project = projects.find((p) => p.status === 'active') ?? projects[0]
+  if (!project) return { skipped: '这个账号没有能进的项目' }
+  let found: { path: string; fileIds: string[] }
+  try {
+    found = await findFiles(project.root_folder_id, null, Math.min(opts.count, 4))
+  } catch {
+    return { skipped: `项目 ${project.project_code} 里没有文件` }
+  }
+  const batch = await request<FileBatchResponse>('/api/files/batch', {
+    method: 'POST',
+    body: { file_ids: found.fileIds },
+    handle: true,
+  })
+  const covers = batch.items.map((i) => imageSrc(i, 'cover')).filter((src): src is string => !!src)
+  const widths = await Promise.all(covers.map(loadCover))
+  const original = batch.items.find((i) => i.original_url)
+  let originalBytes: number | null = null
+  if (original) {
+    const res = await fetch(imageSrc(original, 'original')!, { cache: 'no-store' })
+    if (!res.ok) throw new Error(`下载原图返回 HTTP ${res.status}`)
+    originalBytes = (await res.arrayBuffer()).byteLength
+    if (originalBytes !== original.file_size) {
+      throw new Error(`原图大小不对：${originalBytes}，应为 ${original.file_size}`)
+    }
+  }
+  return {
+    project_code: project.project_code,
+    folder: found.path,
+    covers: widths.length,
+    original_bytes: originalBytes,
+    secure_context: window.isSecureContext,
+  }
+}
+
+/** pages 一步（M6-1，见文件开头）。 */
+async function checkPages() {
+  const session = useSessionStore()
+  const paths = session.navMenus.map((m) => m.route_path).filter((p): p is string => !!p)
+  if (paths.length === 0) throw new Error('这个账号没有能打开的页面')
+  const pages: { path: string; ms: number; errors: string[]; unsupported: string[]; missing_api: string[] }[] = []
+  const problems: string[] = []
+  for (const path of paths) {
+    status(`自检：pages ${path}…`)
+    const errors: string[] = []
+    const unsupported: string[] = []
+    const missingApi: string[] = []
+    const onError = (e: ErrorEvent) => errors.push(`异常：${e.message}`)
+    const onRejection = (e: PromiseRejectionEvent) => errors.push(`未处理的异常：${describe(e.reason)}`)
+    window.addEventListener('error', onError)
+    window.addEventListener('unhandledrejection', onRejection)
+    const seen = new Set(document.querySelectorAll('[data-sonner-toast]'))
+    const started = performance.now()
+    try {
+      await router.push(path)
+      await new Promise((r) => setTimeout(r, PAGE_SETTLE_MS))
+    } finally {
+      window.removeEventListener('error', onError)
+      window.removeEventListener('unhandledrejection', onRejection)
+    }
+    for (const t of document.querySelectorAll('[data-sonner-toast]')) {
+      if (seen.has(t) || t.getAttribute('data-type') !== 'error') continue
+      const text = t.textContent?.trim() ?? ''
+      if (text.includes('还不支持')) unsupported.push(text)
+      else if (text.includes('接口不存在')) missingApi.push(text)
+      else errors.push(`出错提示：${text}`)
+    }
+    const at = router.currentRoute.value.path
+    if (at !== path) errors.push(`路由被改到了 ${at}`)
+    pages.push({ path, ms: Math.round(performance.now() - started), errors, unsupported, missing_api: missingApi })
+    if (errors.length > 0) problems.push(`${path}：${errors.join('；')}`)
+  }
+  if (problems.length > 0) {
+    const fine = pages.filter((p) => p.errors.length === 0).map((p) => p.path)
+    throw new Error(`${problems.join(' | ')}（其余 ${fine.length} 个正常：${fine.join('、')}）`)
+  }
+  return { count: pages.length, pages }
+}
+
+/** nav_guard 一步（M6-1，见文件开头）。 */
+async function checkNavGuard(serverUrl: string) {
+  const target = `${serverUrl}/`
+  const before = window.location.href
+  window.location.assign(target)
+  await new Promise((r) => setTimeout(r, NAV_GUARD_WAIT_MS))
+  if (window.location.href !== before) throw new Error(`页面跳到了 ${window.location.href}`)
+  return { target, blocked: true, still_at: window.location.origin }
 }
 
 function waitForSelector(selector: string): Promise<Element> {
@@ -915,8 +1019,15 @@ export async function runSmoke(hooks: SmokeHooks) {
     }
   }
 
+  /** 壳没有这个功能：记为通过并写明跳过的原因。 */
+  function skip(name: string, reason: string) {
+    steps.push({ name, ok: true, ms: 0, detail: { skipped: reason } })
+  }
+
   try {
     const cfg = await smokeConfig()
+    // 旧版壳没有 capabilities：视为都有。
+    const caps = cfg.capabilities ?? { images: true, upload_queue: true, csp: true, nav_guard: false }
 
     await step('probe', async () => {
       const p = await checkServer()
@@ -984,35 +1095,47 @@ export async function runSmoke(hooks: SmokeHooks) {
       deferred.push({ name: 'sse', error: e })
     }
 
-    await step('img', async () => {
-      const src = shellTestImageSrc()
-      const img = await loadImage(src)
-      if (img.naturalWidth !== 64) throw new Error(`测试图尺寸不对：${img.naturalWidth}`)
-      return { src, width: img.naturalWidth, height: img.naturalHeight }
-    })
+    if (!caps.images) {
+      for (const name of ['img', 'img_cache', 'tiles', 'viewer']) skip(name, '壳还没有取图协议、本机缓存和切块（M6-3）')
+      // 壳还没有取图协议时，看图和浏览器一样直连存储（M6-1）：确认在壳的页面里也能用。失败时接着跑后面各步。
+      try {
+        await step('img_direct', () => checkImageDirect(cfg.image_cache), IMG_CACHE_TIMEOUT_MS)
+      } catch (e) {
+        if (outcomeOf(e) !== 'failed') throw e
+        deferred.push({ name: 'img_direct', error: e })
+      }
+    } else {
+      await step('img', async () => {
+        const src = shellTestImageSrc()
+        const img = await loadImage(src)
+        if (img.naturalWidth !== 64) throw new Error(`测试图尺寸不对：${img.naturalWidth}`)
+        return { src, width: img.naturalWidth, height: img.naturalHeight }
+      })
 
-    // 本机图片缓存（M1-11）。失败时同样接着跑后面各步；426 和连不上除外。
-    try {
-      await step('img_cache', () => checkImageCache(cfg.image_cache), IMG_CACHE_TIMEOUT_MS)
-    } catch (e) {
-      if (outcomeOf(e) !== 'failed') throw e
-      deferred.push({ name: 'img_cache', error: e })
-    }
+      // 本机图片缓存（M1-11）。失败时同样接着跑后面各步；426 和连不上除外。
+      try {
+        await step('img_cache', () => checkImageCache(cfg.image_cache), IMG_CACHE_TIMEOUT_MS)
+      } catch (e) {
+        if (outcomeOf(e) !== 'failed') throw e
+        deferred.push({ name: 'img_cache', error: e })
+      }
 
-    // 原图分块（M2-3）。失败时同样接着跑后面各步。
-    try {
-      await step('tiles', () => checkTiles(cfg), TILES_TIMEOUT_MS)
-    } catch (e) {
-      if (outcomeOf(e) !== 'failed') throw e
-      deferred.push({ name: 'tiles', error: e })
-    }
+      // 原图分块（M2-3）。失败时同样接着跑后面各步。
+      try {
+        await step('tiles', () => checkTiles(cfg), TILES_TIMEOUT_MS)
+      } catch (e) {
+        if (outcomeOf(e) !== 'failed') throw e
+        deferred.push({ name: 'tiles', error: e })
+      }
 
-    // 原图查看器（M2-4）。失败时同样接着跑后面各步。
-    try {
-      await step('viewer', checkViewer, VIEWER_TIMEOUT_MS)
-    } catch (e) {
-      if (outcomeOf(e) !== 'failed') throw e
-      deferred.push({ name: 'viewer', error: e })
+      // 原图查看器（M2-4）。失败时同样接着跑后面各步。
+      try {
+        await step('viewer', checkViewer, VIEWER_TIMEOUT_MS)
+      } catch (e) {
+        if (outcomeOf(e) !== 'failed') throw e
+        deferred.push({ name: 'viewer', error: e })
+      }
+
     }
 
     // 托盘（M1-13）。失败时同样接着跑后面各步。
@@ -1030,20 +1153,47 @@ export async function runSmoke(hooks: SmokeHooks) {
       return { path: window.location.pathname }
     })
 
-    // /scan 页（M1-13）。失败时同样接着跑后面各步。
-    try {
-      await step('scan_page', checkScanPage)
-    } catch (e) {
-      if (outcomeOf(e) !== 'failed') throw e
-      deferred.push({ name: 'scan_page', error: e })
+    // 逐个打开菜单里的页面（DOCLITE_SMOKE_PAGES=1）。失败时同样接着跑后面各步。
+    if (cfg.pages) {
+      try {
+        await step('pages', checkPages, PAGES_TIMEOUT_MS)
+      } catch (e) {
+        if (outcomeOf(e) !== 'failed') throw e
+        deferred.push({ name: 'pages', error: e })
+      }
     }
 
-    // 重扫件（M2-7）。没设置 DOCLITE_SMOKE_RESCAN_PATH 时跳过；失败时同样接着跑后面各步。
-    try {
-      await step('rescan', () => checkRescan(cfg.rescan), RESCAN_TIMEOUT_MS)
-    } catch (e) {
-      if (outcomeOf(e) !== 'failed') throw e
-      deferred.push({ name: 'rescan', error: e })
+    if (!caps.upload_queue) {
+      skip('scan_page', '壳还没有上传队列和热文件夹（M6-2）')
+      skip('rescan', '壳还没有重扫件上传（M6-2）')
+    } else {
+      // /scan 页（M1-13）。失败时同样接着跑后面各步。
+      try {
+        await step('scan_page', checkScanPage)
+      } catch (e) {
+        if (outcomeOf(e) !== 'failed') throw e
+        deferred.push({ name: 'scan_page', error: e })
+      }
+
+      // 重扫件（M2-7）。没设置 DOCLITE_SMOKE_RESCAN_PATH 时跳过；失败时同样接着跑后面各步。
+      try {
+        await step('rescan', () => checkRescan(cfg.rescan), RESCAN_TIMEOUT_MS)
+      } catch (e) {
+        if (outcomeOf(e) !== 'failed') throw e
+        deferred.push({ name: 'rescan', error: e })
+      }
+    }
+
+    // 导航保护（M6-1）。失败时同样接着跑后面各步（导航真的跳走了的话页面已经不在，自检会超时失败）。
+    if (!caps.nav_guard) {
+      skip('nav_guard', '壳在这个平台上还没有导航保护')
+    } else {
+      try {
+        await step('nav_guard', () => checkNavGuard(cfg.server_url))
+      } catch (e) {
+        if (outcomeOf(e) !== 'failed') throw e
+        deferred.push({ name: 'nav_guard', error: e })
+      }
     }
 
     await step('logout', async () => {
@@ -1057,23 +1207,28 @@ export async function runSmoke(hooks: SmokeHooks) {
       throw new Error('退出登录后 /api/me 仍然返回 200')
     })
 
-    // 页面不能绕过壳直连服务器：no-cors 的 fetch 不受 CORS 限制，只有 CSP 能挡住它。
-    await step('direct_blocked', async () => {
-      const url = `${cfg.server_url}/api/health`
-      try {
-        await fetch(url, { mode: 'no-cors', cache: 'no-store' })
-      } catch {
-        return { url, blocked: true }
-      }
-      throw new Error(`页面能直接访问 ${url}，CSP 没有生效`)
-    })
+    if (!caps.csp) {
+      skip('direct_blocked', '壳的 CSP 和取图协议一起做（M6-3）')
+      skip('csp', '壳的 CSP 和取图协议一起做（M6-3）')
+    } else {
+      // 页面不能绕过壳直连服务器：no-cors 的 fetch 不受 CORS 限制，只有 CSP 能挡住它。
+      await step('direct_blocked', async () => {
+        const url = `${cfg.server_url}/api/health`
+        try {
+          await fetch(url, { mode: 'no-cors', cache: 'no-store' })
+        } catch {
+          return { url, blocked: true }
+        }
+        throw new Error(`页面能直接访问 ${url}，CSP 没有生效`)
+      })
 
-    await step('csp', async () => {
-      // direct_blocked 那一次是预期的违规，不算。
-      const unexpected = cspViolations().filter((v) => !v.blocked.startsWith(cfg.server_url))
-      if (unexpected.length > 0) throw new Error(`有 ${unexpected.length} 条 CSP 违规`)
-      return { violations: 0 }
-    })
+      await step('csp', async () => {
+        // direct_blocked 那一次是预期的违规，不算。
+        const unexpected = cspViolations().filter((v) => !v.blocked.startsWith(cfg.server_url))
+        if (unexpected.length > 0) throw new Error(`有 ${unexpected.length} 条 CSP 违规`)
+        return { violations: 0 }
+      })
+    }
   } catch (e) {
     outcome = outcomeOf(e)
     error = describe(e)

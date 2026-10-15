@@ -17,8 +17,6 @@
 //
 // 重扫件不要扫进热文件夹：热文件夹会把它当成新的一页，传成另一个文件（另一个 file_id），原来的文件仍是已驳回。
 
-import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
 
 import { ApiError, failResponse, isApiError } from '@/api/http'
 import { listRescans, rescanUpload } from '@/api/rescans'
@@ -26,6 +24,7 @@ import type { DuplicateContentDetails, LastReject, RescanItem, RescanResponse } 
 import { makeCover } from '@/lib/cover'
 import { isShellError } from '@/lib/shell'
 import { isSupportedUploadName } from '@/lib/upload-plan'
+import { invoke, listen } from '@/lib/wails'
 
 /** 要重扫的文件（对话框显示用）：待重扫列表的一项，或 /files 里的一个已驳回文件。 */
 export interface RescanTarget {
@@ -277,8 +276,7 @@ interface ShellRescanProgress {
 export async function rescanInShell(fileId: string, onPhase: RescanPhaseFn = () => {}): Promise<RescanOutcome> {
   onPhase('picking')
   let lastSent = -1
-  const unlisten = await listen<ShellRescanProgress>('rescan:progress', (e) => {
-    const p = e.payload
+  const unlisten = await listen<ShellRescanProgress>('rescan:progress', (p) => {
     if (p.file_id !== fileId) return
     // invalid_cover 去掉封面重传时，上传从 0 重新开始。
     if (p.phase === 'uploading' && p.sent === 0 && lastSent > 0) onPhase('retry_without_cover', { sent: 0, size: p.size })

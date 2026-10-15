@@ -1,11 +1,12 @@
-// 壳（Tauri）提供的命令，只在 isTauri() 时调用。Rust 端见 shell/src-tauri/src/commands.rs。
+// 壳（Wails v3 桌面客户端，client/）提供的命令，只在 isShell() 时调用。Go 端见 client/internal/shell/bridge.go。
 //
-// - 页面和 server 之间的请求由壳的 Rust 端代理（design §3）：普通请求走 `api_fetch`，SSE 走 `api_stream`
-//   （Channel 逐块推送）。只能访问已配置服务器上 /api/ 下的路径；X-Client-Type、X-Client-Version 和会话 Cookie
-//   都由 Rust 加，页面拿不到会话令牌。
+// - 页面和 server 之间的请求由壳的 Go 端代理（requirements 第 6 节"会话"）：普通请求走 `api_fetch`，SSE 走
+//   `api_stream`（Wails 的流逐块推送）。只能访问已配置服务器上 /api/ 下的路径；X-Client-Type、X-Client-Version 和
+//   会话 Cookie 都由 Go 端加，页面拿不到会话令牌。
 // - 命令失败时 reject 的值是 `{kind, message}`（ShellError）。
+// - 命令、事件、流的底层调用见 lib/wails.ts。
 
-import { Channel, invoke } from '@tauri-apps/api/core'
+import { invoke, openShellSocket } from './wails'
 
 export interface ShellInfo {
   /** 壳的版本（和 web/package.json 的 version 相同）。 */
@@ -36,7 +37,8 @@ export interface ProbeResult {
   upgrade_required: boolean
 }
 
-export type ShellErrorKind = 'not_configured' | 'invalid_request' | 'network' | 'internal'
+/** unsupported：这个版本的客户端还没有这个功能（例如 M6-1 的壳还没有上传队列）。 */
+export type ShellErrorKind = 'not_configured' | 'invalid_request' | 'network' | 'internal' | 'unsupported'
 
 export interface ShellError {
   kind: ShellErrorKind
@@ -112,19 +114,54 @@ export type ShellStreamEvent =
   | { event: 'end' }
   | { event: 'error'; kind: ShellErrorKind; message: string }
 
+/** 流式请求在壳里的名字（client/internal/shell/stream.go 的 apiStreamName）。 */
+const API_STREAM = 'doclite.api_stream'
+
+let nextStreamId = 1
+/** 进行中的流式请求：id → 关掉它。 */
+const openStreams = new Map<number, () => void>()
+
 /**
  * 发起流式请求，返回流的 id。事件顺序：open → chunk… → end；连不上或中途断开时是一条 error。
  * 4xx、5xx 也是 open → chunk（错误体）→ end。
+ *
+ * 壳里是一个 Wails 流（`app.HandleStream`）：连上后先发一帧 `{req}`，壳把事件逐条发回来，发完 end 或 error
+ * 就关掉。页面重载时 Wails 会关掉所有流，壳随之断开到 server 的连接。
  */
-export function shellStream(req: ShellRequest, onEvent: (e: ShellStreamEvent) => void) {
-  const channel = new Channel<ShellStreamEvent>()
-  channel.onmessage = onEvent
-  return invoke<number>('api_stream', { req, onEvent: channel })
+export async function shellStream(req: ShellRequest, onEvent: (e: ShellStreamEvent) => void): Promise<number> {
+  const socket = await openShellSocket(API_STREAM)
+  const id = nextStreamId++
+  let finished = false
+  const finish = () => {
+    finished = true
+    openStreams.delete(id)
+  }
+  socket.onopen = () => socket.send({ req })
+  socket.onmessage = (ev) => {
+    if (finished) return
+    const m = ev.data as ShellStreamEvent
+    if (m.event === 'end' || m.event === 'error') {
+      finish()
+      socket.close()
+    }
+    onEvent(m)
+  }
+  socket.onclose = () => {
+    if (finished) return
+    finish()
+    onEvent({ event: 'error', kind: 'network', message: '和客户端的连接中断了' })
+  }
+  openStreams.set(id, () => {
+    if (finished) return
+    finish()
+    socket.close()
+  })
+  return id
 }
 
 /** 取消流式请求：断开连接，之后不再有事件。 */
-export function shellStreamCancel(id: number) {
-  return invoke<void>('api_stream_cancel', { id })
+export async function shellStreamCancel(id: number): Promise<void> {
+  openStreams.get(id)?.()
 }
 
 // ---- --smoke 自检 ----
@@ -133,7 +170,7 @@ export interface SmokeConfig {
   server_url: string
   username: string
   password: string
-  /** 图片缓存一步（M1-11）的参数，见 shell/src-tauri/src/smoke.rs。 */
+  /** 图片缓存一步（M1-11）的参数（M6-3 起用，见 client/internal/shell/smoke.go）。 */
   image_cache: {
     /** cold：先清空自检的缓存，要求全部未命中；warm：不清空，要求全部命中、不下载。 */
     mode: 'cold' | 'warm'
@@ -167,6 +204,14 @@ export interface SmokeConfig {
     /** done：要求重扫成功；incomplete：给的是写了一半的文件，要求壳不发请求、提示不完整。 */
     expect?: 'done' | 'incomplete'
   }
+  /**
+   * 这个壳有哪些功能（M6-1 起）：没有的步骤跳过并记为 skipped。images：取图协议、本机缓存、切块（M6-3）；
+   * upload_queue：上传队列、热文件夹、重扫（M6-2）；csp：页面不能直连服务器（M6-3）；nav_guard：导航保护装上了。
+   * 旧版壳没有这一项，视为前三项都有。
+   */
+  capabilities?: { images: boolean; upload_queue: boolean; csp: boolean; nav_guard: boolean }
+  /** 另外逐个打开账号菜单里的页面（DOCLITE_SMOKE_PAGES=1）。 */
+  pages?: boolean
 }
 
 export function smokeConfig() {

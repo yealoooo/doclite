@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 连接服务器（只在壳里出现）：第一次启动还没有服务器地址时，或者用户要修改地址时。
-// 由 Rust 探测 {地址}/api/health 和 /api/shell/latest，能连上才保存；保存后整页重载。
+// 由壳探测 {地址}/api/health 和 /api/shell/latest，能连上才保存；保存后整页重载。
 import { computed, ref } from 'vue'
 
 import { Button } from '@/components/ui/button'

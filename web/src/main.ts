@@ -4,7 +4,7 @@ import { toast } from 'vue-sonner'
 import 'vue-sonner/style.css'
 
 import { setHttpHandlers } from '@/api/http'
-import { isTauri } from '@/lib/client'
+import { isShell } from '@/lib/client'
 import { watchCspViolations } from '@/lib/csp'
 import { useSessionStore } from '@/stores/session'
 import { useShellStore } from '@/stores/shell'
@@ -13,7 +13,7 @@ import App from './App.vue'
 import router from './router'
 import './style.css'
 
-if (isTauri()) watchCspViolations()
+if (isShell()) watchCspViolations()
 
 const app = createApp(App)
 const pinia = createPinia()

@@ -11,7 +11,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
-import { isTauri } from '@/lib/client'
+import { isShell } from '@/lib/client'
 import {
   checkServer,
   setServer,
@@ -36,7 +36,7 @@ function str(v: unknown): string | null {
 }
 
 export const useShellStore = defineStore('shell', () => {
-  const inShell = isTauri()
+  const inShell = isShell()
   const phase = ref<ShellPhase>(inShell ? 'checking' : 'ready')
   const info = ref<ShellInfo | null>(null)
   /** 最近一次探测的结果（连不上时显示原因）。 */

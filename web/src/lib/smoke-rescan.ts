@@ -1,4 +1,4 @@
-// `--smoke` 自检的重扫一步（M2-7，见 lib/smoke.ts 和 shell/src-tauri/src/smoke.rs）。
+// `--smoke` 自检的重扫一步（M2-7，见 lib/smoke.ts 和 client/internal/shell/smoke.go；Wails 壳在 M6-2 才有）。
 //
 // 只在设置了 DOCLITE_SMOKE_RESCAN_PATH 时跑：自检里的 `pick_and_rescan` 不弹系统对话框，用那个本机文件。
 // 1. 找要重扫的文件：DOCLITE_SMOKE_RESCAN_FILE_ID，或项目（DOCLITE_SMOKE_RESCAN_PROJECT，默认第一个能进的）待重扫列表的

@@ -1,11 +1,10 @@
-// 壳的上传队列、热文件夹和托盘（M1-9、M1-13）给页面的命令和事件，只在 isTauri() 时调用。
-// Rust 端见 shell/src-tauri/src/upload_commands.rs、tray.rs；字段说明见 roadmap M1-9 的后续须知和 design §5。
+// 壳的上传队列、热文件夹和托盘（M1-9、M1-13）给页面的命令和事件，只在 isShell() 时调用。
+// Wails 壳：托盘在 client/internal/shell/tray.go（M6-1），上传队列和热文件夹在 M6-2；字段说明见 design §5。
 //
 // - 命令失败时 reject `{kind, message}`（ShellError，见 lib/shell.ts）。
-// - 事件用 `listen()`（@tauri-apps/api/event），壳的 capabilities 里开了 core:event 的 listen、unlisten。
+// - 事件用 `listen()`（lib/wails.ts，壳用 app.Event.Emit 发）。
 
-import { invoke } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { invoke, listen } from './wails'
 
 /** 队列项的状态。`queued` 且 `attempts > 0`、有 `next_attempt_at` 表示临时失败后等重试。 */
 export type ItemStatus = 'waiting' | 'queued' | 'uploading' | 'done' | 'duplicate' | 'failed'
@@ -202,7 +201,7 @@ export async function listenQueueEvents(h: QueueEventHandlers): Promise<() => vo
   add<HotFolderStatus>('hotfolder:state', h.hotfolder)
   add<{ message: string }>('tray:error', h.trayError && ((p) => h.trayError!(p.message)))
 
-  const unlistens: UnlistenFn[] = []
+  const unlistens: (() => void)[] = []
   const stopAll = () => {
     for (const u of unlistens.splice(0)) {
       void Promise.resolve(u()).catch(() => {})
@@ -210,7 +209,7 @@ export async function listenQueueEvents(h: QueueEventHandlers): Promise<() => vo
   }
   try {
     for (const [name, fn] of subs) {
-      unlistens.push(await listen(name, (e) => fn(e.payload)))
+      unlistens.push(await listen(name, fn))
     }
   } catch (e) {
     stopAll()

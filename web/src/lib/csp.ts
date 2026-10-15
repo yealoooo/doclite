@@ -1,4 +1,4 @@
-// 收集页面上的 CSP 违规（壳的 CSP 见 tauri.conf.json）。`--smoke` 自检把它们放进结果里，有违规就算失败。
+// 收集页面上的 CSP 违规（壳的 CSP 在 M6-3 和取图协议一起做）。`--smoke` 自检把它们放进结果里，有违规就算失败。
 
 export interface CspViolation {
   directive: string

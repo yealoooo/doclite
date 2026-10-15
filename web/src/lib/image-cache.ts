@@ -1,10 +1,10 @@
-// 本机图片缓存（M1-11，design §4.5）的管理命令，只在 isTauri() 时调用。Rust 端见 shell/src-tauri/src/image_cache/。
+// 本机图片缓存（M1-11，design §4.5）的管理命令，只在 isShell() 时调用。Wails 壳在 M6-3 实现（M6-1 的壳返回 unsupported）。
 //
 // - 图片本身不经过这里：页面照常用 `imageSrc()`（壳里是 img 协议），壳先查本机缓存，没有再用预签名 URL 下载。
 // - 缓存放在本机数据目录的 `image-cache/` 下，按 file_id、snapshot_id 存；默认上限 2 GB，超出后按最近访问淘汰。
 // - 命令失败时 reject `{kind, message}`（ShellError，见 lib/shell.ts）。
 
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from './wails'
 
 /** 壳启动以来的计数（`--smoke` 用它判断命中还是下载）。 */
 export interface CacheCounters {

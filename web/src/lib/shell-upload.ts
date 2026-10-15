@@ -1,8 +1,8 @@
-// 壳的上传队列（M1-9 的 Tauri 命令，Rust 端见 shell/src-tauri/src/upload_commands.rs），只在 isTauri() 时调用。
+// 壳的上传队列（上一版 M1-9 的命令；Wails 壳在 M6-2 实现，M6-1 的壳返回 unsupported），只在 isShell() 时调用。
 // M1-12 的文件目录页只用 `pick_and_enqueue_upload`；队列状态、最近文件、重试等命令和事件给 M1-13 的 /scan 页。
 // 命令失败时 reject `{kind, message}`（kind：not_configured、invalid_request、internal），用 shellErrorMessage() 取说明。
 
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from './wails'
 
 export type PickMode = 'files' | 'folder'
 

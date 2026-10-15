@@ -1,0 +1,67 @@
+# Doclite 客户端的构建任务（wails3 build、wails3 package 会调用这里的 build、package）。
+#
+#   wails3 build          构建前端（web/）并编译 bin/Doclite
+#   wails3 package        打包成 bin/Doclite.app（ad-hoc 签名）
+#   wails3 task build:dev 开发版（不带 production 标签，能用 Safari 的网页检查器）；界面热更新：
+#                         先 cd ../web && npm run dev，再 FRONTEND_DEVSERVER_URL=http://localhost:5173 bin/Doclite
+#
+# 版本号只有 web/package.json 一个来源：编译时写进 main.version（X-Client-Version），打包时写进 Info.plist。
+# Windows 的构建和安装包在 M7 做。
+version: '3'
+
+vars:
+  APP_NAME: Doclite
+  BIN_DIR: bin
+  GOOS: '{{.GOOS | default OS}}'
+  VERSION:
+    sh: node -p "require('../web/package.json').version"
+
+tasks:
+  frontend:
+    summary: 构建 web/ 并复制到 frontend/dist（embed 进可执行文件）
+    run: once
+    cmds:
+      - cmd: test -d ../web/node_modules || (cd ../web && npm ci)
+      - cmd: cd ../web && npm run build
+      - rm -rf frontend/dist
+      - cp -R ../web/dist frontend/dist
+
+  build:
+    summary: 编译客户端
+    deps: [frontend]
+    preconditions:
+      - sh: '[ "{{.GOOS}}" = "darwin" ]'
+        msg: "目前只有 macOS 的构建；Windows 在 M7 做"
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -tags production -trimpath -buildvcs=false -ldflags="-w -s -X main.version={{.VERSION}}" -o {{.BIN_DIR}}/{{.APP_NAME}} .
+    env:
+      CGO_ENABLED: 1
+      CGO_CFLAGS: -mmacosx-version-min=12.0
+      CGO_LDFLAGS: -mmacosx-version-min=12.0
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+
+  build:dev:
+    summary: 编译开发版（可以打开网页检查器）
+    deps: [frontend]
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -buildvcs=false -ldflags="-X main.version={{.VERSION}}" -o {{.BIN_DIR}}/{{.APP_NAME}} .
+    env:
+      CGO_ENABLED: 1
+
+  package:
+    summary: 打包成 .app（ad-hoc 签名）
+    deps: [build]
+    vars:
+      APP: '{{.BIN_DIR}}/{{.APP_NAME}}.app'
+    cmds:
+      - rm -rf "{{.APP}}"
+      - mkdir -p "{{.APP}}/Contents/MacOS" "{{.APP}}/Contents/Resources"
+      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.APP}}/Contents/MacOS/{{.APP_NAME}}"
+      - cp packaging/darwin/icons.icns "{{.APP}}/Contents/Resources/icons.icns"
+      - sed 's/@VERSION@/{{.VERSION}}/g' packaging/darwin/Info.plist > "{{.APP}}/Contents/Info.plist"
+      - plutil -lint "{{.APP}}/Contents/Info.plist"
+      - xattr -cr "{{.APP}}"
+      - codesign --force --deep --sign - "{{.APP}}"
+      - codesign --verify --deep --strict "{{.APP}}"

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleName</key>
+	<string>Doclite</string>
+	<key>CFBundleDisplayName</key>
+	<string>Doclite</string>
+	<key>CFBundleExecutable</key>
+	<string>Doclite</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.doclite.desktop</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleIconFile</key>
+	<string>icons</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>12.0.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Doclite</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- 内网的 server、S3 多是 http（IP 地址）。WKWebView 里加载的图片受 ATS 管，不放开就加载不了。 -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

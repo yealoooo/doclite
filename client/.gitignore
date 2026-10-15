@@ -1,0 +1,4 @@
+# 构建产物
+/bin/
+# 打包时从 web/dist 复制过来的界面
+/frontend/dist/
