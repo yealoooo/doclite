@@ -20,7 +20,7 @@
 4. M3-1 ∥ M4-2
 5. M5-2
 6. M5-3 服务端验收 → 向用户报告
-7. M6 → M7
+7. M6-1 可以和服务端并行（2026-10-16 起）；M6-2 ∥ M6-3 → M6-4 → M7
 
 ---
 
@@ -162,7 +162,28 @@
 
 ## M6 桌面客户端（Wails）
 
-开工前和用户定：Wails v2 还是 v3（v3 自带托盘、还在 beta）；安装 Wails 命令行工具。任务到时再拆：客户端骨架和会话代理、上传队列和热文件夹、本机图片缓存和大图切块、托盘、重扫、自检；前端里调 Tauri 的部分改成调 Wails。
+**用户决定（2026-10-16）：** 用 **Wails v3**（当前 v3.0.0-beta.29，自带托盘、单实例、多窗口；v2 没有自带托盘）。命令行工具 `~/go/bin/wails3` 已装，`wails3 doctor` 通过。
+
+**做法：** 客户端放在 `client/`（Go 模块 `doclite/client`，加进 `go.work`），界面就是 `web/` 的构建产物。前端和壳之间的接口沿用上一版：约 26 个命令（`shell_info`、`probe_server`、`check_server`、`set_server`、`api_fetch`、`api_stream`、`api_stream_cancel`、`open_external`、`tray_status`、`upload_*`、`hotfolder_*`、`pick_and_enqueue_upload`、`pick_and_rescan`、`cache_*`、`prepare_tiles`、`smoke_*`）、1 个事件（`rescan:progress`）、1 个取图协议（上一版是 `img://`）。前端只改适配层（`web/src/lib/shell.ts`、`stores/shell.ts`、`api/http.ts`、`api/stream.ts`、`lib/image-url.ts` 等），去掉 `@tauri-apps/api`，换成 Wails 的前端运行时；其余页面不动。需求见 requirements 第 6 节。
+
+**排期：** M6-1 → M6-2 ∥ M6-3 → M6-4。
+
+### [~] M6-1 客户端骨架、连接和会话代理、托盘
+- **范围：** `client/` 的 Wails v3 应用：窗口加载 `web/dist`；单实例（再启动聚焦已有窗口）；数据目录（`~/Library/Application Support/Doclite/`、`%LOCALAPPDATA%\Doclite\`）、设置、日志按天滚动；首次启动填服务器地址（`probe_server`、`check_server`、`set_server`）；**会话代理**：`api_fetch`、`api_stream`（SSE 逐块转发）、`api_stream_cancel`——只许已配置 server 的 `/api/` 路径，Cookie 由壳保存（退出或换服务器清空），页面拿不到令牌，壳加 `X-Client-Type: desktop`、`X-Client-Version`；`shell_info`；`open_external`（只许 http、https）；导航保护（页面不能跳到外部地址）；页面里的 HTML5 拖放要能用（壳不接管文件拖放）；托盘（状态提示、打开、退出；关窗缩到托盘，只有"退出"真退出）；`--smoke` 的基础步骤（登录、`me`、菜单、实时通道、托盘、界面）。前端适配层改成调 Wails。
+- **完成标志：** Mac 上 `wails3` 打包出 `.app`；`--smoke` 基础步骤通过；用打包的客户端连 Go server 能登录、浏览各页面（截图脚本里能在壳外验证的仍在浏览器里跑）；`npm run build` 通过；客户端的 Go 代码 `gofmt`、`go vet`、`go test` 通过（只给纯逻辑写单元测试，例如路径白名单、Cookie 处理）。
+- **先读：** CLAUDE.md；requirements 第 6 节；上一版壳的规则参考 `../bak/doclite-v3/docs/design.md` §4.5、§5（只看规则）；前端 `web/src/lib/shell.ts`、`stores/shell.ts`、`api/http.ts`、`api/stream.ts`、`lib/smoke.ts`。
+
+### [ ] M6-2 上传队列、热文件夹、重扫
+- **范围：** requirements 第 6 节的上传队列（本机库，纯 Go）、热文件夹（写完判定、忽略规则、同子文件夹串行、≤ 2 个并行、断网重试、401/426 暂停）、封面生成（Go 解码 JPEG、PNG、TIFF，长边 400 的 JPEG，方向用 `shared/imagehdr` 读，和 server 一致）、`files:check` 预检、`pick_and_enqueue_upload`、`pick_and_rescan` 和 `rescan:progress`、/scan 页的状态；`--smoke` 的 rescan 步骤。
+- **前置：** M6-1。
+
+### [ ] M6-3 本机图片缓存、大图切块
+- **范围：** 取图协议（Wails 下的写法实现者定，页面里的地址形式随之改 `lib/image-url.ts`）：先查本机缓存，没有用预签名 URL 下载并存下；按 snapshot_id 存；LRU（默认 2 GB）；只认来源记录；`cache_*`；大图切块 `prepare_tiles`（DZI 512、重叠 1，转正后原尺寸，JPEG 质量 90 / 1 位 PNG）；`--smoke` 的 img、img_cache、tiles、viewer 步骤。
+- **前置：** M6-1（和 M6-2 并行）。
+
+### [ ] M6-4 客户端验收（Mac）
+- **范围：** 打包的客户端连 Go server 走一遍上传（热文件夹、壳里上传）、审核看大图、归类、导出下载（交给系统浏览器）；`--smoke` 全部步骤；截图脚本里依赖壳的部分（m1-shell、m1-scan、m1-cache、m2-viewer 等）。Windows 上的验收在 M7。
+- **前置：** M6-1 到 M6-3，以及服务端 M5。
 
 ---
 
