@@ -156,13 +156,17 @@
   - `PageSource` 两个方法：`Open(ctx, Page) (io.ReadCloser, error)`（整个对象）、`ReadAt(ctx, Page, b, off)`（Range 读，到末尾返回 `io.EOF`，只有 Inspect 用）。
   - 错误统一是 `*bundle.Error{Kind, Reason}`，`Retryable()`（Source、Temp、Output）、`PageProblem()`（Integrity、Corrupt、Unsupported、TooLarge，带档号、页号、file_id、snapshot_id、`ItemIndex`、`PageIndex`），`IsRetryable(err)`；Canceled 时 `errors.Is(err, context.Canceled)` 成立。出错后从这一页之后对剩下的页调 `Inspect(ctx, src, job.Format, item, page, opts)` 列出全部问题页（查不出 sha256 不对和压缩数据内部损坏）。
   - 成功时 zip 已写完但 writer 没关，由调用方完成分片上传；失败或取消时调用方中止上传。`Page.ReviewStatus` 传执行时 `folder_files.review_status` 的当前值。页号只要求严格递增，原图包文件名用页号。
-### [~] M5-2 导出任务、执行、下载
+### [x] M5-2 导出任务、执行、下载（commit f122a57）
 - **范围：** requirements 5.11 其余部分：范围和预检、冻结、交付后变更、补交、取消、后台任务执行器（单服务器版：心跳查取消，启动时把 running 的放回队列，重试和退避）、下载、到期清理；`export.changed` 事件。
 - **完成标志：** API 测试覆盖预检、冻结（建任务后重扫不影响这次导出）、交付后变更的几种原因、执行和下载的端到端（下载 zip 核对清单和明细）；**并发/恢复**：执行中重启 server 后能接着完成；截图脚本 `m4-export.mjs` 通过。
 - **前置：** M4-2、M5-1。
 - **先读：** requirements 3.6、5.11、7。
 
-### [ ] M5-3 服务端验收
+- **结果：** 三项检查通过；Export 部分 `-race` 连跑多轮稳定；`m4-export.mjs` 12/12。API 测试：预检、端到端（5 种样本上传→分配→通过→挂接→定稿→导出 PDF 和原图包→下载核对 zip、清单、明细、sha256、Content-Disposition、file_logs、审计、事件）、冻结和交付后变更 8 种原因加补交、取消（排队中、执行中）、恢复（模拟被杀重启、优雅退出放回、读原图失败退避重试）、权限表、`TestExportReaper`、`TestExportMultipart`；单元测试：最长递增子序列、下载文件名、退避。一轮审查（1 中 4 低，已改）。
+- **做法：** 执行器 `internal/platform/jobs`（`jobs.go` 类型和工具、`executor.go` 执行器）：短事务 `FOR UPDATE SKIP LOCKED` 领取（先登记"领取中"），进程内信号量控制并发，心跳查取消，`Interrupt` 立即通知；可重试的失败按 `backoff × 4^(n−1)`（≤ 1 小时）排队，最多 3 次；**定期回收**（周期 = 心跳）：库里 running 但不在本进程执行或领取中的 job，已取消的收尾、次数用完的 failed、其余放回；**单实例保护**：执行器在专用连接上持有会话级 `pg_try_advisory_lock(6006, 0)`，拿不到就不执行、不回收、不清导出临时目录（HTTP 照常），连接断了重拿、拿不到就停；启动顺序 先 `net.Listen` → 清临时目录 → `StartBackground`。所有改状态的事务 job 行 → 任务行，改任务一律 `WHERE status='running'`；完成时先写 file_logs 再锁行，任务已取消就回滚并删导出物；每次执行先用 `WithoutCancel` 删上一次的导出物，删不掉返回 Retry、不覆盖旧 key；分片上传（自己写的，默认每片 8 MiB，内存约 2 片）出错、取消、panic 都 Abort。冻结用 REPEATABLE READ + COPY 写明细，payload 存条目当时的状态（`payload_version` 1）。下载 `PresignGetWith` + content-disposition（ASCII 兜底名 + RFC 5987）。到期清理宽限期 `expires_at + url_expire_hours + 24h`。临时盘不够时第 1 次执行重试。咨询锁 6000–6006 的列表登记在 `internal/project/locks.go`。清单表头"版本"改成"版本号"（和上一版、截图脚本一致）。
+- **遗留：** 2000 件 / 5 万页规模下建任务、交付后变更的耗时没测；160 页带透明的 PNG 转 PDF 约 22 秒（上一版约 10 秒，M5-1 的转换可优化）；进程被杀时没完成的分片上传靠运维 `s3.clean.uploads`；原图有问题时检查剩余页是 4 页并发按 Range 读，20 万页时会慢（只在出错时）；存储已停用时下载 409 的路径没测到。
+- **须知（给 M5-3、M6-4）：** `app.Run` 里 `StartBackground`（`JOB_CONCURRENCY=0` 时不执行也不清理，打 warn）；测试要执行导出用 `newExportEnv(t, code, withProxy)` + `e.start()`（`proxy.delay`、`proxy.failGets`），辅助 `approvedPages`、`lockedItem`、`createTask`、`waitDone`、`zipEntries`、`manifestRows`；`App.Exports.Cleanup(ctx)`；下载返回 JSON，url 是带 content-disposition 的预签名地址，壳交给系统浏览器。**同一个库上只有一个 server 进程执行后台任务**（用户的 9080 和子任务的 2908x 共用 doclite_dev 时，谁先启动谁执行）。
+### [~] M5-3 服务端验收
 - **范围：** 用 Go 服务端把上一版 M1–M4 的主流程截图脚本全部跑一遍（`web/scripts/shots/m1-accept.mjs`、`m2-accept.mjs`、`m3-accept.mjs`，依赖桌面客户端的步骤跳过，留给 M6）；补齐 README（本机开发、跑测试、跑截图脚本）；整理遗留问题。
 - **完成标志：** 总控向用户报告服务端完成情况。
 
