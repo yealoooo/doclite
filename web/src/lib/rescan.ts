@@ -1,7 +1,7 @@
 // 上传重扫件（M2-7，design §1.5、§4.3；roadmap M2 的 Q6）：浏览器和壳两条路，结果统一成 RescanOutcome。
 //
 // - 浏览器：选一个文件 → `lib/cover.ts` 生成封面 → `upload()` 发到 `POST /api/files/{fid}/rescan`（不算 sha）。
-// - 壳：`pick_and_rescan {fileId}`（Rust，shell/src-tauri/src/rescan.rs）：系统对话框选一个文件 → 算 sha → 生成封面 →
+// - 壳：`pick_and_rescan {fileId}`（Go，client/internal/shell/rescan.go、internal/upload/rescan.go）：系统对话框选一个文件 → 算 sha → 生成封面 →
 //   multipart 发到重扫接口，同步返回，不进上传队列。页面不能指定本机路径。
 // 两边一样的规则：
 // - 400 `invalid_cover`：去掉封面重传一次；
@@ -10,7 +10,7 @@
 //   `duplicate_content` 是"可能选错了文件"，写出 details 里的位置；
 // - 401、403 `forbidden`、426 走请求封装的全局处理（跳登录页、无权提示、整页升级提示），和 `request()` 一样。
 // - 选的文件先核对，不合格的不发请求（重扫会把"已驳回"消耗掉，不能撤回）：扩展名只收 jpg、jpeg、tif、tiff、png；
-//   文件尾要完整（JPEG 有 EOI、PNG 有 IEND，TIFF 不查，规则同壳的热文件夹 `hotfolder::tail_complete`），
+//   文件尾要完整（JPEG 有 EOI、PNG 有 IEND，TIFF 不查，规则同壳的热文件夹 `upload.TailComplete`（client/internal/upload/settle.go）），
 //   不完整的多半是扫描软件还在写入。
 // - 进度：壳发 `rescan:progress {file_id, phase: hashing|cover|uploading, sent, size}` 事件；浏览器的 fetch 没有上传
 //   进度，只报阶段。
@@ -137,7 +137,7 @@ export const MSG_INCOMPLETE = '选的文件不完整或还在写入，请等扫�
 /** 扩展名不对（和壳的提示一样）。 */
 export const MSG_EXTENSION = '只能选 jpg、jpeg、tif、tiff、png 的图片'
 
-/** 文件尾检查的余量（和壳的 `hotfolder::TAIL_SLACK` 一样）。 */
+/** 文件尾检查的余量（和壳的 `upload.tailSlack` 一样）。 */
 const TAIL_SLACK = 4096
 const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 const PNG_IEND = [0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]
@@ -157,7 +157,7 @@ function contains(hay: Uint8Array, needle: readonly number[]): boolean {
 }
 
 /**
- * 文件尾是否完整（规则同壳的 `hotfolder::tail_complete`）：JPEG（魔数 `FF D8 FF`）要在最后 4 KiB + 2 字节里有 EOI
+ * 文件尾是否完整（规则同壳的 `upload.TailComplete`（client/internal/upload/settle.go））：JPEG（魔数 `FF D8 FF`）要在最后 4 KiB + 2 字节里有 EOI
  * `FF D9`；PNG 要在最后 4 KiB + 12 字节里有 IEND 块（含 CRC）；TIFF 和别的格式不查。空文件、只写了魔数开头几个字节的
  * 算不完整。只读开头 8 字节和末尾几 KiB。
  */
@@ -246,7 +246,7 @@ export async function rescanInBrowser(fileId: string, file: File, onPhase: Resca
 
 // ---------- 壳 ----------
 
-/** `pick_and_rescan` 的结果（Rust 的 RescanOutcome）。 */
+/** `pick_and_rescan` 的结果（Go 的 upload.RescanOutcome）。 */
 interface ShellRescanOutcome {
   cancelled: boolean
   local_name: string | null
@@ -268,7 +268,7 @@ interface ShellRescanProgress {
 }
 
 /**
- * 壳里：系统对话框选一个文件，由 Rust 核对文件、算 sha、生成封面、上传（同步返回，不进上传队列）。期间壳发
+ * 壳里：系统对话框选一个文件，由壳（Go）核对文件、算 sha、生成封面、上传（同步返回，不进上传队列）。期间壳发
  * `rescan:progress` 事件，转给 `onPhase`。
  * 命令本身失败（还没配置服务器、选的文件不完整或读不了、扩展名不对、fileId 不对、正在传另一张）时抛出
  * ShellError `{kind, message}`。

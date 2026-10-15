@@ -1,5 +1,6 @@
 // 壳的上传队列、热文件夹和托盘（M1-9、M1-13）给页面的命令和事件，只在 isShell() 时调用。
-// Wails 壳：托盘在 client/internal/shell/tray.go（M6-1），上传队列和热文件夹在 M6-2；字段说明见 design §5。
+// Wails 壳：托盘在 client/internal/shell/tray.go、upload_tray.go，上传队列和热文件夹在 client/internal/upload（M6-2，
+// 命令和事件在 client/internal/shell/upload.go、hotfolder.go）；字段说明见 design §5。
 //
 // - 命令失败时 reject `{kind, message}`（ShellError，见 lib/shell.ts）。
 // - 事件用 `listen()`（lib/wails.ts，壳用 app.Event.Emit 发）。

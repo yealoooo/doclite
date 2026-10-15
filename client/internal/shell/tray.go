@@ -11,8 +11,9 @@ import (
 // tray 是托盘图标（requirements 第 6 节"托盘和窗口"）。
 //
 // 提示文字第一行是状态："Doclite · 还没有连接服务器 / 客户端需要升级 / 未登录 / 登录已失效，需要重新登录 /
-// 已登录 <服务器>"；第二行是上传队列的统计（M6-2 做上传队列，之前写"上传队列不可用"）。
-// 菜单：两行状态（不能点）、打开 Doclite、退出。关窗缩到托盘，只有"退出"真正退出。
+// 已登录 <服务器>"；第二行是上传队列的统计（队列打不开时写"上传队列不可用"）。M6-2 的上传队列和热文件夹见
+// upload_tray.go（状态行加热文件夹的状态，统计行换成各状态的数量）。
+// 菜单：两行状态（不能点）、打开 Doclite、暂停 / 继续热文件夹、退出。关窗缩到托盘，只有"退出"真正退出。
 // macOS 上点一下图标弹菜单（菜单栏图标的习惯）；Windows 上左键打开窗口、右键弹菜单。
 type tray struct {
 	s    *Shell
@@ -24,9 +25,12 @@ type tray struct {
 	countsItem *application.MenuItem
 	statusLine string
 	countsLine string
+	// toggleItem 是"暂停 / 继续热文件夹"（M6-2，upload_tray.go），toggleShown 是它现在显示的状态。
+	toggleItem  *application.MenuItem
+	toggleShown string
 }
 
-// countsUnavailable 是还没有上传队列时（M6-1）统计那一行的文字；--smoke 的 tray 一步认这几个字。
+// countsUnavailable 是上传队列打不开时统计那一行的文字；--smoke 的 tray 一步认这几个字。
 const countsUnavailable = "上传队列不可用"
 
 func newTray(s *Shell) *tray {
@@ -38,6 +42,7 @@ func newTray(s *Shell) *tray {
 	t.countsItem = menu.Add(t.countsLine).SetEnabled(false)
 	menu.AddSeparator()
 	menu.Add("打开 Doclite").OnClick(func(*application.Context) { s.showWindow(true) })
+	t.addToggleItem(menu)
 	menu.AddSeparator()
 	menu.Add("退出").OnClick(func(*application.Context) {
 		s.log.Info("托盘菜单：退出")
@@ -93,13 +98,17 @@ func (t *tray) lines() (status, counts string) {
 	default:
 		status = "已登录 " + hostOf(server)
 	}
-	return "Doclite · " + status, countsUnavailable
+	counts = countsUnavailable
+	// M6-2：热文件夹的状态、上传队列的统计（upload_tray.go）。
+	status, counts = s.uploadTrayLines(status, counts)
+	return "Doclite · " + status, counts
 }
 
 func (t *tray) tooltip() string { return t.statusLine + "\n" + t.countsLine }
 
 // refresh 按最新状态更新提示和菜单（有变化才改）。
 func (t *tray) refresh() {
+	t.refreshToggle()
 	status, counts := t.lines()
 	t.mu.Lock()
 	if status == t.statusLine && counts == t.countsLine {
@@ -143,8 +152,7 @@ func (t *tray) status() TrayStatus {
 		Tooltip:     &tip,
 		StatusLine:  &status,
 		CountsLine:  &counts,
-		// 热文件夹在 M6-2 做，菜单上还没有"暂停 / 继续"。
-		Toggle: "unavailable",
+		Toggle:      t.toggleState(),
 	}
 	if !t.created {
 		msg := "托盘还没建好"

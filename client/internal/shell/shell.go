@@ -59,6 +59,8 @@ type Shell struct {
 	window *application.WebviewWindow
 	tray   *tray
 	smoke  *smokeRun
+	// uploads 是上传队列、热文件夹、重扫件（M6-2，upload.go）。
+	uploads *uploadState
 
 	// navGuard：导航保护装上了（macOS）。
 	navGuard bool
@@ -107,6 +109,7 @@ func Run(cfg Config) (int, error) {
 		},
 		OnShutdown: func() {
 			s.quitting.Store(true)
+			s.stopUploads()
 			s.log.Info("壳退出")
 		},
 		PostShutdown: func() {
@@ -161,6 +164,7 @@ func Run(cfg Config) (int, error) {
 		if s.smoke != nil {
 			s.smoke.start()
 		}
+		s.startUploads()
 	})
 
 	if err := s.app.Run(); err != nil {

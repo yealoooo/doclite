@@ -64,9 +64,8 @@ type SmokeConfig struct {
 		Folder  *string  `json:"folder"`
 		Files   []string `json:"files"`
 	} `json:"tiles"`
-	Rescan struct {
-		Enabled bool `json:"enabled"`
-	} `json:"rescan"`
+	// Rescan 是重扫一步的参数（M6-2，rescan.go）。
+	Rescan SmokeRescan `json:"rescan"`
 	// Capabilities 告诉页面这个壳有哪些功能，没有的步骤跳过（M6-2 做上传队列、M6-3 做取图协议后改成 true）。
 	Capabilities SmokeCapabilities `json:"capabilities"`
 	// Pages：逐个打开账号菜单里的页面（DOCLITE_SMOKE_PAGES=1）。
@@ -93,6 +92,9 @@ func (r *smokeRun) config() SmokeConfig {
 	c.Tiles.Files = []string{}
 	c.Pages = r.opts.Pages
 	c.Capabilities.NavGuard = r.s.navGuard
+	// M6-2：上传队列、热文件夹、重扫件。
+	c.Capabilities.UploadQueue = true
+	c.Rescan = smokeRescanConfig()
 	return c
 }
 

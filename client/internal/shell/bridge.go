@@ -61,21 +61,10 @@ type noArgs struct{}
 
 // unsupported：后续任务才做的命令先登记成"还不支持"，页面照常提示，不会因为"未知的命令"出错。
 var unsupported = map[string]string{
-	"upload_status":           "上传队列",
-	"upload_recent":           "上传队列",
-	"upload_retry_failed":     "上传队列",
-	"upload_resume":           "上传队列",
-	"hotfolder_status":        "热文件夹",
-	"hotfolder_pick_dir":      "热文件夹",
-	"hotfolder_set":           "热文件夹",
-	"hotfolder_start":         "热文件夹",
-	"hotfolder_pause":         "热文件夹",
-	"pick_and_enqueue_upload": "上传队列",
-	"pick_and_rescan":         "上传重扫件",
-	"cache_stats":             "本机图片缓存",
-	"cache_clear":             "本机图片缓存",
-	"cache_set_limit":         "本机图片缓存",
-	"prepare_tiles":           "大图切块",
+	"cache_stats":     "本机图片缓存",
+	"cache_clear":     "本机图片缓存",
+	"cache_set_limit": "本机图片缓存",
+	"prepare_tiles":   "大图切块",
 }
 
 func (s *Shell) registerCommands() {
@@ -168,6 +157,9 @@ func (s *Shell) registerCommands() {
 		s.smoke.report(a.Report)
 		return nil, nil
 	})
+
+	// M6-2：上传队列、热文件夹、重扫件（upload.go、hotfolder.go、rescan.go）。
+	s.initUploads()
 }
 
 // ShellInfo 是 shell_info 的结果（web/src/lib/shell.ts 的 ShellInfo）。
