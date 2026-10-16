@@ -289,11 +289,10 @@
 - **结果：** server、client 在 `GOWORK=off` 下三项检查全过，`go mod tidy` 没升版本；`npm run build`、`wails3 package` 过；以 vite preview 为入口 m0 13/13、m1-files 10/10、m4-export 13/13、m7-audit 5/5；server 日志无 ERROR、5xx。
 - **做法：** `shared/names` → `server/internal/platform/names`；`shared/archiveno` → `server/internal/platform/archiveno`（project 也用，自带禁用字符常量，只依赖标准库）；`shared/imagehdr` → `server/internal/platform/imagehdr` 和 `client/internal/imagehdr` 各一份（代码相同，开头写明另一份在哪、改动两边同步、拒收以 server 为准）。删掉 `shared/`、`go.work`、`go.work.sum`。样本：`client/testdata/samples` 全量副本、`client/internal/imgdecode/testdata` 和 `server/internal/export/bundle/testdata` 互补夹具、`web/scripts/samples`（截图要的 8 个 + `encoding/` 2 个罕见编码）。server 去掉 `WEB_DIR`（配置、`httpx/web.go`、测试），`/api` 以外一律 JSON 404。vite 默认监听 `127.0.0.1`（本机 localhost 只监听 ::1）。CLAUDE.md 加"三个模块"一节；README 改成分别启动 server 和 web；requirements 1.2 容器说明改为 web（nginx）+ server（只提供 /api）。
 - **须知：** server `cd server && go run ./cmd/server`（9080 只有 `/api`）；web `npm run dev`（5173）或 `npm run build && npm run preview`（4173），都把 `/api` 和实时推送转给 `DOCLITE_SERVER`（默认 9080）；并行任务 `DOCLITE_SERVER=http://127.0.0.1:2908x npm run preview -- --port 2417x --strictPort`；截图脚本 `--base` 用 web 的地址。imagehdr 改一份要同步另一份。
-### [~] M7-6 客户端界面跟 web 服务走
-**用户决定（2026-10-16）：** 改掉 2026-09-27 的"界面打包进客户端"；客户端不依赖 web 的代码（requirements 第 1 节）。
-- **范围：** 客户端的"服务器地址"是 web 服务入口；资产服务器把页面请求同源转发到这个地址（本机缓存：带哈希的静态文件长期缓存，`index.html` 每次启动重新取、取不到用缓存），`/api/` 代理照旧；首次连接、连不上、需要升级几页用简单 HTML 写在客户端里，客户端编译不再需要 web；桥按能力协商（页面用 `shell_info` 的能力决定显示哪些本机功能），客户端旧、页面新时不报错；桥命令写成约定文档；CSP、导航保护照旧。devshell、自检、壳模式截图脚本相应调整。
-- **完成标志：** 自检 cold、warm 全过（含首次连接、连不上、换地址、web 更新后客户端不重装就看到新页面）；壳模式截图脚本全过；一轮独立审查（信任边界）。
-- **前置：** 和 M7-5 并行，后合并的 rebase。
+### [~] M7-6 客户端界面随客户端打包（web 产物按版本嵌入）、桥加固
+**用户决定（2026-10-16）：** 先做了"界面跟 web 服务走"（7b80b77，未合并），审查出 1 高 1 中 8 低；用户问成熟产品的做法后改为**随客户端打包、版本跟客户端走**（Element 的做法），web 仍是独立模块（requirements 第 1 节）。
+- **范围：** 去掉网页转发和网页缓存（`internal/webassets`）；web 构建出带版本号的产物包，client 用 `client/WEB_VERSION` 指定版本、打包时嵌入，不依赖 web 源码；客户端地址是 web 服务入口，只经它访问 `/api`；保留客户端自带的连接、连不上、升级页，能力协商，`client/BRIDGE.md`；加固（两种方式都要的）：`/wails/runtime` 白名单、改地址系统确认、升级页只信探测结果、导航保护失败就关闭、网页按能力判断、错误不带本机路径。
+- **完成标志：** client 检查和测试；打包不需要 web 源码（只要产物包）；自检、壳模式截图在远程环境下跑通。
 
 ## M8 打包交付（暂缓，等用户验证后再定）
 
