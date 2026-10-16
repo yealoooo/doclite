@@ -307,6 +307,6 @@
 
 ## M8 打包交付（暂缓，等用户验证后再定）
 
-**已定（用户 2026-10-16）：** web 是单独的 nginx 容器（静态文件 + `/api` 反向代理给 server；实时推送关缓冲、上传大小上限、超时要配），server 只提供接口；compose 里是 web、server、PostgreSQL、SeaweedFS 四个服务。
+**已定：** 交付就是客户端（Windows 安装包，界面在客户端里），**不提供网页服务和浏览器访问**（用户 2026-10-17，取代 10-16"web 是单独的 nginx 容器"）；服务器上的 compose 是 server、PostgreSQL、SeaweedFS 三个服务；客户端直连 server 的 `/api`。
 
 原上一版的 M5：Docker 镜像和 compose、install.ps1、backup.ps1（封面必须备份）、离线交付包、客户端自动更新、export-tree、SeaweedFS 4.45 复验、在用户的 Windows 上远程验收。requirements 第 11 节记了建议做法。
