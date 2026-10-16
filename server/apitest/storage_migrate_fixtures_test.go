@@ -5,9 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -185,27 +187,47 @@ func (e *exportEnv) snapshotsIn(profile uuid.UUID) int {
 	return QueryValue[int](e.Env, `SELECT count(*) FROM file_snapshots WHERE storage_profile_id = $1`, profile)
 }
 
+// bucket2Name 是第二个测试桶（TEST_S3_BUCKET2，默认 doclite-migrate-test）。
+func bucket2Name() string {
+	if name := os.Getenv("TEST_S3_BUCKET2"); name != "" {
+		return name
+	}
+	return "doclite-migrate-test"
+}
+
+var (
+	bucket2Once sync.Once
+	bucket2Err  error
+)
+
+// ensureBucket2 确认第二个测试桶存在，不存在时建（每个测试进程一次）。
+func ensureBucket2() error {
+	bucket2Once.Do(func() {
+		c, name := S3Env(), bucket2Name()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		api := awss3.New(awss3.Options{Region: "us-east-1", BaseEndpoint: aws.String(c.Endpoint), UsePathStyle: true,
+			Credentials: credentials.NewStaticCredentialsProvider(c.AccessKey, c.SecretKey, ""), HTTPClient: testHTTP})
+		if _, err := api.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: aws.String(name)}); err != nil {
+			_, err := api.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String(name)})
+			var owned *types.BucketAlreadyOwnedByYou
+			var exists *types.BucketAlreadyExists
+			if err != nil && !errors.As(err, &owned) && !errors.As(err, &exists) {
+				bucket2Err = fmt.Errorf("第二个测试桶 %s 不存在也建不了：%w", name, err)
+			}
+		}
+	})
+	return bucket2Err
+}
+
 // bucket2 是第二个测试桶的名字和连它的客户端（不存在时建），另给一个这个测试专用的前缀（结束时删掉）。
 func bucket2(t *testing.T) (string, *s3.Client, string) {
 	t.Helper()
 	S3Client(t)
 	c := S3Env()
-	name := os.Getenv("TEST_S3_BUCKET2")
-	if name == "" {
-		name = "doclite-migrate-test"
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	api := awss3.New(awss3.Options{Region: "us-east-1", BaseEndpoint: aws.String(c.Endpoint), UsePathStyle: true,
-		Credentials: credentials.NewStaticCredentialsProvider(c.AccessKey, c.SecretKey, "")})
-	if _, err := api.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: aws.String(name)}); err != nil {
-		_, err := api.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String(name)})
-		var owned *types.BucketAlreadyOwnedByYou
-		var exists *types.BucketAlreadyExists
-		if err != nil && !errors.As(err, &owned) && !errors.As(err, &exists) {
-			t.Fatalf("第二个测试桶 %s 不存在也建不了：%v\n可以先 echo 's3.bucket.create -name %s' | weed shell -master=127.0.0.1:9333",
-				name, err, name)
-		}
+	name := bucket2Name()
+	if err := ensureBucket2(); err != nil {
+		t.Fatal(err)
 	}
 	client, err := s3.New(s3.Config{Endpoint: c.Endpoint, Bucket: name, AccessKey: c.AccessKey, SecretKey: c.SecretKey,
 		ForcePathStyle: true})
@@ -214,9 +236,9 @@ func bucket2(t *testing.T) (string, *s3.Client, string) {
 	}
 	prefix := "apitest/" + time.Now().Format("20060102") + "/" + sanitizeName(t.Name()) + "-" + randomHex(4) + "/"
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		if _, err := client.DeletePrefix(ctx, prefix); err != nil {
+		if _, err := deletePrefix(ctx, client, prefix); err != nil {
 			t.Logf("清理第二个桶的前缀 %s 失败：%v", prefix, err)
 		}
 	})

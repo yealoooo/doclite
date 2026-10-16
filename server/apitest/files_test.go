@@ -104,7 +104,7 @@ FROM file_snapshots s JOIN folder_files ff ON ff.file_id = s.file_id WHERE s.id 
 		br.Items[0].ProjectID != p.ID || br.Items[0].CoverURL == nil || br.Items[0].OriginalURL == nil || br.Items[0].URLExpiresAt == nil {
 		t.Fatalf("batch：%+v", br)
 	}
-	res, err := http.Get(*br.Items[0].OriginalURL)
+	res, err := testHTTP.Get(*br.Items[0].OriginalURL)
 	if err != nil {
 		t.Fatal(err)
 	}

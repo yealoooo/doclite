@@ -280,7 +280,7 @@ type downloadInfo struct {
 // fetch 用预签名地址下载（不带 Cookie），返回状态码、响应头和内容。
 func fetch(t *testing.T, u string) (int, http.Header, []byte) {
 	t.Helper()
-	res, err := http.Get(u)
+	res, err := testHTTP.Get(u)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,6 +348,9 @@ func newS3Proxy(t *testing.T) *s3Proxy {
 	}
 	S3Client(t) // SeaweedFS 没启动时明确失败
 	rp := httputil.NewSingleHostReverseProxy(target)
+	// 直连 S3，不能用 http.DefaultTransport：它按 http_proxy 走本机代理，而转发的请求带着这个代理自己的 Host
+	// （签名算的是它），本机代理照 Host 又把请求送回这里，一个请求转成成千上万个，本机临时端口很快用完。
+	rp.Transport = testTransport
 	rp.ErrorLog = log.New(io.Discard, "", 0) // 取消时转发中断是预期的
 	p := &s3Proxy{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -15,17 +15,9 @@
 
 ## 本机试用
 
-在这台 Mac 上自己试：server 跑在 9080、连本机的 `doclite_dev`（已经有演示账号和演示数据），只提供接口；网页由 web 单独提供（vite preview，4173，把 `/api` 转给 9080），浏览器打开网页的地址。PostgreSQL 16 是 Homebrew 服务，一直在跑；`server/.env` 已经配好（不要改里面的 `MASTER_KEY`）。server 和网页各占一个终端窗口。
+在这台 Mac 上自己试：server 跑在 9080、连远程服务器上的 `doclite_dev`（已经有演示账号和演示数据），只提供接口；网页由 web 单独提供（vite preview，4173，把 `/api` 转给 9080），浏览器打开网页的地址。PostgreSQL 和 S3（SeaweedFS）都在远程服务器上（见[本机开发](#本机开发)），本机不用起；`server/.env` 已经配好（不要改里面的 `MASTER_KEY`）。server 和网页各占一个终端窗口。数据在远程、服务器下载带宽只有 6 Mbps，翻页、看原图比本机慢。
 
-1. **SeaweedFS**（没在跑时；`lsof -i :8333` 没有输出就是没在跑）：
-
-   ```sh
-   AWS_ACCESS_KEY_ID=doclite-dev AWS_SECRET_ACCESS_KEY=doclite-dev-secret S3_BUCKET=doclite \
-     /Users/yanlong/project/smart_scan_bak/backend_storage/bin/weed mini \
-     -dir=$HOME/doclite-dev/seaweedfs -ip=127.0.0.1 -admin.ui=false
-   ```
-
-2. **server**（要在 `server/` 下运行，它读当前目录的 `.env`；启动时自动执行迁移，Ctrl+C 退出）：
+1. **server**（要在 `server/` 下运行，它读当前目录的 `.env`；启动时自动执行迁移，Ctrl+C 退出）：
 
    ```sh
    cd server
@@ -34,7 +26,7 @@
    ```
 
    server 只提供接口：浏览器直接打开 9080 只会得到 JSON 的 404（`/api/health` 能看到版本）。这是开发版，不检查许可证。导出、存储迁移由拿到执行器锁的 server 执行：启动日志里有"另一个 server 进程正在执行后台任务"时，是别的 server（例如开发任务临时起的 2908x）先拿到了锁，导出会交给它——先停掉那个再重启 9080（见[后台任务](#后台任务导出存储迁移)）。
-3. **网页**（另开一个终端，Ctrl+C 退出）：
+2. **网页**（另开一个终端，Ctrl+C 退出）：
 
    ```sh
    cd web
@@ -44,7 +36,7 @@
    ```
 
    浏览器打开 <http://127.0.0.1:4173>。server 不在 9080 时用 `DOCLITE_SERVER=http://127.0.0.1:<端口> npm run preview`；换端口 `npm run preview -- --port <端口>`；让局域网里别的电脑也能打开加 `-- --host`（监听所有地址；经局域网地址打开是非安全上下文）。改前端时用 `npm run dev`（<http://127.0.0.1:5173>，热更新，不用 build），代理一样。
-4. **桌面客户端**（界面随客户端打包：先把 web 打成产物包，客户端打包时嵌进去）：
+3. **桌面客户端**（界面随客户端打包：先把 web 打成产物包，客户端打包时嵌进去）：
 
    ```sh
    cd web && npm run release            # web/release/doclite-web-<版本>.tar.gz（先 build 再打包）
@@ -74,32 +66,23 @@
 
 ## 本机开发
 
-需要 Go 1.25、Node 23 / npm 11、PostgreSQL 16（生产是 18，只用 16 也有的特性）、SeaweedFS（或别的 S3 兼容存储）。Mac 上不用 Docker。
+需要 Go 1.25、Node 23 / npm 11。Mac 上不用 Docker。**数据库和存储都在远程**：用户的一台公网云服务器上的 PostgreSQL 18.6 和 SeaweedFS 4.48（S3），本机不装（2026-10-16 起；详细约定见 `CLAUDE.md` 的"开发环境"）。
 
-**PostgreSQL**：建一个能建库的账号和两个库（API 测试要克隆库，所以要 `CREATEDB`；迁移里的 `pg_trgm` 是可信扩展，库的属主就能建）。
+**`server/.env`**：server 和 API 测试的连接参数都在这里——`DATABASE_URL`（库 `doclite_dev`）、`S3_*`（桶 `doclite`）、`MASTER_KEY`，测试用的 `TEST_DATABASE_URL`（库 `doclite_test`）、`TEST_S3_*`。远程服务器的连接参数另有一份 `server/.env.remote`。两个文件都**不提交、不要打印**（里面有数据库超级管理员的密码和 S3 密钥）；新的 worktree 从主工作区拷一份 `server/.env`。`MASTER_KEY` 不要改（存储配置的密钥用它加密，换了就解不开）。环境变量优先于 `.env`。
 
-```sh
-createuser --createdb doclite
-createdb -O doclite doclite_dev
-createdb -O doclite doclite_test
-```
+用远程环境时要注意：
 
-**SeaweedFS**：`weed mini` 单进程起 S3（8333），桶要单独建一次。`-ip=127.0.0.1` 不能省（预签名地址用它）。
+- 数据库账号是超级管理员。**同一个实例上有用户自己的业务库（castoon、castoon_v2 等），绝对不能碰**；只动 `doclite_` 开头的库，不改服务器设置。
+- `max_connections=100`，平时已用约 10 个：自己的 server（`DATABASE_URL` 的 `pool_max_conns`）加上同时跑的测试不要占满。
+- 往返约 43 ms，服务器出口带宽 6 Mbps（下载约 0.7 MB/s）：接口比本机慢得多，看原图、下载导出物要等；不要批量下载对象。
+- 本机开着 Clash Verge（TUN 模式，`http_proxy=http://127.0.0.1:7897`）：Go 程序访问 S3 要直连，不要走 `http_proxy`。
 
-```sh
-mkdir -p ~/doclite-dev/seaweedfs
-AWS_ACCESS_KEY_ID=doclite-dev AWS_SECRET_ACCESS_KEY=doclite-dev-secret S3_BUCKET=doclite \
-  weed mini -dir=$HOME/doclite-dev/seaweedfs -ip=127.0.0.1 -admin.ui=false
-echo 's3.bucket.create -name doclite' | weed shell -master=127.0.0.1:9333
-```
+**换一套自己的环境**（例如另一台机器、自己的 PostgreSQL 和 S3）：PostgreSQL 要一个能建库的账号（API 测试要克隆库，所以要 `CREATEDB`；迁移里的 `pg_trgm` 是可信扩展，库的属主就能建）和两个库 `doclite_dev`、`doclite_test`；S3 建好桶 `doclite`、`doclite-migrate-test`。`server/.env` 从 `server/.env.example` 复制（每一项的说明都在模板里），要改的：
 
-**`server/.env`**：从 `server/.env.example` 复制（每一项的说明都在模板里）。要改的只有：
-
-- `MASTER_KEY`：`openssl rand -base64 32` 生成一次，**之后不要改**（存储配置的密钥用它加密，换了就解不开）；
+- `DATABASE_URL`、`TEST_DATABASE_URL`；
+- `MASTER_KEY`：`openssl rand -base64 32` 生成一次，**之后不要改**；
 - `INIT_ADMIN_USERNAME`、`INIT_ADMIN_PASSWORD`：库里一个用户都没有时用它们建管理员；
-- `S3_*`：库里一条存储配置都没有时用它们登记默认存储（模板里的值对应上面的 `weed mini`）。
-
-`server/.env` 不提交。环境变量优先于 `.env`。
+- `S3_*`：库里一条存储配置都没有时用它们登记默认存储；`TEST_S3_*` 是测试用的（可以和 `S3_*` 同一个桶，测试只用 `apitest/` 前缀）。
 
 **分别启动 server 和 web**（三个模块各自独立，见 `CLAUDE.md` 的"三个模块"）：
 
@@ -116,18 +99,39 @@ cd web && npm ci && npm run dev            # 另一个终端；浏览器打开 h
 
 ## 跑测试
 
-提交前：每个 Go 模块在自己的目录下 `gofmt -l .` 没有输出、`go vet ./...`、`go test ./...` 通过（没有 Go 工作区，server、client 各自独立）；改了 `web/` 时 `npm run build` 通过。
+API 测试连远程的数据库和 S3，一个请求要几次网络往返，全部跑一遍要 8–11 分钟。所以**平时只跑改到的模块，定版本前再跑一遍完整的**（用户决定 2026-10-16）。每个 Go 模块在自己的目录下跑（没有 Go 工作区，server、client 各自独立）：
 
 ```sh
-cd server && gofmt -l . && go vet ./... && go test ./...   # API 测试（82 个）+ 单元测试（含文件头、名称规则、档号模板），本机约 20 秒
+cd server && gofmt -l . && go vet ./... && go test ./internal/...   # 格式、vet、单元测试（不连远程，几秒）
+cd server && go test -run 'Review|Rescan' ./apitest/               # 改到的模块的 API 测试（写法见下面）
+cd server && go test -timeout 60m ./...                            # 定版本前：全部（API 测试 81 个 + 单元测试）
 cd client && gofmt -l . && go vet ./... && GOOS=windows go vet ./... && go test ./...   # 客户端的纯逻辑（Mac 上要 cgo，Wails 需要）
-cd web && npm run build                                    # vue-tsc 类型检查 + 构建
+cd web && npm run build                                            # vue-tsc 类型检查 + 构建
 ```
 
+**各模块的 API 测试**（`-run` 按测试名的一部分匹配，可以用 `|` 连起来跑几个模块；只跑一个测试写全名加 `$`，例如 `-run 'TestUpload$'`）：
+
+- 登录、会话、迁移、健康检查、客户端版本：`go test -run 'TestHealth|Login|Session|TestCookieSecure|TestClientVersion|TestInitialAdmin|TestMigrations|TestPermsSystem|TestBuiltinRoleMenus|TestClientDisconnect' ./apitest/`
+- 用户、角色：`go test -run 'User|Role|TestPrivilegeEscalation' ./apitest/`
+- 项目（含实时推送）：`go test -run 'Project' ./apitest/`
+- 存储配置：`go test -run 'TestStorage(CRUD|StatusRules|Connection)|TestPresign|TestPermsStorage$' ./apitest/`
+- 存储迁移：`go test -run 'StorageMigrate' ./apitest/`
+- 文件目录、上传：`go test -run 'Folder|Upload|TestPermsFiles' ./apitest/`
+- 审核（分配、审核、重扫）：`go test -run 'Review|Rescan' ./apitest/`
+- 归类（分类、条目、档号、挂接、看板）：`go test -run 'Catalog|ArchiveNo|TestItem' ./apitest/`
+- 导出：`go test -run 'Export' ./apitest/`
+- 许可证：`go test -run 'License' ./apitest/`
+- 审计日志：`go test -run 'Audit' ./apitest/`
+
+`go test -list '.*' ./apitest/` 列出全部测试名（不连远程）。
+
 - 读图片文件头的 `imagehdr` 有两份（`server/internal/platform/imagehdr`、`client/internal/imagehdr`），改了一份要同步另一份（连同测试和 `testdata/encoding`），两边的测试都跑；上传是否拒收以 server 为准。测试样本各带各的：`server/testdata/samples`、`client/testdata/samples`（完整副本）、`web/scripts/samples`（截图脚本要的几个）。
-- **API 测试**（`server/apitest/`）连真实的 PostgreSQL 和 SeaweedFS。第一次运行时建模板库 `doclite_test_tpl_<迁移哈希>`，每个测试从它克隆一个库、用自己的 S3 前缀，结束时删掉（强杀可能留下 `doclite_test_<随机>` 库，可以手工删）。连接参数：`TEST_DATABASE_URL`（默认 `postgres://doclite@127.0.0.1:5432/doclite_test`）、`TEST_S3_ENDPOINT`、`TEST_S3_ACCESS_KEY`、`TEST_S3_SECRET_KEY`、`TEST_S3_BUCKET`（默认同上面的 `weed mini`）。SeaweedFS 没启动时测试直接报错。存储迁移的测试另用第二个桶 `TEST_S3_BUCKET2`（默认 `doclite-migrate-test`，不存在时测试自己建）。`TEST_LOG=1` 打出 server 日志。
+- **API 测试**（`server/apitest/`）连真实的 PostgreSQL 和 S3，启动时读 `server/.env`（已经设了的环境变量优先）。连接参数：`TEST_DATABASE_URL`（只拿它建库删库）、`TEST_S3_ENDPOINT`、`TEST_S3_ACCESS_KEY`、`TEST_S3_SECRET_KEY`、`TEST_S3_BUCKET`，存储迁移的第二个桶 `TEST_S3_BUCKET2`（默认 `doclite-migrate-test`，不存在时测试自己建）。连不上 S3 时测试直接报错。`TEST_LOG=1` 打出 server 日志。
+- **隔离**：第一次运行时建模板库 `doclite_test_tpl_<迁移哈希>`，每个测试从它克隆一个库（`doclite_test_<建库时间><随机>`）、用自己的 S3 前缀（`apitest/<日期>/<测试名>-<随机>/`），结束时删掉。几个 worktree 同时跑互不影响。
+- **同时跑几个**：没给 `-parallel` 时同时跑 `TEST_PARALLEL` 个（默认 4），给了 `-parallel` 以命令行为准；连远程时不要超过 4（数据库连接数、本机临时端口）。每个测试的连接池最多 10 个连接（用到时才建），建库删库的最多 4 个。
+- **自动清理**：测试被强杀、超时会留下库和 S3 对象。每次跑测试时在后台顺带清理：建了超过 6 小时、没人连着的 `doclite_test_<16 位十六进制>` 库；两个测试桶里 `apitest/<日期>/` 下日期早于今天的对象（0 点到 6 点之间只删前天及更早的，跨零点还在跑的测试不受影响）。当天留下的等第二天再清；急着清就手工删，**只删这两种**。
 - **客户端上传的集成测试**（要一个在跑的 server）：`cd client && DOCLITE_IT_SERVER=http://127.0.0.1:9080 DOCLITE_IT_USERNAME=… DOCLITE_IT_PASSWORD=… DOCLITE_IT_PROJECT=DEMO-A go test ./internal/upload/ -run Integration`。
-- **性能抽测**（默认不跑，`//go:build perf`）：用 SQL 造 10 万文件（6 万页挂在 2400 件里），测审核读接口、看板、`catalog-placements`、2000 件 / 5 万页的导出预检、建任务、交付后变更，打印每个接口的中位数和最慢，超过 requirements 1.4 的目标就失败：
+- **性能抽测**（默认不跑，`//go:build perf`；**连远程时不要跑**：数字没有意义，还会往库里造 10 万行）：用 SQL 造 10 万文件（6 万页挂在 2400 件里），测审核读接口、看板、`catalog-placements`、2000 件 / 5 万页的导出预检、建任务、交付后变更，打印每个接口的中位数和最慢，超过 requirements 1.4 的目标就失败。在本机或正式硬件上的库跑：
 
   ```sh
   cd server && go test -tags perf -run TestPerf -v -timeout 20m ./apitest/
@@ -152,7 +156,7 @@ cd web && INIT_ADMIN_PASSWORD=<管理员密码> npm run screenshots -- --spec sc
 - 并行任务各用一组端口：`DOCLITE_SERVER=http://127.0.0.1:29080 npm run preview -- --port 24173 --strictPort`，`--base http://127.0.0.1:24173`。
 - 上传用的样本在 `web/scripts/samples/`（从 `server/testdata/samples` 复制的几个，清单见那里的 README），web 不读别的模块目录里的文件。
 - `INIT_ADMIN_PASSWORD`（`INIT_ADMIN_USERNAME`）是管理员的密码，和启动 server 用同一组变量；演示账号的密码 `demo123456`（`DEMO_PASSWORD` 可改）。`SHOTS_TMP` 是脚本的临时目录（默认系统临时目录）。
-- 几个较早的脚本直接 `psql` 读审计（M7-3 之后有 `GET /api/system/audit-logs`，新脚本用接口）：要 `psql` 在 PATH 里，`DATABASE_URL` 指向同一个库（默认本机 `doclite_dev`）。
+- 几个较早的脚本直接 `psql` 读审计（M7-3 之后有 `GET /api/system/audit-logs`，新脚本用接口）：要 `psql` 在 PATH 里，`DATABASE_URL` 指向同一个库（远程的 `doclite_dev`，连接串在 `server/.env`）。
 
 **准备数据**（新库；已有的会跳过；seed 脚本只调接口，`--base` 是 server 本身或 web 的入口都行，默认 `http://127.0.0.1:9080`）：
 
@@ -171,7 +175,7 @@ npm run seed:files -- --base http://127.0.0.1:9080 --user demo_scanner:demo12345
 - `m2-accept`：要先建「M2 验收演示 <日期>」（脚本开头有命令）；只能走一遍，再跑换一个文件夹（`M2_ACCEPT_FOLDER`）。
 - `m3-accept`：自己建「M3 验收演示 <日期>」和全宗 Z308，只能走一遍；再跑换 `M3_ACCEPT_FOLDER`、`M3_ACCEPT_FONDS`，或者 `M3_ACCEPT_TRIAL=1` 试跑（最后删掉自己建的数据）。
 - `m4-export`：server 要在执行导出（见[后台任务](#后台任务导出存储迁移)）。
-- `m7-storage-migrate`：server 要在执行后台任务（迁移在它里面执行）；要有第二个桶 `doclite-migrate-test`（`echo 's3.bucket.create -name doclite-migrate-test' | weed shell -master=127.0.0.1:9333`）。脚本自己起一个转发到 SeaweedFS 的慢速代理当"源"存储的 server 地址（让迁移持续几秒），每跑一次在 DEMO-A 的「M7-2 迁移演示」下传一批文件，迁到「M7-2 迁移演示·目标」，跑完"源"迁空并停用。
+- `m7-storage-migrate`：server 要在执行后台任务（迁移在它里面执行）；要有第二个桶 `doclite-migrate-test`（远程已经建好）。脚本自己起一个转发到 SeaweedFS 的慢速代理当"源"存储的 server 地址（让迁移持续几秒），每跑一次在 DEMO-A 的「M7-2 迁移演示」下传一批文件，迁到「M7-2 迁移演示·目标」，跑完"源"迁空并停用。
 - 壳的部分（`m1-shell`、`m1-scan`、`m1-cache` 和 `m1-organize`、`m2-rescan`、`m2-viewer`、`m2-review`、`m2-accept` 里名字带 `shell` 的几张）：`--base` 要指向 **devshell**（见下面）。这几张用 `http://wails.localhost:<端口>` 打开页面（`lib/client.ts` 的 `isShell()` 认 Windows 上 WebView2 的这个地址，Chrome 把 `*.localhost` 解析到本机），在页面脚本运行前注入 Wails 桥的模拟（`scripts/lib/wails-mock.mjs`：拦下 `/wails/runtime` 的命令调用、`_wails.dispatchWailsEvent` 推事件、`_wails.streamFactory` 给实时通道），正式前端代码不改。
 - `m2-accept`：`M2_ACCEPT_SHELL_MOCK=1` 时壳模式审核那两步用上面的模拟（否则改在浏览器里做）；`M2_ACCEPT_SHELL=client/bin/Doclite.app/Contents/MacOS/Doclite`、`M2_ACCEPT_SERVER=<网页的入口>`（vite 的地址；不设时用 `--base`）时壳重扫、壳的大图两步跑打包的客户端 `--smoke`（隔离的数据目录、后台模式），不设时壳重扫改用接口模拟。`m3-accept` 的 `M3_ACCEPT_SHELL` 同理。
 
@@ -245,7 +249,7 @@ DOCLITE_BACKGROUND=1 client/bin/Doclite.app/Contents/MacOS/Doclite --smoke
 | `EXPORT_CLEANUP_INTERVAL_SECS` | 600 | 导出物到期清理的间隔（保留天数在项目设置 `export.retention_days`，默认 7） |
 | `TMP_DIR` | 系统临时目录下的 `doclite` | 导出在 `TMP_DIR/exports/` 下生成 PDF，要放得下最大一件原图 × 1.2 |
 
-**同一个库只有一个 server 进程执行后台任务**：执行器启动时拿数据库咨询锁 `(6006, 0)`，拿到的那个执行导出、做到期清理、管导出的临时目录；后启动的拿不到锁，只提供 HTTP（日志里一条警告），它那边建的导出由先启动的进程执行。所以本机多个 server 共用 `doclite_dev` 时，谁先启动谁执行；想让某个进程一定执行，就先停掉别的（或者给别的设 `JOB_CONCURRENCY=0`）。部署时只有一个 server 进程。
+**同一个库只有一个 server 进程执行后台任务**：执行器启动时拿数据库咨询锁 `(6006, 0)`，拿到的那个执行导出、做到期清理、管导出的临时目录；后启动的拿不到锁，只提供 HTTP（日志里一条警告），它那边建的导出由先启动的进程执行。所以多个 server 共用 `doclite_dev` 时，谁先启动谁执行；想让某个进程一定执行，就先停掉别的（或者给别的设 `JOB_CONCURRENCY=0`）。部署时只有一个 server 进程。
 
 **存储迁移**（M7-2，系统管理 → 存储配置 →"迁移到…"）也是后台任务（`job_type = storage_migrate`），和导出共用上面的执行器、并发数和重试（迁移最多执行 5 次，排队时导出先领）。**整个系统同一时间只有一个迁移在排队或执行**；它执行期间占一个执行槽，导出的并发从 2 降到 1（`JOB_CONCURRENCY=1` 时迁移期间导出要等它完成）。一个对象读写存储暂时失败时就地重试 3 次（1、4、16 秒），还不行才停下这次执行、交给执行器重试（从断点接着做）。复制原图时用 `TMP_DIR/migrate/` 放临时文件（每个在复制的对象一个，同时最多 4 个）。迁移不删源存储里的对象；`JOB_CONCURRENCY=0` 或者拿不到执行器锁的进程上建的迁移，由拿着锁的进程执行（它的版本要有迁移，否则一直排队）。
 
@@ -253,7 +257,7 @@ DOCLITE_BACKGROUND=1 client/bin/Doclite.app/Contents/MacOS/Doclite --smoke
 
 ## 演示账号
 
-`npm run seed:demo` 建的，密码都是 `demo123456`；管理员 `admin` 的密码是建库时的 `INIT_ADMIN_PASSWORD`（本机 `doclite_dev` 是 `admin123456`）。
+`npm run seed:demo` 建的，密码都是 `demo123456`；管理员 `admin` 的密码是建库时的 `INIT_ADMIN_PASSWORD`（开发库 `doclite_dev` 是 `admin123456`）。
 
 | 账号 | 角色 | 能进的项目 | 用途 |
 |---|---|---|---|

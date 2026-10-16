@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/url"
 	"strings"
 	"testing"
@@ -290,8 +291,8 @@ func TestStorageConnection(t *testing.T) {
 	if r := run(with("endpoint", env.URL)); r.Result != "other" {
 		t.Fatalf("不是 S3：%+v", r)
 	}
-	// public_endpoint 和 endpoint 不同：用它签名访问不存在的 key，应得 404 NoSuchKey。
-	pub := strings.Replace(S3Env().Endpoint, "127.0.0.1", "localhost", 1)
+	// public_endpoint 和 endpoint 不同（同一个存储的另一种写法）：用它签名访问不存在的 key，应得 404 NoSuchKey。
+	pub := altEndpoint(t, S3Env().Endpoint)
 	if r := run(with("public_endpoint", pub)); !r.OK || r.PublicEndpointCheck == nil || r.PublicEndpointCheck.Result != "ok" ||
 		r.PublicEndpointCheck.HTTPStatus == nil || *r.PublicEndpointCheck.HTTPStatus != 404 {
 		t.Fatalf("public_endpoint ok：%+v %+v", r, r.PublicEndpointCheck)
@@ -323,6 +324,33 @@ func TestStorageConnection(t *testing.T) {
 		t.Fatalf("已保存 + 改密钥：%+v", r)
 	}
 	admin.Post("/api/system/storage-profiles/"+uuid.NewString()+"/test", nil).ExpectError(404, "not_found")
+}
+
+// altEndpoint 是同一个 S3 地址的另一种写法（规整后和原来不同）：127.0.0.1 ↔ localhost，别的 IPv4 地址写成
+// IPv4 映射的 IPv6 地址（[::ffff:a.b.c.d]），域名后面加一个点。
+func altEndpoint(t *testing.T, endpoint string) string {
+	t.Helper()
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := u.Hostname()
+	switch ip := net.ParseIP(host); {
+	case host == "localhost":
+		host = "127.0.0.1"
+	case ip != nil && ip.IsLoopback():
+		host = "localhost"
+	case ip != nil && ip.To4() != nil:
+		host = "[::ffff:" + host + "]"
+	case ip == nil:
+		host += "."
+	}
+	if p := u.Port(); p != "" {
+		u.Host = host + ":" + p
+	} else {
+		u.Host = host
+	}
+	return u.String()
 }
 
 // TestPresign：给快照生成图片地址（files/batch 用的辅助函数），在真实的 SeaweedFS 上取图。

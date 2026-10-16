@@ -4,12 +4,31 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+// testTransport 是测试里全部 HTTP 请求（测试 server、预签名地址）共用的连接池，连接尽量复用：
+//   - 每个主机最多留 64 个空闲连接（标准库默认 2 个：同时发的请求一多，多出来的连接用完就关）；
+//   - 不用 http.DefaultTransport：httptest.Server.Close 会关掉它的全部空闲连接，并行的测试互相把对方的连接关掉；
+//   - 不走 http_proxy 之类的代理：工作站直连 S3，server 访问 S3 也不走代理。
+//
+// 新建、关闭的连接多了，本机的临时端口会用完（macOS 上关掉的连接要占着端口约 30 秒），报
+// "connect: can't assign requested address"。
+var testTransport = &http.Transport{
+	DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+	MaxIdleConnsPerHost:   64,
+	IdleConnTimeout:       90 * time.Second,
+	ExpectContinueTimeout: time.Second,
+}
+
+// testHTTP 是不带 Cookie 的客户端（直接访问预签名地址）。
+var testHTTP = &http.Client{Transport: testTransport}
 
 // Client 是一个浏览器：自己的 Cookie 罐，可以加固定的请求头（X-Client-Type、X-Client-Version）。
 type Client struct {
@@ -22,7 +41,7 @@ type Client struct {
 // Anon 是没登录的客户端。
 func (e *Env) Anon() *Client {
 	jar, _ := cookiejar.New(nil)
-	return &Client{t: e.t, base: e.URL, hc: &http.Client{Jar: jar}, Header: http.Header{}}
+	return &Client{t: e.t, base: e.URL, hc: &http.Client{Jar: jar, Transport: testTransport}, Header: http.Header{}}
 }
 
 // Login 用登录名和密码登录，失败时测试失败。

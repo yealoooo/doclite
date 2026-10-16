@@ -25,7 +25,7 @@
   - 对象存储：`github.com/aws/aws-sdk-go-v2`（s3、分片上传）；预签名用 SDK 的 v4 签名器并**指定签名时间**（按天取整，硬性规则 12）。
   - 其他：`golang.org/x/crypto/argon2`（密码）、`github.com/google/uuid`（UUIDv7 主键）、`github.com/xuri/excelize/v2`（导出的目录.xlsx）、标准库 `archive/zip`、`image/jpeg`、`image/png`、`golang.org/x/image/tiff`（只在导出 PDF 需要无损转换时解码）。PDF 自己写最小的写入器（为了原样嵌入压缩数据）。
   - 新加依赖要纯 Go（不要 cgo）、许可证宽松；在任务返回里列出来。
-- **数据库**：生产 PostgreSQL 18，开发本机 16，只用 16 也有的特性（主键由应用生成 UUIDv7）。
+- **数据库**：生产 PostgreSQL 18，开发用远程服务器上的 18.6（见"开发环境"），只用 16 也有的特性（主键由应用生成 UUIDv7）。
 - **存储**：只支持 S3 兼容存储，默认 SeaweedFS。
 - **web**：Vue 3 + Vite + TypeScript + Tailwind 4 + shadcn-vue（reka-ui）+ Pinia + vue-router，npm。**从上一版原样复制过来**（`web/`），接口不变所以基本不用改；只有和桌面客户端打交道的部分（原来调 Tauri）在做客户端时改成调 Wails。本机单独启动（vite dev 或 preview，把 `/api` 代理给 server），部署时是单独的 nginx 容器（M8）。
 - **client**：Wails v3。界面随客户端打包、版本跟客户端走（M7-6）：web 打出带版本号的产物包（`npm run release`），客户端按 `client/WEB_VERSION` 取产物包嵌进去，不依赖 web 源码；客户端的"服务器地址"是 web 服务的入口（也可以是 server 本身），只经它访问 `/api`。连接服务器、连不上、需要升级几页是客户端自带的。上传队列、热文件夹、本机图片缓存、大图切块、托盘用 Go 写。
@@ -86,22 +86,19 @@ docs/
 
 模块之间通过对方的 service 调用，不直接查对方的表（只读的查询可以例外，写在 store 里并注明）。一个文件太长就按功能拆（`upload.go`、`move.go`……），不要一个文件几千行。
 
-## 本机开发环境（macOS，无 Docker）
+## 开发环境（macOS，无 Docker；数据库和存储在远程）
 
-- **PostgreSQL 16**：Homebrew 服务，`127.0.0.1:5432`，trust 认证。命令在 `/opt/homebrew/opt/postgresql@16/bin/`。库 `doclite_dev`、`doclite_test`（2026-10-15 新建的空库；上一版的库改名为 `doclite_dev_bak`、`doclite_test_bak`，不要动）。`DATABASE_URL=postgres://doclite@127.0.0.1:5432/doclite_dev`。
-- **SeaweedFS 4.15**：`/Users/yanlong/project/smart_scan_bak/backend_storage/bin/weed`，后台运行：
+**PostgreSQL 和 S3 都在用户的一台公网云服务器上（2026-10-16 起），本机不装 PostgreSQL 和 SeaweedFS。** 地址、账号、密码、密钥都在 `server/.env`（server 和 API 测试都读它）和 `server/.env.remote`（远程服务器的连接参数），两个文件都不提交、**不要打印**（里面有数据库超级管理员的密码、S3 密钥、`MASTER_KEY`），日志、报告、文档里也不能出现。
 
-  ```sh
-  mkdir -p ~/doclite-dev/seaweedfs
-  AWS_ACCESS_KEY_ID=doclite-dev AWS_SECRET_ACCESS_KEY=doclite-dev-secret S3_BUCKET=doclite \
-    /Users/yanlong/project/smart_scan_bak/backend_storage/bin/weed mini \
-    -dir=$HOME/doclite-dev/seaweedfs -ip=127.0.0.1 -admin.ui=false
-  ```
-
-  - 桶要单独建：`echo 's3.bucket.create -name doclite' | weed shell -master=127.0.0.1:9333`（桶 `doclite` 已存在，上一版的对象也在里面，key 不会冲突）。
-  - S3 地址 `http://127.0.0.1:8333`；一定加 `-ip=127.0.0.1`。生产用 4.45，交付前复验预签名和 CORS。
+- **PostgreSQL 18.6**：用的是超级管理员账号（用户的选择），所以格外小心：
+  - **同一个实例上有用户自己的业务库（castoon、castoon_v2 等），绝对不能碰。** 只动 Doclite 的库：`doclite_dev`（开发、演示数据）、`doclite_test`（API 测试只拿它建库删库）、`doclite_test_tpl_<哈希>`（测试的模板库）、`doclite_test_<16 位十六进制>`（每个测试一个，用完删掉）。手工清理只删最后这种。
+  - 不改服务器设置（`postgresql.conf`、角色、扩展……）。
+  - `max_connections=100`，平时已用约 10 个，和别的业务共用：server 的连接池（`DATABASE_URL` 的 `pool_max_conns`）加上同时跑的测试不要占满（测试的连接数见"测试"）。
+- **S3**：SeaweedFS 4.48（生产用 4.45，交付前复验预签名和 CORS）。桶 `doclite`（开发和测试共用，测试的对象在 `apitest/<日期>/…` 下）、`doclite-migrate-test`（存储迁移的第二个桶，测试也用）。
+- **网络**：往返约 43 ms，**服务器出口带宽 6 Mbps**（从服务器下载约 0.7 MB/s，上传快一些）。一个接口请求要几次数据库往返，比本机慢得多；看原图、下载导出物要等。不要批量下载对象，不跑性能测试（`-tags perf`：远程的数字没有意义，还会往库里造 10 万行）。
+- **本机代理**：这台 Mac 开着 Clash Verge（TUN 模式，环境变量里有 `http_proxy=http://127.0.0.1:7897`），到远程的连接都经过它。Go 代码连 S3 不走 `http_proxy`（server 的 S3 客户端、测试的 `testTransport` 都是直连）；测试里不要用 `http.Get`、`http.DefaultClient`、默认 Transport 的 `httputil.ReverseProxy`。
 - **工具链**：Go 1.25、Node 23、npm 11。Wails v3 命令行工具 `~/go/bin/wails3`（v3.0.0-beta.29）。
-- **环境变量**：`server/.env`（不提交，从上一版复制，里面有 `MASTER_KEY`）。**不要修改或重新生成 `MASTER_KEY`，不要打印它。** 模板写在 `server/.env.example`。
+- **环境变量**：`server/.env`（不提交）。**不要修改或重新生成 `MASTER_KEY`，不要打印它。** 模板写在 `server/.env.example`。
 - **端口**：用户自己的 server 跑在 9080，**不要碰**。子任务起 server 用 29080、29081、29082，预览用 24173、24174、24175（每个并行任务用一组，总控在派任务时指定）。起 server 时还要设自己的 `TMP_DIR`（比如 scratchpad 里的任务子目录）：`.env` 里的 `/tmp/doclite` 是共用的，server 启动时会清空其中的 `uploads/`。
 
 ## 测试
@@ -109,10 +106,16 @@ docs/
 **原则（用户决定 2026-10-15）：测试少而有用，API 测试为主。**
 
 - **API 测试**（`server/apitest/`）：每个接口用真实的 PostgreSQL 和 SeaweedFS 测——正常流程、主要错误码、菜单权限（每个模块一张紧凑的"接口 × 角色"表）。内部重构不影响它们。
-- **单元测试**：只给纯算法：文件头解析、文件名规则、档号模板和撞号、页序操作、PDF 原样嵌入的判断等。
+- **单元测试**：只给纯算法：文件头解析、文件名规则、档号模板和撞号、页序操作、PDF 原样嵌入的判断等。不连数据库和 S3。
 - **并发测试**：只测 requirements 里点名的几个场景（多人同时挂接、审核和归类同时操作、同内容并发上传只入库一个、导出执行中重启后恢复）。
 - **不写**：大量边角用例、性能压测（除非完成标志要求）、逐个格式的罕见变体。
-- **隔离**：测试可能在不同 worktree 同时跑。每个测试用自己的库（用模板库 `CREATE DATABASE … TEMPLATE` 克隆，快），S3 用独立的 key 前缀，结束后清理。连接参数从环境变量读，默认值：`TEST_DATABASE_URL=postgres://doclite@127.0.0.1:5432/doclite_test`、`TEST_S3_ENDPOINT=http://127.0.0.1:8333`、`TEST_S3_ACCESS_KEY=doclite-dev`、`TEST_S3_SECRET_KEY=doclite-dev-secret`、`TEST_S3_BUCKET=doclite`。SeaweedFS 没启动时 S3 测试明确报错，不悄悄跳过。
+- **两种跑法**（用户决定 2026-10-16：功能稳定后不频繁跑全部测试）：
+  - **平时只跑改到的模块**：`cd server && go test -run '<模块>' ./apitest/`（各模块的 `-run` 写法见 README"跑测试"），加上改到的包的单元测试（`go test ./internal/...` 不连远程，几秒）；
+  - **定版本前跑一遍完整的**：`cd server && go test -timeout 60m ./...`（API 测试远程 8–11 分钟）。
+- **连接参数**：测试启动时读 `server/.env`（已经设了的环境变量优先）：`TEST_DATABASE_URL`（只拿它建库删库）、`TEST_S3_ENDPOINT`、`TEST_S3_ACCESS_KEY`、`TEST_S3_SECRET_KEY`、`TEST_S3_BUCKET`、`TEST_S3_BUCKET2`（存储迁移的第二个桶，默认 `doclite-migrate-test`）。连不上 S3 时 S3 测试明确报错，不悄悄跳过。
+- **隔离**：测试可能在不同 worktree 同时跑。每个测试用自己的库（从模板库 `CREATE DATABASE … TEMPLATE` 克隆，库名 `doclite_test_<建库时间><随机>`），S3 用独立的 key 前缀 `apitest/<日期>/<测试名>-<随机>/`，结束时删掉。
+- **并发和连接数**：没在命令行给 `-parallel` 时同时跑 `TEST_PARALLEL` 个（默认 4；给了 `-parallel` 以命令行为准），远程时不要超过 4。每个测试的连接池最多 10 个连接（连接用到时才建，一般一两个；`TEST_DATABASE_URL` 里写了 `pool_max_conns` 时以它为准），建库删库的连接池最多 4 个。测试里的 HTTP 请求都走 `testTransport`（连接复用、不走代理）：新建、关闭的连接一多，本机临时端口会用完（macOS 上关掉的连接要占着端口约 30 秒），报 `connect: can't assign requested address`。
+- **自动清理**：测试被强杀、超时会留下库和 S3 前缀。每次跑测试时在后台顺带清理：建了超过 6 小时、没人连着的 `doclite_test_<16 位十六进制>` 库（不带 FORCE，有人连着就删不掉），两个测试桶里 `apitest/<日期>/` 下日期早于今天的对象（0 点到 6 点之间只删前天及更早的）。几个 worktree 同时跑也不会删到别人正在用的；当天留下的要等第二天，急着清可以手工删（只删 `doclite_test_<16 位十六进制>` 库和 `apitest/` 下的前缀）。
 - **网页回归**：`web/scripts/shots/` 里的截图脚本（上一版留下的）是现成的验收：Go 服务端某个模块做完后，跑那个模块的主流程脚本，证明前端照常工作。`--base` 是 web 的入口（vite preview 或 dev，`/api` 代理到自己起的 server），不是 server 本身。
 
 ## 硬性规则（违反就是 bug）
@@ -143,7 +146,7 @@ docs/
 - **需要改设计时先停下来问用户，不要自己改。** 包括改表结构、改接口约定（和 requirements 第 8 节、上一版前端的调用方式不一致）、和硬性规则冲突、需要安装软件、需要推送到远端。用户同意后，改表要新增迁移文件并同步 requirements。
 - **接口要和上一版一致**：前端是原样复制的，请求和响应的字段、错误码、状态码都要对得上。拿不准时看前端怎么调用（`web/src/api/*.ts`、`web/src/api/types.ts`），再看上一版设计文档对应的章节。
 - **完成前必须通过**（各模块在自己的目录下跑）：
-  - server：`gofmt -l .` 没有输出、`go vet ./...`、`go test ./...`；
+  - server：`gofmt -l .` 没有输出、`go vet ./...`、`go test ./internal/...`（单元测试）、改到的模块的 API 测试（`go test -run '<模块>' ./apitest/`）；定版本前（验收）跑完整的 `go test -timeout 60m ./...`（见"测试"）；
   - client 有改动时：`gofmt -l .`、`go vet ./...`、`GOOS=windows go vet ./...`、`go test ./...`；
   - web 有改动时：`npm run build`；
   - 涉及界面行为的，跑对应的截图脚本。

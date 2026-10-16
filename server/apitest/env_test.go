@@ -13,8 +13,9 @@
 //	}
 //
 // 数据库：第一次用到时建模板库 `doclite_test_tpl_<迁移的哈希>` 并执行全部迁移（多个进程、多个 worktree 同时跑时
-// 用咨询锁排队，只建一次）；之后每个测试 `CREATE DATABASE … TEMPLATE …` 克隆一份，测试结束时删掉。
-// 迁移文件变了，哈希就变，自动建新的模板库。连接参数见 TEST_DATABASE_URL（默认 doclite_test 库，只用来执行建库删库）。
+// 用咨询锁排队，只建一次）；之后每个测试 `CREATE DATABASE … TEMPLATE …` 克隆一份（`doclite_test_<建库时间><随机>`），
+// 测试结束时删掉；被中断的测试留下的库由 cleanup_test.go 清理。迁移文件变了，哈希就变，自动建新的模板库。
+// 连接参数见 TEST_DATABASE_URL（默认 doclite_test 库，只用来执行建库删库）。
 //
 // 日志：默认丢弃；设 TEST_LOG=1 时打到 stderr。
 package apitest
@@ -72,8 +73,13 @@ func redactedTestURL() string {
 	return u.Redacted()
 }
 
-// testPoolDSN 给每个测试的连接池加上连接数上限（连接串里没写 pool_max_conns 时默认 3）：
-// 开发用的 PostgreSQL 可能在远程、和别的业务共用连接上限（见 main_test.go）。
+// testPoolMaxConns 是每个测试的连接池的连接数上限（TEST_DATABASE_URL 里没写 pool_max_conns 时）。开发用的
+// PostgreSQL 在远程、和别的业务共用连接上限（max_connections 100），同时跑 TEST_PARALLEL 个测试（见 main_test.go）。
+// 连接是用到时才建的，一般的测试只用一两个；不能太小：并发测试里手工事务占着连接、几个请求在等锁、测试还要查
+// pg_stat_activity，最多同时要八个左右，上限是 3 时会互相等死。
+const testPoolMaxConns = "10"
+
+// testPoolDSN 给每个测试的连接池加上连接数上限（见 testPoolMaxConns）。
 func testPoolDSN(dsn string) string {
 	u, err := url.Parse(dsn)
 	if err != nil {
@@ -81,7 +87,7 @@ func testPoolDSN(dsn string) string {
 	}
 	q := u.Query()
 	if q.Get("pool_max_conns") == "" {
-		q.Set("pool_max_conns", "3")
+		q.Set("pool_max_conns", testPoolMaxConns)
 		u.RawQuery = q.Encode()
 	}
 	return u.String()
@@ -109,13 +115,23 @@ var (
 
 func maintenancePool() (*pgxpool.Pool, error) {
 	adminOnce.Do(func() {
-		adminPool, adminErr = pgxpool.New(context.Background(), testDatabaseURL())
+		cfg, err := pgxpool.ParseConfig(testDatabaseURL())
+		if err != nil {
+			adminErr = fmt.Errorf("TEST_DATABASE_URL 格式不对：%w", err)
+			return
+		}
+		if !strings.Contains(testDatabaseURL(), "pool_max_conns") {
+			cfg.MaxConns = 4 // 只用来建库、删库
+		}
+		adminPool, adminErr = pgxpool.NewWithConfig(context.Background(), cfg)
 		if adminErr == nil {
 			adminErr = adminPool.Ping(context.Background())
 		}
 		if adminErr != nil {
 			adminErr = fmt.Errorf("连不上测试库 %s（设置 TEST_DATABASE_URL）：%w", redactedTestURL(), adminErr)
+			return
 		}
+		cleanupStaleDBs(adminPool)
 	})
 	return adminPool, adminErr
 }
@@ -134,8 +150,12 @@ func buildTemplate() (string, error) {
 	}
 	name := "doclite_test_tpl_" + db.MigrationsHash(ms)[:16]
 
-	// 咨询锁要在同一个连接上加和解，单独开一个连接。
-	conn, err := pgx.Connect(ctx, testDatabaseURL())
+	// 咨询锁要在同一个连接上加和解，单独开一个连接（按连接池的写法解析：连接串里可以有 pool_max_conns 之类）。
+	cfg, err := pgxpool.ParseConfig(testDatabaseURL())
+	if err != nil {
+		return "", fmt.Errorf("TEST_DATABASE_URL 格式不对：%w", err)
+	}
+	conn, err := pgx.ConnectConfig(ctx, cfg.ConnConfig)
 	if err != nil {
 		return "", fmt.Errorf("连不上测试库 %s（设置 TEST_DATABASE_URL）：%w", redactedTestURL(), err)
 	}
@@ -186,7 +206,7 @@ func cloneDB(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	name := "doclite_test_" + randomHex(8)
+	name := newTestDBName(time.Now())
 	ctx := context.Background()
 	if _, err := mp.Exec(ctx, "CREATE DATABASE "+name+" TEMPLATE "+tpl); err != nil {
 		t.Fatalf("克隆测试库失败：%v", err)

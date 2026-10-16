@@ -3,7 +3,6 @@ package apitest
 import (
 	"context"
 	"io"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -17,9 +16,9 @@ import (
 )
 
 // S3 的测试支撑：
-//   - 连接参数从环境变量读（CLAUDE.md"测试"）；SeaweedFS 没启动时 S3 测试明确失败，不悄悄跳过；
+//   - 连接参数从环境变量读（CLAUDE.md"测试"，一般写在 server/.env）；连不上时 S3 测试明确失败，不悄悄跳过；
 //   - 每个测试一个独立的 key 前缀（S3Prefix），不同 worktree、不同测试同时跑也不会碰到别人的对象；测试结束时
-//     删掉这个前缀下的全部对象；测试里建的存储配置把 path_prefix 设成它；
+//     删掉这个前缀下的全部对象，被中断的测试留下的由 cleanup_test.go 清理；测试里建的存储配置把 path_prefix 设成它；
 //   - env.UseS3() 按 S3Env 登记默认存储（和首次启动的登记一样），path_prefix 是这个测试的前缀。
 
 // S3Config 是测试用的 S3 连接参数。
@@ -65,9 +64,12 @@ func S3Client(t *testing.T) *s3.Client {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_, s3Err = s3Shared.List(ctx, "apitest/", 1)
+		if s3Err == nil {
+			cleanupStalePrefixes()
+		}
 	})
 	if s3Err != nil {
-		t.Fatalf("连不上测试用的 S3（%s，桶 %s）：%v\nS3 测试需要本机的 SeaweedFS：见 CLAUDE.md 的启动命令，或设置 TEST_S3_*",
+		t.Fatalf("连不上测试用的 S3（%s，桶 %s）：%v\n连接参数是 TEST_S3_*（写在 server/.env，见 CLAUDE.md 的\"开发环境\"）",
 			S3Env().Endpoint, S3Env().Bucket, s3Err)
 	}
 	return s3Shared
@@ -84,9 +86,9 @@ func S3Prefix(t *testing.T) string {
 	}
 	prefix := "apitest/" + time.Now().Format("20060102") + "/" + name + "-" + randomHex(4) + "/"
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		if _, err := client.DeletePrefix(ctx, prefix); err != nil {
+		if _, err := deletePrefix(ctx, client, prefix); err != nil {
 			t.Logf("清理 S3 前缀 %s 失败：%v", prefix, err)
 		}
 	})
@@ -122,7 +124,7 @@ func PutObject(t *testing.T, key, contentType string, data []byte) {
 // httpGet 直接 GET 一个地址（预签名 URL），不带 Cookie。
 func httpGet(t *testing.T, url string) (int, []byte) {
 	t.Helper()
-	res, err := http.Get(url)
+	res, err := testHTTP.Get(url)
 	if err != nil {
 		t.Fatal(err)
 	}

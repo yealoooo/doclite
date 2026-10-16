@@ -134,6 +134,8 @@ func TestCatalogLinkRace(t *testing.T) {
 // 一个只拿归类锁的长事务占着条目行（像批量定稿、改著录）；这时 PUT 页在等条目行，手里只有归类树的共享锁、没有文件
 // 树锁，所以：移动文件夹（文件树排他锁）不排在它后面，再后面的审核通过（真实接口，文件树共享锁 → files 行）也不用等。
 // 加锁顺序反过来（先文件树锁再等条目行）时，移动文件夹会排在 PUT 后面，审核又排在移动后面，这个测试失败。
+// 被拖住的请求要一直等到第 5 步放开条目行，所以下面的时限只要比一次请求的正常耗时宽就行：开发库在远程，一次审核
+// 要好几次数据库往返，约 1 秒。
 func TestCatalogLinkDoesNotBlockReview(t *testing.T) {
 	t.Parallel()
 	e := newReviewEnv(t, "RV")
@@ -176,12 +178,12 @@ func TestCatalogLinkDoesNotBlockReview(t *testing.T) {
 	select {
 	case r := <-moveDone:
 		r.Expect(200)
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("移动文件夹被等条目行的挂接拖住了")
 	}
 	moveTook := time.Since(start)
 
-	// 4. 审核通过（真实接口）：不等挂接（要求等待 < 1 秒）。
+	// 4. 审核通过（真实接口）：不等挂接（要求 3 秒内返回）。
 	start = time.Now()
 	reviewDone := make(chan *Response, 1)
 	go func() {
@@ -190,11 +192,11 @@ func TestCatalogLinkDoesNotBlockReview(t *testing.T) {
 	select {
 	case r := <-reviewDone:
 		r.Expect(200)
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("审核被等条目行的挂接拖住了")
 	}
 	reviewTook := time.Since(start)
-	if reviewTook > time.Second {
+	if reviewTook > 3*time.Second {
 		t.Fatalf("审核等了 %v", reviewTook)
 	}
 	t.Logf("挂接等条目行期间：移动文件夹 %v，审核通过 %v", moveTook, reviewTook)
