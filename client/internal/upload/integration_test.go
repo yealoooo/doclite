@@ -6,7 +6,7 @@ package upload_test
 //
 // 账号默认 demo_scanner / demo123456（DOCLITE_IT_USERNAME、DOCLITE_IT_PASSWORD），项目默认第一个能进的
 // （DOCLITE_IT_PROJECT 指定项目编码）。在项目根下建一个"M6-2 集成 <时间>"文件夹，传完后删掉（软删除）。
-// 样本取 server/testdata/samples，每次运行往里加一段注释（图片不变、内容各次不同，不会判为重复）。
+// 样本取 client/testdata/samples，每次运行往里加一段注释（图片不变、内容各次不同，不会判为重复）。
 
 import (
 	"bytes"
@@ -28,7 +28,7 @@ import (
 	"doclite/client/internal/upload"
 )
 
-const samples = "../../../server/testdata/samples"
+const samples = "../../testdata/samples"
 
 // tagged 往样本里加一段这次运行特有的注释：JPEG 加 COM 段、PNG 在 IEND 前加 tEXt 块、TIFF 在末尾追加。
 func tagged(t *testing.T, name, tag string) []byte {

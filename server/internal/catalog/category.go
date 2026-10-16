@@ -12,8 +12,8 @@ import (
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/names"
 	"doclite/server/internal/project"
-	"doclite/shared/names"
 )
 
 // 归类节点（requirements 5.9"节点"）：

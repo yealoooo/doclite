@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestUploadRareEncodings：导出 PDF 做不了的罕见编码（shared/imagehdr/testdata/encoding 的 reject-*：算术编码、无损、
+// TestUploadRareEncodings：导出 PDF 做不了的罕见编码（internal/platform/imagehdr/testdata/encoding 的 reject-*：算术编码、无损、
 // 12 位的 JPEG，JPEG 2000、JBIG 压缩的 TIFF……）上传和重扫时 400 invalid_image，提示换个保存格式重扫，什么都没写；
 // 常见样本（server/testdata/samples）和少见但导出做得了的写法（accept-*）照常入库。
 func TestUploadRareEncodings(t *testing.T) {
@@ -18,7 +18,7 @@ func TestUploadRareEncodings(t *testing.T) {
 	p := env.CreateProject("ENC")
 	f := mkdir(admin, p.RootFolderID, "盒")
 
-	dir := filepath.Join("..", "..", "shared", "imagehdr", "testdata", "encoding")
+	dir := filepath.Join("..", "internal", "platform", "imagehdr", "testdata", "encoding")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)

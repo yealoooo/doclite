@@ -3,8 +3,8 @@
 //   INIT_ADMIN_PASSWORD=admin123456 [SHOTS_TMP=<临时目录>] \
 //     npm run screenshots -- --spec scripts/shots/m1-organize.mjs --base http://localhost:<preview 端口>
 //
-// 前端地址是 vite preview（/api 代理到 server）或托管了 web/dist 的 server。JPEG、TIFF 样本读仓库里的
-// `server/testdata/samples/`，见 scripts/lib/upload-samples.mjs。
+// 前端地址是 vite preview 或 dev（/api 代理到 server）。JPEG、TIFF 样本读 web 自己的 `scripts/samples/`，见
+// scripts/lib/upload-samples.mjs。
 // 局域网地址（非安全上下文）上的上传另见 m1-upload-lan.mjs。
 //
 // 只看界面的截图（右键菜单、移动对话框、多选、删除确认、错误提示）用 M1-10 的演示文件夹，不提交改动；
@@ -584,7 +584,7 @@ export default {
           { name: 'IMG_0002.png', data: b.png },
           // 低 DPI（150）。
           { name: 'IMG_0003.png', data: scanPng(`${seed}#d`, 3, 150).png },
-          // A4 300 DPI 的 JPEG（server/testdata/samples），DPI 正常。
+          // A4 300 DPI 的 JPEG（scripts/samples），DPI 正常。
           { name: 'JPEG_A4.jpg', data: await sample('jpeg-rgb.jpg') },
           // 方向 6 的 TIFF：浏览器里不生成封面，照样入库。
           { name: 'TIFF_方向6.tif', data: orientedTiff(seed) },

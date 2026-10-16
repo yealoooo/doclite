@@ -32,7 +32,7 @@ import (
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
-	"doclite/shared/names"
+	"doclite/server/internal/platform/names"
 )
 
 const (

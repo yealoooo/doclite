@@ -7,11 +7,11 @@ import (
 
 	"github.com/google/uuid"
 
+	"doclite/server/internal/platform/archiveno"
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/names"
 	"doclite/server/internal/project"
-	"doclite/shared/archiveno"
-	"doclite/shared/names"
 )
 
 // 归类要用的项目设置（requirements 3.4、5.9"归类信息"）：读时按 project.EffectiveSettings 补默认值，再宽松地解析成

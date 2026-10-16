@@ -12,8 +12,8 @@ import (
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/imagehdr"
 	"doclite/server/internal/storage"
-	"doclite/shared/imagehdr"
 )
 
 // 重扫（requirements 5.6、5.8）：`POST /api/files/{fid}/rescan`，请求格式同上传（file.Service.Receive）。

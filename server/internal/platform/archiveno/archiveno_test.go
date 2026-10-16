@@ -4,8 +4,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"doclite/shared/names"
 )
 
 // 根 → 全宗 → 门类 → 年度 → 保管期限 → 机构。
@@ -38,10 +36,6 @@ func TestDefaultTemplate(t *testing.T) {
 	}
 	if no, missing := tmpl.Render(fullChain, 12); no != "Z109-WS·2025-Y-BGS-0012" || missing != nil {
 		t.Errorf("Render = %q, %v", no, missing)
-	}
-	// 分隔符给归类编码的规则用。
-	if err := names.ValidateCategoryCode("WS-1", tmpl.Separators()); err == nil {
-		t.Error("编码里有模板的分隔符应该不合法")
 	}
 }
 

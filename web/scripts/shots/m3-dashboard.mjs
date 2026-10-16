@@ -3,7 +3,7 @@
 //   INIT_ADMIN_PASSWORD=admin123456 \
 //     npm run screenshots -- --spec scripts/shots/m3-dashboard.mjs --base http://localhost:<preview 端口>
 //
-// 前端地址是 vite preview（/api 代理到 server）或托管了 web/dist 的 server。要先有：
+// 前端地址是 vite preview 或 dev（/api 代理到 server）。要先有：
 // - DEMO-A 的「M3-7 看板演示」演示数据（scripts/lib/m3-demo.mjs 的 ensureM37Demo：文件夹要先用 seed:files 传好，
 //   审核、归类树、条目和挂接第一次跑时自动建好，M3-6 起全部经接口，不再用 psql）；
 // - demo_manager（有 dashboard 菜单）、demo_reviewer 能进 DEMO-A（密码 demo123456，可用 DEMO_PASSWORD 覆盖）。

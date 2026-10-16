@@ -6,7 +6,7 @@ import (
 	"errors"
 	"io"
 
-	"doclite/shared/imagehdr"
+	"doclite/server/internal/platform/imagehdr"
 )
 
 // pagePlan 是一页怎么写进 PDF：原样嵌入的几个图像对象，或者转换。

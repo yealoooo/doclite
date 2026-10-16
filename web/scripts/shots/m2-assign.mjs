@@ -3,7 +3,7 @@
 //   INIT_ADMIN_PASSWORD=admin123456 \
 //     npm run screenshots -- --spec scripts/shots/m2-assign.mjs --base http://localhost:<preview 端口>
 //
-// 前端地址是 vite preview（/api 代理到 server）或托管了 web/dist 的 server。要先有：
+// 前端地址是 vite preview 或 dev（/api 代理到 server）。要先有：
 // - DEMO-A 下的演示文件夹「M2-5 分配演示」（40 页、两层子文件夹，seed:files 建的，审核状态保持待分配）：
 //     npm run seed:files -- --project DEMO-A --folder "M2-5 分配演示" --count 12 --remark "M2-5 审核分配演示"
 //     npm run seed:files -- --project DEMO-A --folder "M2-5 分配演示/第一组" --count 10 --low-dpi 1

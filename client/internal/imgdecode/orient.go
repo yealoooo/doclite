@@ -2,7 +2,7 @@ package imgdecode
 
 import "image"
 
-// 方向（EXIF / TIFF 的 Orientation，1–8；shared/imagehdr 读出，PNG 一律 1）：文件里存的像素 (x, y)（存的宽高 w×h）
+// 方向（EXIF / TIFF 的 Orientation，1–8；internal/imagehdr 读出，PNG 一律 1）：文件里存的像素 (x, y)（存的宽高 w×h）
 // 转正后落在哪里。5–8 转正后宽高交换。和 server（imagehdr 交换宽高）、封面（requirements 5.6）的规则一致：
 //
 //	1 原样            (x, y)

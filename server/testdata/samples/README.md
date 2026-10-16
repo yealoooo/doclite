@@ -1,10 +1,11 @@
 # 测试样本
 
-常见扫描格式的真实图片文件（都能正常解码），给这些地方用：
+常见扫描格式的真实图片文件（都能正常解码），server 的这些测试用：
 
-- `shared/imagehdr` 的单元测试：逐个解析，结果要和下表一致（表格就是期望值，测试会读这个文件）；
-- 网页的截图脚本：`web/scripts/lib/upload-samples.mjs` 的 `sample(name)` 从这里读（每次运行往文件里加一段注释，图片不变、内容不重复，免得被判为重复上传）；
-- 以后的 API 测试（上传、多页 TIFF 拒绝）和导出测试（原样嵌入、转换）。
+- `internal/platform/imagehdr` 的单元测试：逐个解析，结果要和下表一致（表格就是期望值，测试会读这个文件）；
+- API 测试（上传、多页 TIFF 拒绝）和导出测试（`internal/export/bundle`：原样嵌入、转换）。
+
+三个模块代码上互不依赖（M7-5），各带各的样本：`client/testdata/samples` 是这个目录的完整副本（客户端的 imagehdr、封面、解码测试用，表格一样），`web/scripts/samples` 是截图脚本要的几个（`web/scripts/lib/upload-samples.mjs` 读）。
 
 内容是合成的 A4 页面（页码、标题、模拟文字行、纸张噪点，左上角有一块深色"方向块"），彩色页另有蓝色页眉、黄色高亮和红色印章。
 
@@ -50,8 +51,8 @@ tiffutil -cat /tmp/mp/tiff-g4-1bit-p1.tif /tmp/mp/tiff-g4-1bit-p2.tif -out /tmp/
 tiffutil -lzw /tmp/mp/cat.tif -out tiff-multipage-2p.tif
 ```
 
-方向 6 的 TIFF、BigTIFF、截断、IFD 成环这类边界情况不放文件，在 `shared/imagehdr` 的测试里用代码现场拼。
+方向 6 的 TIFF、BigTIFF、截断、IFD 成环这类边界情况不放文件，在 imagehdr 的测试里用代码现场拼。
 
 ## 改动时
 
-增删、替换文件后同步改上面的表格，再跑 `cd shared && go test ./imagehdr/`：测试会核对目录里的每个文件都在表里、解析结果和表里一致。
+增删、替换文件后同步改上面的表格，再跑 `cd server && go test ./internal/platform/imagehdr/`：测试会核对目录里的每个文件都在表里、解析结果和表里一致。客户端、web 的副本要一起改（客户端的副本连表格一起换，再跑 `cd client && go test ./internal/imagehdr/`）。

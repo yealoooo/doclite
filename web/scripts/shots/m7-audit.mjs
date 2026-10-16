@@ -2,7 +2,7 @@
 //
 //   INIT_ADMIN_PASSWORD=admin123456 npm run screenshots -- --spec scripts/shots/m7-audit.mjs --base <前端地址>
 //
-// 前端地址是托管了 web/dist 的 server（或 vite preview，/api 代理到 server）。脚本在页面之外调接口时也走这个地址。
+// 前端地址是 vite preview 或 dev（/api 代理到 server）。脚本在页面之外调接口时也走这个地址。
 // 数据：seed:demo 的 DEMO-A，库里已有几百条以上的审计（截图脚本跑过一遍就有）。脚本先用 admin 在 DEMO-A 根目录下
 // 建一个"截图验证 M7-3 审计 <时间>"文件夹、改备注、再删掉（留下 3 条审计：新建、修改、删除；文件夹是软删除）。
 //
@@ -15,7 +15,7 @@
 //   响应里加五条假的，detail 照 server 写的样子）。
 //
 // 另有一张是 M7-3 的另一半（上传时拒绝导出不了的罕见编码）：在 DEMO-A 根目录下临时建一个文件夹，浏览器里上传
-// shared/imagehdr/testdata/encoding 的两个夹具（算术编码的 JPEG、JPEG 2000 压缩的 TIFF），上传面板里显示服务器给的
+// scripts/samples/encoding 的两个夹具（算术编码的 JPEG、JPEG 2000 压缩的 TIFF），上传面板里显示服务器给的
 // 原因，什么都没入库；做完删掉临时文件夹。
 
 import { readFile } from 'node:fs/promises'
@@ -178,7 +178,7 @@ async function injectFakeItems(page) {
   })
 }
 
-const ENCODING_DIR = new URL('../../../shared/imagehdr/testdata/encoding/', import.meta.url)
+const ENCODING_DIR = new URL('../samples/encoding/', import.meta.url)
 
 export default {
   out: '../docs/screenshots/m7',

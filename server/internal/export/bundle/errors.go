@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"doclite/shared/imagehdr"
+	"doclite/server/internal/platform/imagehdr"
 )
 
 // Kind 是错误的类别。[Error.Retryable] 区分要不要重试。

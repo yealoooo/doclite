@@ -26,9 +26,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"doclite/server/internal/platform/archiveno"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
-	"doclite/shared/archiveno"
 )
 
 var (

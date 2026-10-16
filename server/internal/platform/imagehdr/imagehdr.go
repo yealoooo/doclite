@@ -1,8 +1,13 @@
 // Package imagehdr 读 JPEG、PNG、TIFF 的文件头，不解码像素（requirements 5.6"文件头"，硬性规则 11）。
 //
+// **这个包有两份**（M7-5：server、web、client 三个模块代码上互不依赖，requirements 1.3）：这一份是 server 的
+// （server/internal/platform/imagehdr），另一份在桌面客户端的 client/internal/imagehdr。两份的代码、测试和夹具
+// （testdata/encoding）保持一样，**改动要两边同步**；上传是否拒收**以 server 这一份为准**（客户端那份只是上传前
+// 提前拦下、读方向，两边结论不同时以 server 的回答为准）。只用标准库，不依赖 server 的其他包。
+//
 // server 上传时用它读格式、宽高、DPI、颜色模式、方向，并拒绝多页 TIFF 和超过像素上限的图；桌面客户端生成封面前
-// 也用它读方向，所以两边对同一个文件得出的方向一定一致。上传（server 和客户端上传前的检查）用 [ParseUpload]，另外
-// 拒绝导出 PDF 做不了的罕见编码（M7-3，encoding.go）。
+// 也用它（另一份）读方向，两份同步时两边对同一个文件得出的方向一致。上传（server 和客户端上传前的检查）用
+// [ParseUpload]，另外拒绝导出 PDF 做不了的罕见编码（M7-3，encoding.go）。
 //
 // 规则：
 //   - 格式按文件开头的魔数识别（不看扩展名）：JPEG `FF D8 FF`，PNG 8 字节签名，经典 TIFF `II*\0` / `MM\0*`。
@@ -165,7 +170,8 @@ func Parse(r io.ReaderAt, size int64, maxPixels int64) (Info, error) {
 }
 
 // ParseUpload 是上传时用的 [Parse]：另外拒绝导出 PDF 时做不了的罕见编码（[ErrUnsupportedEncoding]，规则见
-// encoding.go）。server 的上传、重扫和桌面客户端上传前的检查都用它，两边对同一个文件的结论一致。
+// encoding.go）。server 的上传、重扫用它，桌面客户端上传前的检查用另一份（client/internal/imagehdr）；两份同步时
+// 两边对同一个文件的结论一致，不一致时以 server 为准。
 //
 // 已经入库的文件不受影响：看图、生成封面、导出仍用 [Parse]。
 func ParseUpload(r io.ReaderAt, size int64, maxPixels int64) (Info, error) {

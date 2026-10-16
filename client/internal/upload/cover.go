@@ -12,8 +12,8 @@ import (
 
 	"golang.org/x/image/draw"
 
+	"doclite/client/internal/imagehdr"
 	"doclite/client/internal/imgdecode"
-	"doclite/shared/imagehdr"
 )
 
 // 封面的规格（requirements 5.6"封面"，用户决定 2026-09-28；server 的校验在 server/internal/file/cover.go）：

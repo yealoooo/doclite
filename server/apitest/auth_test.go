@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -60,8 +58,11 @@ func TestHealthAndUnknownRoutes(t *testing.T) {
 	anon.Get("/api/nope").ExpectError(404, "not_found")
 	anon.Get("/api").ExpectError(404, "not_found")
 	anon.Post("/api/health", nil).ExpectError(405, "method_not_allowed")
-	// 没有托管网页时，/api 以外是 404。
-	anon.Get("/").Expect(404)
+	// server 只提供接口（M7-5）：/api 以外的路径一律 JSON 404，不托管网页、不回退到 index.html。
+	for _, p := range []string{"/", "/login", "/files", "/index.html", "/assets/app.js"} {
+		anon.Get(p).ExpectError(404, "not_found")
+	}
+	anon.Post("/login", nil).ExpectError(404, "not_found")
 	// 路径参数不是 UUID：先过菜单检查，再 400。
 	env.Admin().Get("/api/system/users/not-a-uuid").ExpectError(400, "invalid_input")
 	// 请求体不是 JSON、Content-Type 不对、太大。
@@ -71,41 +72,6 @@ func TestHealthAndUnknownRoutes(t *testing.T) {
 	c.Header.Set("Content-Type", "text/plain")
 	c.Post("/api/system/roles", nil).ExpectError(400, "invalid_input")
 	c.Header.Del("Content-Type")
-}
-
-func TestWebHosting(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	must(t, os.MkdirAll(filepath.Join(dir, "assets"), 0o755))
-	must(t, os.WriteFile(filepath.Join(dir, "index.html"), []byte("<!doctype html><title>doclite</title>"), 0o644))
-	must(t, os.WriteFile(filepath.Join(dir, "assets", "app-abc.js"), []byte("console.log(1)"), 0o644))
-	must(t, os.WriteFile(filepath.Join(dir, "favicon.svg"), []byte("<svg/>"), 0o644))
-	env := NewEnv(t, func(o *app.Options) { o.WebDir = dir })
-	anon := env.Anon()
-
-	for _, p := range []string{"/", "/login", "/files", "/system/users?x=1", "/index.html"} {
-		r := anon.Get(p)
-		if r.Status != 200 && !(p == "/index.html" && r.Status == 301) {
-			t.Fatalf("%s：%d", p, r.Status)
-		}
-		if r.Status == 200 && (!strings.Contains(string(r.Body), "<title>doclite</title>") || r.Header.Get("Cache-Control") != "no-cache") {
-			t.Fatalf("%s 应回退到 index.html：%s %v", p, r.Body, r.Header)
-		}
-	}
-	r := anon.Get("/favicon.svg").Expect(200)
-	if string(r.Body) != "<svg/>" || r.Header.Get("Cache-Control") != "no-cache" {
-		t.Fatalf("favicon：%s %v", r.Body, r.Header)
-	}
-	r = anon.Get("/assets/app-abc.js").Expect(200)
-	if r.Header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
-		t.Fatalf("assets 的缓存头：%v", r.Header)
-	}
-	r = anon.Get("/assets/missing.js").Expect(404)
-	if r.Header.Get("Cache-Control") != "" {
-		t.Fatalf("找不到的 assets 不应带长缓存：%v", r.Header)
-	}
-	// /api 不回退到网页。
-	anon.Get("/api/nope").ExpectError(404, "not_found")
 }
 
 func TestLoginLogout(t *testing.T) {

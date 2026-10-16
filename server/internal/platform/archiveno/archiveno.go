@@ -22,8 +22,6 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	"doclite/shared/names"
 )
 
 const (
@@ -34,6 +32,10 @@ const (
 	// MaxItemNoWidth 是 `{item_no:0N}` 的 N 的上限（件号最大 999999999）。
 	MaxItemNoWidth = 10
 )
+
+// forbiddenChars 是 Windows 文件名不允许的字符，档号模板的文字部分不能有（档号可能用作导出时的目录名、文件名）。
+// 和 names.ForbiddenChars 是同一组字符；这个包只用标准库，所以自己写一份。
+const forbiddenChars = `\/:*?"<>|`
 
 // FallbackSeparators：当前模板解析不了时，归类编码按这些字符当分隔符（不能含）。
 var FallbackSeparators = []rune{'-', '.', '_', '·'}
@@ -186,7 +188,7 @@ func Parse(source string) (*Template, error) {
 			return nil, invalidf("有多出来的 }（不支持转义，文字里不能有花括号）")
 		case unicode.IsSpace(c) || unicode.IsControl(c):
 			return nil, invalidf("文字部分不能有空白或控制字符")
-		case strings.ContainsRune(names.ForbiddenChars, c):
+		case strings.ContainsRune(forbiddenChars, c):
 			return nil, invalidf("文字部分不能有 %c（档号可能用作导出时的目录名、文件名，不能有 \\ / : * ? \" < > |）", c)
 		}
 		lit.WriteRune(c)

@@ -5,7 +5,7 @@
 // 移动、改名只改这两张表，对象、快照、审核、归类不动。
 //
 // 规则：
-//   - 名称 1–255 字，不含 \ / : * ? " < > |、控制字符，首尾不空白、不以点结尾、不是 Windows 保留名（shared/names）；
+//   - 名称 1–255 字，不含 \ / : * ? " < > |、控制字符，首尾不空白、不以点结尾、不是 Windows 保留名（platform/names）；
 //     老名字移动、复制时不重校验；
 //   - 重名（同文件夹、不分大小写、不算已删除）：明确改名撞名 409 conflict；上传、移动、复制文件撞名自动改为
 //     "名字 (n).扩展名"；新建、移动文件夹撞名 409（新建带 if_exists: "return" 时返回已有的）；
@@ -39,9 +39,9 @@ import (
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/names"
 	"doclite/server/internal/project"
 	"doclite/server/internal/storage"
-	"doclite/shared/names"
 )
 
 const maxRemarkRunes = 500

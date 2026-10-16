@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"math"
 
-	"doclite/shared/imagehdr"
+	"doclite/server/internal/platform/imagehdr"
 )
 
 // CoverLongEdge 是封面的长边（像素）：客户端按原图转正后的方向缩到长边 400（原图更小时不放大）。

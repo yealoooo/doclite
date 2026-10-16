@@ -1,6 +1,6 @@
 # Doclite
 
-纸质档案数字化系统：扫描上传 → 分配审核 → 审核（驳回重扫）→ 归类挂接 → 导出。服务端 Go（`server/`），桌面客户端 Wails v3（`client/`），网页 Vue 3（`web/`），共用的纯函数在 `shared/`。需求见 `docs/requirements.md`，进度见 `docs/roadmap.md`，开发约定见 `CLAUDE.md`。
+纸质档案数字化系统：扫描上传 → 分配审核 → 审核（驳回重扫）→ 归类挂接 → 导出。服务端 Go（`server/`，只提供 `/api`），网页 Vue 3（`web/`，单独启动），桌面客户端 Wails v3（`client/`）。三个模块代码上互不依赖，只靠 HTTP 接口和壳的桥命令约定（见 `CLAUDE.md` 的"三个模块"）。需求见 `docs/requirements.md`，进度见 `docs/roadmap.md`，开发约定见 `CLAUDE.md`。
 
 ## 目录
 
@@ -15,7 +15,7 @@
 
 ## 本机试用
 
-在这台 Mac 上自己试：server 跑在 9080、连本机的 `doclite_dev`（已经有演示账号和演示数据），浏览器和桌面客户端都连它。PostgreSQL 16 是 Homebrew 服务，一直在跑；`server/.env` 已经配好（不要改里面的 `MASTER_KEY`）。
+在这台 Mac 上自己试：server 跑在 9080、连本机的 `doclite_dev`（已经有演示账号和演示数据），只提供接口；网页由 web 单独提供（vite preview，4173，把 `/api` 转给 9080），浏览器打开网页的地址。PostgreSQL 16 是 Homebrew 服务，一直在跑；`server/.env` 已经配好（不要改里面的 `MASTER_KEY`）。server 和网页各占一个终端窗口。
 
 1. **SeaweedFS**（没在跑时；`lsof -i :8333` 没有输出就是没在跑）：
 
@@ -25,16 +25,25 @@
      -dir=$HOME/doclite-dev/seaweedfs -ip=127.0.0.1 -admin.ui=false
    ```
 
-2. **网页**（第一次、或者 `web/` 改过之后）：`cd web && npm ci && npm run build`（产物在 `web/dist`）。
-3. **server**（要在 `server/` 下运行，它读当前目录的 `.env`；启动时自动执行迁移，Ctrl+C 退出）：
+2. **server**（要在 `server/` 下运行，它读当前目录的 `.env`；启动时自动执行迁移，Ctrl+C 退出）：
 
    ```sh
    cd server
    go build -o bin/doclite-server ./cmd/server
-   WEB_DIR=../web/dist ./bin/doclite-server
+   ./bin/doclite-server
    ```
 
-   浏览器打开 <http://127.0.0.1:9080>。这是开发版，不检查许可证。导出、存储迁移由拿到执行器锁的 server 执行：启动日志里有"另一个 server 进程正在执行后台任务"时，是别的 server（例如开发任务临时起的 2908x）先拿到了锁，导出会交给它——先停掉那个再重启 9080（见[后台任务](#后台任务导出存储迁移)）。
+   server 只提供接口：浏览器直接打开 9080 只会得到 JSON 的 404（`/api/health` 能看到版本）。这是开发版，不检查许可证。导出、存储迁移由拿到执行器锁的 server 执行：启动日志里有"另一个 server 进程正在执行后台任务"时，是别的 server（例如开发任务临时起的 2908x）先拿到了锁，导出会交给它——先停掉那个再重启 9080（见[后台任务](#后台任务导出存储迁移)）。
+3. **网页**（另开一个终端，Ctrl+C 退出）：
+
+   ```sh
+   cd web
+   npm ci            # 第一次、或者 package-lock.json 变了之后
+   npm run build     # 第一次、或者 web/ 改过之后（产物在 web/dist）
+   npm run preview   # http://127.0.0.1:4173，/api（含实时推送）转给 http://127.0.0.1:9080
+   ```
+
+   浏览器打开 <http://127.0.0.1:4173>。server 不在 9080 时用 `DOCLITE_SERVER=http://127.0.0.1:<端口> npm run preview`；换端口 `npm run preview -- --port <端口>`；让局域网里别的电脑也能打开加 `-- --host`（监听所有地址；经局域网地址打开是非安全上下文）。改前端时用 `npm run dev`（<http://127.0.0.1:5173>，热更新，不用 build），代理一样。
 4. **桌面客户端**：
 
    ```sh
@@ -91,30 +100,30 @@ echo 's3.bucket.create -name doclite' | weed shell -master=127.0.0.1:9333
 
 `server/.env` 不提交。环境变量优先于 `.env`。
 
-**启动 server**（在 `server/` 下运行，读当前目录的 `.env`；启动时自动执行迁移）：
+**分别启动 server 和 web**（三个模块各自独立，见 `CLAUDE.md` 的"三个模块"）：
 
 ```sh
-cd web && npm ci && npm run build          # 网页构建产物在 web/dist
-cd ../server && WEB_DIR=../web/dist go run ./cmd/server
-# 浏览器打开 http://127.0.0.1:9080（LISTEN_ADDR）
+cd server && go run ./cmd/server           # 在 server/ 下运行，读当前目录的 .env；启动时自动执行迁移；只提供 /api（LISTEN_ADDR，默认 9080）
+cd web && npm ci && npm run dev            # 另一个终端；浏览器打开 http://127.0.0.1:5173
 ```
 
-- `WEB_DIR` 设了才托管网页（`/api` 以外的路径回退到 `index.html`）；不设只提供 `/api`。重新 `npm run build` 不用重启 server。
-- 改前端时也可以用 vite：`cd web && DOCLITE_SERVER=http://127.0.0.1:9080 npm run dev`（`/api` 代理到 server，默认 9080）。
+- server 只提供 `/api`，`/api` 以外的路径一律 JSON 404，不托管网页。
+- web 用 vite 单独启动：`npm run dev`（5173，热更新）或 `npm run build && npm run preview`（4173，构建产物，和部署时的 nginx 一样是静态文件）。两种都把 `/api`（包括实时推送）代理给 `DOCLITE_SERVER`（默认 `http://127.0.0.1:9080`）；端口、监听地址用 vite 的参数：`DOCLITE_SERVER=http://127.0.0.1:29080 npm run preview -- --port 24173 --strictPort`（默认只监听 127.0.0.1，`--host` 监听所有地址）。
+- 部署时 web 是单独的 nginx 容器（静态文件 + `/api` 反向代理给 server），M8 做。
 - 端口约定：自己的 server 用 9080；并行的子任务用 29080–29082（server）和 24173–24175（vite preview），互不干扰。
 - 同一个库上开多个 server 时，只有一个执行导出（见[后台任务](#后台任务导出存储迁移)）；多个 server 的 `TMP_DIR` 要分开（启动时会清空 `TMP_DIR/uploads`）。
 
 ## 跑测试
 
-提交前：每个 Go 模块 `gofmt -l .` 没有输出、`go vet ./...`、`go test ./...` 通过；改了 `web/` 时 `npm run build` 通过。
+提交前：每个 Go 模块在自己的目录下 `gofmt -l .` 没有输出、`go vet ./...`、`go test ./...` 通过（没有 Go 工作区，server、client 各自独立）；改了 `web/` 时 `npm run build` 通过。
 
 ```sh
-cd server && gofmt -l . && go vet ./... && go test ./...   # API 测试（82 个）+ 单元测试，本机约 20 秒
-cd shared && go test ./...                                 # 文件头、名称规则、档号模板
-cd client && go test ./...                                 # 客户端的纯逻辑（Mac 上要 cgo，Wails 需要）
+cd server && gofmt -l . && go vet ./... && go test ./...   # API 测试（82 个）+ 单元测试（含文件头、名称规则、档号模板），本机约 20 秒
+cd client && gofmt -l . && go vet ./... && GOOS=windows go vet ./... && go test ./...   # 客户端的纯逻辑（Mac 上要 cgo，Wails 需要）
 cd web && npm run build                                    # vue-tsc 类型检查 + 构建
 ```
 
+- 读图片文件头的 `imagehdr` 有两份（`server/internal/platform/imagehdr`、`client/internal/imagehdr`），改了一份要同步另一份（连同测试和 `testdata/encoding`），两边的测试都跑；上传是否拒收以 server 为准。测试样本各带各的：`server/testdata/samples`、`client/testdata/samples`（完整副本）、`web/scripts/samples`（截图脚本要的几个）。
 - **API 测试**（`server/apitest/`）连真实的 PostgreSQL 和 SeaweedFS。第一次运行时建模板库 `doclite_test_tpl_<迁移哈希>`，每个测试从它克隆一个库、用自己的 S3 前缀，结束时删掉（强杀可能留下 `doclite_test_<随机>` 库，可以手工删）。连接参数：`TEST_DATABASE_URL`（默认 `postgres://doclite@127.0.0.1:5432/doclite_test`）、`TEST_S3_ENDPOINT`、`TEST_S3_ACCESS_KEY`、`TEST_S3_SECRET_KEY`、`TEST_S3_BUCKET`（默认同上面的 `weed mini`）。SeaweedFS 没启动时测试直接报错。存储迁移的测试另用第二个桶 `TEST_S3_BUCKET2`（默认 `doclite-migrate-test`，不存在时测试自己建）。`TEST_LOG=1` 打出 server 日志。
 - **客户端上传的集成测试**（要一个在跑的 server）：`cd client && DOCLITE_IT_SERVER=http://127.0.0.1:9080 DOCLITE_IT_USERNAME=… DOCLITE_IT_PASSWORD=… DOCLITE_IT_PROJECT=DEMO-A go test ./internal/upload/ -run Integration`。
 - **性能抽测**（默认不跑，`//go:build perf`）：用 SQL 造 10 万文件（6 万页挂在 2400 件里），测审核读接口、看板、`catalog-placements`、2000 件 / 5 万页的导出预检、建任务、交付后变更，打印每个接口的中位数和最慢，超过 requirements 1.4 的目标就失败：
@@ -127,18 +136,24 @@ cd web && npm run build                                    # vue-tsc 类型检�
 
 `web/scripts/shots/*.mjs` 是上一版留下的界面验收：用本机的 Chrome（puppeteer-core，不下载浏览器；找不到时设 `CHROME_PATH`）无头打开页面、操作、断言、截图。失败的那张打 ✗，脚本退出码 1。
 
+先分别起 server 和 web（见[本机开发](#本机开发)），`--base` 是 web 的地址：
+
 ```sh
-cd web
-INIT_ADMIN_PASSWORD=<管理员密码> npm run screenshots -- --spec scripts/shots/m0.mjs --base http://127.0.0.1:9080
+cd server && go run ./cmd/server                        # 9080；要执行导出、迁移的脚本要它拿到执行器锁
+cd web && npm run build && npm run preview              # 另一个终端：http://127.0.0.1:4173，/api 转给 9080
+cd web && INIT_ADMIN_PASSWORD=<管理员密码> npm run screenshots -- --spec scripts/shots/m0.mjs --base http://127.0.0.1:4173
+#   --base <URL>     web 的入口，默认 http://127.0.0.1:5173（npm run dev）
 #   --only a,b       只跑这几张（按 name）
 #   --out <目录>      截图放哪（默认 docs/screenshots/<里程碑>；截图不提交，跑完 git clean -fd docs/screenshots）
 ```
 
-- `--base` 指向托管了 `web/dist` 的 server（或 vite preview、devshell，`/api` 由它们代理；有壳模式截图的脚本要用 devshell，见下面）。脚本在页面之外调接口也走这个地址。
+- `--base` 是 web 的入口：vite preview（`npm run preview`）或 dev（`npm run dev`），`/api` 由它们代理给 server；有壳模式截图的脚本要用 devshell（见下面）。server 只提供接口，不能当 `--base`。脚本在页面之外调接口也走这个地址。
+- 并行任务各用一组端口：`DOCLITE_SERVER=http://127.0.0.1:29080 npm run preview -- --port 24173 --strictPort`，`--base http://127.0.0.1:24173`。
+- 上传用的样本在 `web/scripts/samples/`（从 `server/testdata/samples` 复制的几个，清单见那里的 README），web 不读别的模块目录里的文件。
 - `INIT_ADMIN_PASSWORD`（`INIT_ADMIN_USERNAME`）是管理员的密码，和启动 server 用同一组变量；演示账号的密码 `demo123456`（`DEMO_PASSWORD` 可改）。`SHOTS_TMP` 是脚本的临时目录（默认系统临时目录）。
 - 几个较早的脚本直接 `psql` 读审计（M7-3 之后有 `GET /api/system/audit-logs`，新脚本用接口）：要 `psql` 在 PATH 里，`DATABASE_URL` 指向同一个库（默认本机 `doclite_dev`）。
 
-**准备数据**（新库；已有的会跳过）：
+**准备数据**（新库；已有的会跳过；seed 脚本只调接口，`--base` 是 server 本身或 web 的入口都行，默认 `http://127.0.0.1:9080`）：
 
 ```sh
 INIT_ADMIN_PASSWORD=<管理员密码> npm run seed:demo -- --base http://127.0.0.1:9080   # 演示账号、DEMO-A、DEMO-B、授权

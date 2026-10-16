@@ -14,11 +14,11 @@ import (
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/imagehdr"
+	"doclite/server/internal/platform/names"
 	"doclite/server/internal/platform/s3"
 	"doclite/server/internal/project"
 	"doclite/server/internal/storage"
-	"doclite/shared/imagehdr"
-	"doclite/shared/names"
 )
 
 // 上传入库（requirements 5.6）：

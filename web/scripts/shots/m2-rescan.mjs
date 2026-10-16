@@ -4,7 +4,7 @@
 //     npm run screenshots -- --spec scripts/shots/m2-rescan.mjs --base <devshell 的地址>
 //
 // 前端地址是 devshell（client/cmd/devshell：/api 转给 server，壳模式那张要它的取图地址），浏览器的几张也可以用
-// vite preview 或托管了 web/dist 的 server。要先有：
+// vite preview 或 dev（/api 代理到 server）。要先有：
 // - DEMO-A 下的演示文件夹「M2-7 重扫演示」（盒 003 6 页、盒 001 4 页，seed:files 建的；分给 demo_reviewer，驳回了 5 页），
 //   见 roadmap M2-7 的须知。每张截图在它下面建一个「截图验证 M2-7 … <时间>」临时文件夹、用接口上传几页，分给
 //   demo_reviewer 并驳回几页，做完在 after 里删掉（软删除；前面失败了也删），所以可以反复跑，不动演示文件夹里原有的页；

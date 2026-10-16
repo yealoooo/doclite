@@ -1,7 +1,7 @@
 // Package imgdecode 把本机的一张图片（JPEG、PNG、经典 TIFF）整张解码成 image.Image，封面（internal/upload）和
 // 切块（internal/tiles）共用这一份：
 //
-//   - [Open] 读文件头（shared/imagehdr，和 server 同一份规则：格式、宽高、方向；多页 TIFF 拒绝）；
+//   - [Open] 读文件头（internal/imagehdr，和 server 的那份同步的规则：格式、宽高、方向；多页 TIFF 拒绝）；
 //   - [Source.Decode] 整张解码：JPEG 用 image/jpeg，PNG 用 image/png；TIFF 先看压缩方式，JPEG 压缩的（7，以及能
 //     定位到完整 JPEG 的旧式 6）由这个包按条带或分块交给 image/jpeg 再拼成整张（tiffjpeg.go），其余交给
 //     golang.org/x/image/tiff；
@@ -23,7 +23,7 @@ import (
 
 	"golang.org/x/image/tiff"
 
-	"doclite/shared/imagehdr"
+	"doclite/client/internal/imagehdr"
 )
 
 // Kind 是解不了的原因（tiles 原样当作 422 的 code 交给页面，见 web/src/lib/viewer/load-original.ts）。

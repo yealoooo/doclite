@@ -5,8 +5,9 @@
 //
 // 选项：
 //   --spec <文件>       截图清单（必填），格式见 scripts/shots/m0.mjs
-//   --base <URL>        前端地址，默认 http://127.0.0.1:5173（托管了 web/dist 的 server、vite preview，或 devshell——
-//                       有壳模式截图的脚本要用 devshell，见 scripts/lib/wails-mock.mjs）
+//   --base <URL>        web 的入口，默认 http://127.0.0.1:5173（npm run dev）；也可以是 vite preview（npm run preview）
+//                       或 devshell。/api 由它们代理给 server（server 只提供接口，不托管界面）。有壳模式截图的脚本要用
+//                       devshell，见 scripts/lib/wails-mock.mjs
 //   --out <目录>        输出目录，默认取清单里的 out（相对 web/）
 //   --account 名:密码   覆盖或补充清单里的账号密码，可重复
 //   --only a,b          只截这几张（按 name）

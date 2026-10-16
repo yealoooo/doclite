@@ -8,8 +8,8 @@ import (
 	"image/color"
 	"os"
 
+	"doclite/client/internal/imagehdr"
 	"doclite/client/internal/imgdecode"
-	"doclite/shared/imagehdr"
 )
 
 // 错误码（imagecache 把它们作为 422 的 code 交给页面，见 web/src/lib/viewer/load-original.ts 的 shellMessage）。
@@ -83,7 +83,7 @@ type Plan struct {
 	Estimate int64
 }
 
-// NewPlan 读文件头（shared/imagehdr，和 server 同一份规则），算出切块计划。
+// NewPlan 读文件头（internal/imagehdr，和 server 的那份同步的规则），算出切块计划。
 func NewPlan(path string) (*Plan, error) {
 	src, err := imgdecode.Open(path, 0)
 	if err != nil {

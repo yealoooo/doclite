@@ -12,18 +12,20 @@ import (
 	"golang.org/x/image/tiff"
 )
 
-// 样本和夹具：
-//   - server/testdata/samples：tiff-jpeg-ycbcr.tif 和 tiff-lzw-rgb.tif 版式、颜色相同（595×842，文字行不同，只比整页）；
-//   - server/internal/export/bundle/testdata：tiff-jpeg-*.tif 是 LZW 样本左上角 400×421 用 tiffcp 生成的
-//     （RGB 的分量 ID 是 'R','G','B'），分平面的是左上角 64×48；
-//   - testdata（这个包的）：LZW 样本、无压缩灰度样本的左上角 160×136，用 libtiff 4.7 的 tiffcp 生成：
+// 样本和夹具（客户端自己带的，M7-5 起不读 server 目录里的文件）：
+//   - client/testdata/samples（server/testdata/samples 的副本）：tiff-jpeg-ycbcr.tif 和 tiff-lzw-rgb.tif 版式、颜色相同
+//     （595×842，文字行不同，只比整页）；
+//   - testdata（这个包的）里从 server 的 internal/export/bundle/testdata 复制来的：tiff-jpeg-ycbcr-tables、-tiles、-rgb、
+//     -planar 是 LZW 样本左上角 400×421 用 tiffcp 生成的（RGB 的分量 ID 是 'R','G','B'），分平面的是左上角 64×48；
+//   - testdata（这个包的）里另外四个（server 的 bundle/testdata 也有一份，给上传和导出的一致性测试用）：LZW 样本、
+//     无压缩灰度样本的左上角 160×136，用 libtiff 4.7 的 tiffcp 生成：
 //     tiff-jpeg-gray.tif（tiffcp -c jpeg:90 -r 48，3 个条带，最后一个 40 行）；tiff-jpeg-cmyk.tif（C、M、Y = 255 − R、G、B，
 //     K = 0，同样的参数，没有 Adobe 标记）；tiff-jpeg-rgb-ids.tif（tiffcp -c jpeg:90:r -r 48，再把各条带 SOF、SOS 里的
 //     分量 ID 改成 0、1、2——旧版 libjpeg 写的 RGB 就是这样，image/jpeg 会当成 YCbCr）；tiff-ojpeg.tif（旧式 JPEG：
 //     手拼的 TIFF，JPEGInterchangeFormat 指向一张完整的基线 JPEG，YCbCr 4:2:0，带 JFIF）。
 const (
-	samplesDir = "../../../server/testdata/samples"
-	bundleDir  = "../../../server/internal/export/bundle/testdata"
+	samplesDir = "../../testdata/samples"
+	bundleDir  = "testdata"
 )
 
 // DecodeRef 用 x/image/tiff 解参照用的 TIFF（无压缩、LZW）。导出给 consumers_test.go 用。

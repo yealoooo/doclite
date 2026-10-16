@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"doclite/server/internal/platform/httpx"
-	"doclite/shared/imagehdr"
+	"doclite/server/internal/platform/imagehdr"
 )
 
 func jpegOf(t *testing.T, w, h int) []byte {

@@ -1,6 +1,7 @@
 // 浏览器上传的截图脚本用的合成文件和助手（M1-12）。都是真能解码的图片：
-// - JPEG、TIFF（无压缩、LZW、1 位 CCITT G4……）、PNG 样本来自仓库里的 `server/testdata/samples/`（清单、格式、
-//   尺寸、DPI、方向见那里的 README.md；原来是每次现场调 cargo 跑上一版的 gen-samples，M1-2 起改为读提交的文件）。
+// - JPEG、TIFF（无压缩、LZW、1 位 CCITT G4……）、PNG 样本来自 web 自己带的 `scripts/samples/`（从
+//   server/testdata/samples 复制的，清单见那里的 README.md；原来是每次现场调 cargo 跑上一版的 gen-samples，M1-2 起
+//   改为读提交的文件，M7-5 起 web 不再读 server 目录里的文件）。
 //   `sample(name)` 每个进程第一次调用时读进内存，并往每个样本里加一段这次运行特有的注释（JPEG 加 COM 段、PNG 加
 //   tEXt 块、TIFF 在末尾追加），图片不变、内容各次运行不同，不会和以前上传过的判为内容重复；同一进程里多次取同一个
 //   样本得到同样的字节。
@@ -19,8 +20,8 @@ import UTIF from 'utif'
 
 import { makeScanPage } from './scan-pages.mjs'
 
-/** 提交在仓库里的样本目录。 */
-export const SAMPLES_DIR = fileURLToPath(new URL('../../../server/testdata/samples/', import.meta.url))
+/** web 自己带的样本目录（scripts/samples）。 */
+export const SAMPLES_DIR = fileURLToPath(new URL('../samples/', import.meta.url))
 
 /** 这次运行的标记：写进每个样本，让内容和以前的运行不同。只用 ASCII（PNG 的 tEXt 是 Latin-1）。 */
 const RUN_TAG = `doclite-shots ${Date.now()} ${Math.random().toString(36).slice(2)}`
@@ -60,22 +61,23 @@ function addComment(buf, text) {
 
 let samples = null
 
-/** 读 server/testdata/samples 里的全部样本（加了这次运行的标记），返回 Map<文件名, Buffer>。每个进程只读一次。 */
+/** 读 scripts/samples 里的全部样本（加了这次运行的标记），返回 Map<文件名, Buffer>。每个进程只读一次。 */
 export function loadSamples() {
   if (!samples) {
     samples = new Map()
-    for (const name of readdirSync(SAMPLES_DIR)) {
-      if (name === 'README.md') continue
-      samples.set(name, withRunTag(name, readFileSync(path.join(SAMPLES_DIR, name))))
+    for (const e of readdirSync(SAMPLES_DIR, { withFileTypes: true })) {
+      // 子目录 encoding/ 是上传会被拒的罕见编码（m7-audit 直接读），不算样本。
+      if (!e.isFile() || e.name === 'README.md') continue
+      samples.set(e.name, withRunTag(e.name, readFileSync(path.join(SAMPLES_DIR, e.name))))
     }
   }
   return samples
 }
 
-/** 一个样本（文件名见 server/testdata/samples/README.md，例如 `jpeg-rgb.jpg`、`tiff-g4-1bit.tif`）。 */
+/** 一个样本（文件名见 scripts/samples/README.md，例如 `jpeg-rgb.jpg`、`tiff-g4-1bit.tif`）。 */
 export async function sample(name) {
   const buf = loadSamples().get(name)
-  if (!buf) throw new Error(`server/testdata/samples 里没有 ${name}（有：${[...loadSamples().keys()].join('、')}）`)
+  if (!buf) throw new Error(`scripts/samples 里没有 ${name}（有：${[...loadSamples().keys()].join('、')}）`)
   return buf
 }
 

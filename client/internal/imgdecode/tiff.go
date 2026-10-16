@@ -11,7 +11,7 @@ import (
 )
 
 // TIFF：先读第一个 IFD 看压缩方式，JPEG 压缩（7、旧式 6）自己解，其余交给 x/image/tiff。
-// 只读 JPEG 压缩要用的几个标签（shared/imagehdr 的 IFD 读取没有导出；server 的 export/bundle 有一份更全的，
+// 只读 JPEG 压缩要用的几个标签（internal/imagehdr 的 IFD 读取没有导出；server 的 export/bundle 有一份更全的，
 // 客户端不能用 server 的 internal 包）。文件头里的个数、偏移都不可信：读之前检查范围，数组有上限。
 
 const (

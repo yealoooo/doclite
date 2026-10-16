@@ -12,8 +12,8 @@ import (
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/names"
 	"doclite/server/internal/project"
-	"doclite/shared/names"
 )
 
 // 文件的整理（id 是 folder_files 的 id）：改名、移动、复制、删除、批量移动、批量删除（requirements 5.5）。

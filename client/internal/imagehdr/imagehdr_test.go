@@ -12,8 +12,8 @@ import (
 	"testing"
 )
 
-// 样本目录（server/testdata/samples），清单和期望值在它的 README.md 里。
-const samplesDir = "../../server/testdata/samples"
+// 样本目录（client/testdata/samples，server/testdata/samples 的副本），清单和期望值在它的 README.md 里。
+const samplesDir = "../../testdata/samples"
 
 type sampleRow struct {
 	name               string

@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"doclite/shared/imagehdr"
+	"doclite/client/internal/imagehdr"
 )
 
-// 样本目录（server/testdata/samples，清单见它的 README.md）。
-const samplesDir = "../../../server/testdata/samples"
+// 样本目录（client/testdata/samples，清单见它的 README.md）。
+const samplesDir = "../../testdata/samples"
 
 // checkCover 按 server 的校验规则核对封面（server/internal/file/cover.go 的 ValidateCover）：JPEG、以 FF D9 结尾、
 // 不带方向、≤ 256 KiB、尺寸等于 CoverSize（长边 400 不放大，短边按比例四舍五入）。返回解码后的封面。

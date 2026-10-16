@@ -17,8 +17,8 @@ import (
 	"unicode/utf8"
 
 	"doclite/server/internal/platform/httpx"
-	"doclite/shared/imagehdr"
-	"doclite/shared/names"
+	"doclite/server/internal/platform/imagehdr"
+	"doclite/server/internal/platform/names"
 )
 
 // 上传的请求（requirements 5.6，用户决定 2026-09-28）：一个 multipart/form-data，字段按顺序各一次：

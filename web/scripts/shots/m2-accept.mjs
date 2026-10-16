@@ -7,7 +7,7 @@
 //   M2_ACCEPT_SHELL_MOCK=1 \
 //     npm run screenshots -- --spec scripts/shots/m2-accept.mjs --base http://127.0.0.1:<devshell 端口> [--out <目录>]
 //
-// --base 指向 devshell（client/cmd/devshell，壳模式的两步要用；不跑壳模式时也可以是托管了 web/dist 的 server）。
+// --base 指向 devshell（client/cmd/devshell，壳模式的两步要用；不跑壳模式时也可以是 vite preview）。
 // 壳的几步（M2_ACCEPT_SHELL）用打包的壳跑 `--smoke`：数据目录用 SHOTS_TMP 下的隔离目录（DOCLITE_DATA_DIR，另设隔离的
 // HOME），不碰 ~/Library/Application Support/Doclite，后台模式不抢焦点；服务器地址是 M2_ACCEPT_SERVER（默认同 --base
 // 的 origin；--base 是 devshell 时要另给 server 本身的地址）。没给 M2_ACCEPT_SHELL 时，壳的重扫改用接口模拟（带 content_sha256，同壳的

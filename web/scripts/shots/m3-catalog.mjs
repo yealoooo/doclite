@@ -3,7 +3,7 @@
 //   INIT_ADMIN_PASSWORD=admin123456 \
 //     npm run screenshots -- --spec scripts/shots/m3-catalog.mjs --base http://localhost:<preview 端口> [--only …]
 //
-// 前端地址是 vite preview（/api 代理到 server）或托管了 web/dist 的 server。演示数据用 scripts/lib/m3-demo.mjs 的
+// 前端地址是 vite preview 或 dev（/api 代理到 server）。演示数据用 scripts/lib/m3-demo.mjs 的
 // ensureM35Demo 建好（常驻，没有就建：DEMO-A 的著录项、demo_cataloger 的授权、文件夹「M3-5 归类演示」12 页、全宗
 // Z201 的归类树和 8 个条目）。挂接在 M3-3 合入前是直接写库造的，M3-6 起一律经 PUT 接口（m3-demo 的 linkPages）。每张
 // 截图自己造的临时数据（节点、条目、设置的改动）在 after 里还原或删掉：临时条目经 M3-3 的删除接口（已定稿的先解锁；

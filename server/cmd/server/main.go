@@ -1,4 +1,4 @@
-// doclite server：读配置、执行迁移、启动 HTTP、托管网页的构建产物。
+// doclite server：读配置、执行迁移、启动 HTTP（只提供 /api，界面由 web 模块单独提供）和后台任务。
 //
 // 配置见 server/.env.example；在 server/ 目录下运行时会读 server/.env。
 package main

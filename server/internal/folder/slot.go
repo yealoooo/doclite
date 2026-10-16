@@ -11,7 +11,7 @@ import (
 	"doclite/server/internal/file"
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/httpx"
-	"doclite/shared/names"
+	"doclite/server/internal/platform/names"
 )
 
 // 文件槽位：文件进文件夹（上传、移动、复制）时，在锁住目标文件夹行之后定下不重名的名字和 sort_no。

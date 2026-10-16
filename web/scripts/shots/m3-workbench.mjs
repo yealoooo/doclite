@@ -3,7 +3,7 @@
 //   INIT_ADMIN_PASSWORD=admin123456 \
 //     npm run screenshots -- --spec scripts/shots/m3-workbench.mjs --base http://localhost:<preview 端口> [--only …]
 //
-// 前端地址是 vite preview（/api 代理到 server）或托管了 web/dist 的 server。演示数据用 scripts/lib/m3-demo.mjs 的
+// 前端地址是 vite preview 或 dev（/api 代理到 server）。演示数据用 scripts/lib/m3-demo.mjs 的
 // ensureM36Demo 建好（常驻，全部经接口：文件夹「M3-6 挂接演示」24 页、全宗 Z206 的归类树、办公室 BGS 的 2 个条目）；
 // 2000 页的文件夹用 DEMO-A 已有的「2025 文书档案/盒 WS-2025-001」（只读，不挂接）。每张截图自己造的临时数据（文件夹、
 // 节点、条目）在 after 里删掉（条目经删除接口，已定稿的先解锁；文件夹在条目删掉之后才删得掉），前面失败了也执行。

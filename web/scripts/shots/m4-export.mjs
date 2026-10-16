@@ -3,7 +3,7 @@
 //   INIT_ADMIN_PASSWORD=admin123456 \
 //     npm run screenshots -- --spec scripts/shots/m4-export.mjs --base http://localhost:<preview 端口> [--only …]
 //
-// 前端地址是 vite preview（/api 代理到 server，server 要开着执行器：JOB_CONCURRENCY 不是 0）或托管了 web/dist 的 server。
+// 前端地址是 vite preview 或 dev（/api 代理到 server，server 要开着执行器：JOB_CONCURRENCY 不是 0）。
 // 演示数据用 scripts/lib/m4-demo.mjs 的 ensureM45Demo 建好（常驻，没有就建）：DEMO-A 的文件夹「M4-5 导出演示」16 页、
 // 「M4-5 导出演示（大页）」160 页（带透明的 PNG，导出 PDF 要转换，一次约 10 秒，用来截进度），全宗 Z405 / WS / 2025 / Y /
 // BGS（5 件：3 件定稿就绪，1 件没定稿且有页待审，1 件没有页）、DY（2 件大页，定稿）。截图默认放 ../docs/screenshots/m4（--out 可改）。

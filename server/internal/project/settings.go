@@ -9,8 +9,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"doclite/server/internal/platform/archiveno"
 	"doclite/server/internal/platform/httpx"
-	"doclite/shared/archiveno"
 )
 
 // projects.settings（requirements 3.4）：读时补默认；写时整体替换，只校验已知键，保留未知键，≤ 64 KiB。

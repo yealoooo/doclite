@@ -17,10 +17,10 @@ import (
 // 封面（upload）和切块（tiles）经这个包解 JPEG 压缩的 TIFF：做出来的封面、最高一级的块，和同一画面的 LZW 样本
 // 做出来的比较平均颜色（RGB 当成 YCbCr 再转一次会整体偏紫，这里会发现）。
 func TestCoverAndTilesJPEGTIFF(t *testing.T) {
-	lzw := imgdecode.DecodeRef(t, "../../../server/testdata/samples/tiff-lzw-rgb.tif").(*image.RGBA)
+	lzw := imgdecode.DecodeRef(t, "../../testdata/samples/tiff-lzw-rgb.tif").(*image.RGBA)
 	crop := func(w, h int) image.Image { return lzw.SubImage(image.Rect(0, 0, w, h)) }
-	ycbcr := "../../../server/testdata/samples/tiff-jpeg-ycbcr.tif"
-	rgb := "../../../server/internal/export/bundle/testdata/tiff-jpeg-rgb.tif"
+	ycbcr := "../../testdata/samples/tiff-jpeg-ycbcr.tif"
+	rgb := "testdata/tiff-jpeg-rgb.tif"
 	rgbIDs := "testdata/tiff-jpeg-rgb-ids.tif"
 
 	decode := func(t *testing.T, data []byte) image.Image {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode"
 
-	"doclite/shared/names"
+	"doclite/server/internal/platform/names"
 )
 
 // SafeName 把档号变成 Windows 上能用的文件名、文件夹名（requirements 5.11）：

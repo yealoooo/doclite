@@ -5,11 +5,11 @@
 //
 //   INIT_ADMIN_PASSWORD=admin123456 SHOTS_TMP=<临时目录> \
 //   M3_ACCEPT_SHELL=<打包的壳>/Doclite.app/Contents/MacOS/Doclite \
-//     npm run screenshots -- --spec scripts/shots/m3-accept.mjs --base http://127.0.0.1:<server 端口> [--out <目录>]
+//     npm run screenshots -- --spec scripts/shots/m3-accept.mjs --base http://127.0.0.1:<web 端口> [--out <目录>]
 //
-// --base 直接指向托管了 web/dist 的 server。壳的几步（M3_ACCEPT_SHELL）用打包的 release 壳跑 `--smoke` 的 rescan 一步：
+// --base 是 web 的入口（vite preview 或 dev，/api 代理到 server）。壳的几步（M3_ACCEPT_SHELL）用打包的 release 壳跑 `--smoke` 的 rescan 一步：
 // 数据目录用 SHOTS_TMP 下的隔离目录（DOCLITE_DATA_DIR，另设隔离的 HOME），不碰 ~/Library/Application Support/Doclite；服务器地址是 M3_ACCEPT_SERVER（默认同
-// --base 的 origin，必须是 server 本身）。tiles、viewer 两步有意让它们立即失败（viewer 要求窗口看得见，锁屏时会卡住整个
+// --base 的 origin；壳只调 /api，也可以给 server 本身的地址）。tiles、viewer 两步有意让它们立即失败（viewer 要求窗口看得见，锁屏时会卡住整个
 // 自检，见 runShell），其余各步都要通过。
 // 没给 M3_ACCEPT_SHELL 时，壳的重扫改用接口模拟（带 content_sha256，同壳的字段）。核对审计和"整理前后的挂接"时
 // 直接读库（psql，DATABASE_URL，默认本机 doclite_dev；写脚本时还没有审计的读接口）。

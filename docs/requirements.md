@@ -20,7 +20,7 @@
 ### 1.2 部署
 
 - 客户：Windows 服务器，WSL2 + Docker Engine，内网不联网，离线交付包。
-- 容器：server（9080，同时托管界面）、PostgreSQL 18、SeaweedFS（`weed mini`，S3 8333，工作站直连看图）、可选 Portainer（只绑 127.0.0.1）。卷 pg、s3、tmp（磁盘，不用 tmpfs）；PG 18 镜像数据目录挂 `/var/lib/postgresql`。
+- 容器：web（nginx，托管界面并把 `/api` 反向代理给 server）、server（9080，只提供 `/api`）、PostgreSQL 18、SeaweedFS（`weed mini`，S3 8333，工作站直连看图）、可选 Portainer（只绑 127.0.0.1）。卷 pg、s3、tmp（磁盘，不用 tmpfs）；PG 18 镜像数据目录挂 `/var/lib/postgresql`。
 - 启动时自动迁移；升级 = `docker load` + `docker compose up -d`。
 - 只支持 S3 兼容存储（SeaweedFS 生产 4.45、开发 4.15）。数据库只用 PG 16 也有的特性，主键由应用生成 UUIDv7。
 - 重写按**单台服务器、单个 server 进程**设计。

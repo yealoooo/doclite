@@ -2,7 +2,7 @@
 //
 //   INIT_ADMIN_PASSWORD=admin123456 npm run screenshots -- --spec scripts/shots/m1-projects.mjs --base <前端地址>
 //
-// 前端地址可以是 vite dev / preview（/api 代理到 server），也可以是托管了 web/dist 的 server 本身。
+// 前端地址是 vite dev / preview（/api 代理到 server）。
 // 数据来自 `npm run seed:demo`（M1-5 起建两个演示项目 DEMO-A、DEMO-B 和已停用的 demo_disabled）：
 // - admin 能进所有项目；demo_scanner 只能进 DEMO-A；demo_noproject 一个都不能进（M3-5 起 demo_cataloger 授权进了 DEMO-A，
 //   "没有能进的项目"改用 seed:demo 建的 demo_noproject）；

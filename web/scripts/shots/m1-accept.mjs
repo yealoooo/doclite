@@ -1,14 +1,14 @@
-// M1-14 验收（Mac）：浏览器上传、目录整理、项目权限，以及 server 托管的界面。
+// M1-14 验收（Mac）：浏览器上传、目录整理、项目权限。
 //
-//   npm run screenshots -- --spec scripts/shots/m1-accept.mjs --base http://127.0.0.1:<server 端口>
+//   npm run screenshots -- --spec scripts/shots/m1-accept.mjs --base http://127.0.0.1:<web 端口>
 //
-// --base 直接指向托管了 web/dist 的 server（不经过 vite），所有截图都是"浏览器直接访问 server"的用法。
+// --base 是 web 的入口（vite preview 或 dev，/api 代理到 server；M7-5 起 server 不托管界面）。
 // 账号来自 seed:demo：demo_scanner（个人授权 DEMO-A）、demo_reviewer（审核员角色授权 DEMO-B；M2-5 起另有 DEMO-A 的个人
 // 授权）、demo_noproject（归类员角色、没有授权；M3-5 起 demo_cataloger 授权进了 DEMO-A，改用它）。accept-perm-reviewer
 // 要用 admin 读各项目的授权（INIT_ADMIN_PASSWORD，默认 change-me-now）。
 //
 // - accept-upload：在 DEMO-A 根下建临时文件夹"M1-14 浏览器上传和整理 <时间>"，用"上传文件夹"（注入合成的
-//   File 列表，和选择框同一段代码）传 server/testdata/samples 里的样本：JPEG（彩色、灰度）、PNG（带 alpha、1 位）、
+//   File 列表，和选择框同一段代码）传 scripts/samples 里的样本：JPEG（彩色、灰度）、PNG（带 alpha、1 位）、
 //   TIFF（无压缩、LZW、CCITT G4），各 3 页（同一个样本加不同的注释，字节不同），分在 JPEG、PNG、TIFF 三个子文件夹里。断言全部入库、都带上了封面，
 //   batch 的封面是 JPEG、长边 ≤ 400、方向和原图一致。
 // - accept-organize：把 PNG 移到 JPEG 下面，删除 TIFF 里的一个文件，再删除 JPEG（连同 PNG）。断言：路径编码换了
@@ -23,7 +23,7 @@
 //   demo_noproject 用 batch 取 DEMO-A 的文件全部落在 missing（batch 登录即可，只返回能进的项目里的文件）。截图名
 //   accept-perm-cataloger 不变。
 //
-// 样本原来每次现场调上一版的 gen-samples（Rust）生成；M5-3 起读仓库里的 server/testdata/samples（见
+// 样本原来每次现场调上一版的 gen-samples（Rust）生成；M5-3 起读提交的样本（M7-5 起是 web 自己的 scripts/samples，见
 // scripts/lib/upload-samples.mjs），不再依赖 Rust 工具链。
 
 import { apiLogin } from '../lib/m3-demo.mjs'

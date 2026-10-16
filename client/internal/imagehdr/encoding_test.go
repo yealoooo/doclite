@@ -19,10 +19,11 @@ import (
 // 文件，由下面的 encodingFixtures 用代码拼出来（只有文件头和几十字节的假像素数据，不是能看的图），改了生成代码后
 // 重新生成：
 //
-//	cd shared && go test ./imagehdr/ -run TestEncodingFixtures -update
+//	cd client && go test ./internal/imagehdr/ -run TestEncodingFixtures -update
 //
-// server 的导出（server/internal/export/bundle 的 TestUploadCheckMatchesExport）和上传的 API 测试也读这个目录：
-// 导出判为"不支持"的正好是这里拒绝的。
+// server 那份（server/internal/platform/imagehdr/testdata/encoding）是同样的文件，两边一起重新生成。server 的导出
+// 测试（TestUploadCheckMatchesExport）和上传的 API 测试读的是 server 那份：导出判为"不支持"的正好是这里拒绝的。
+// 客户端上传前的检查（internal/upload 的测试）也读这个目录。
 var update = flag.Bool("update", false, "重新生成 testdata/encoding 里的夹具")
 
 const encodingDir = "testdata/encoding"
@@ -198,7 +199,7 @@ func TestEncodingFixtures(t *testing.T) {
 	}
 }
 
-// 常见样本（server/testdata/samples）上传照常通过；多页 TIFF 仍是 ErrMultiPage。
+// 常见样本（client/testdata/samples）上传照常通过；多页 TIFF 仍是 ErrMultiPage。
 func TestParseUploadSamples(t *testing.T) {
 	for _, r := range readSampleTable(t) {
 		info, err := parseUploadBytes(readSample(t, r.name))

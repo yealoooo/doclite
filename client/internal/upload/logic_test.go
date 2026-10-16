@@ -224,9 +224,9 @@ func TestClassifyLicenseBlocked(t *testing.T) {
 	}
 }
 
-// 上传前查编码方式：导出不了的罕见编码（shared/imagehdr 的夹具）记成和 server 一样的 invalid_image，常见样本放过。
+// 上传前查编码方式：导出不了的罕见编码（internal/imagehdr 的夹具）记成和 server 一样的 invalid_image，常见样本放过。
 func TestCheckEncoding(t *testing.T) {
-	enc := "../../../shared/imagehdr/testdata/encoding/"
+	enc := "../imagehdr/testdata/encoding/"
 	for _, c := range []struct {
 		path string
 		want string
@@ -234,8 +234,8 @@ func TestCheckEncoding(t *testing.T) {
 		{enc + "reject-jpeg-arith.jpg", "不支持的图片格式（算术编码的 JPEG），请换个保存格式重扫"},
 		{enc + "reject-tiff-jpeg2000.tif", "不支持的图片格式（JPEG 2000 压缩的 TIFF），请换个保存格式重扫"},
 		{enc + "accept-tiff-cmyk.tif", ""},
-		{"../../../server/testdata/samples/tiff-jpeg-ycbcr.tif", ""},
-		{"../../../server/testdata/samples/tiff-multipage-2p.tif", ""}, // 多页由 server 判断
+		{"../../testdata/samples/tiff-jpeg-ycbcr.tif", ""},
+		{"../../testdata/samples/tiff-multipage-2p.tif", ""}, // 多页由 server 判断
 		{enc + "不存在.jpg", ""},
 	} {
 		size := int64(0)

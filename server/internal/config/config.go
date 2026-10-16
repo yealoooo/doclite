@@ -55,8 +55,6 @@ type Config struct {
 	InitialStorage *InitialStorage
 	// ClientVersions 是客户端版本检查（MIN_CLIENT_VERSION、CLIENT_LATEST_VERSION、CLIENT_DOWNLOAD_URL）。
 	ClientVersions ClientVersions
-	// WebDir 是托管的网页构建产物目录（WEB_DIR）；为空时不托管网页。
-	WebDir string
 	// MaxUploadBytes 是上传原图的大小上限（MAX_UPLOAD_BYTES，默认 512 MiB），超过 413。
 	MaxUploadBytes int64
 	// MaxImagePixels 是原图像素总数的上限（MAX_IMAGE_PIXELS，默认 3 亿），超过 400 invalid_image。
@@ -186,8 +184,6 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 	if c.ClientVersions, err = clientVersions(get); err != nil {
 		return nil, err
 	}
-
-	c.WebDir = get("WEB_DIR")
 
 	if c.MaxUploadBytes, err = int64InRange("MAX_UPLOAD_BYTES", get("MAX_UPLOAD_BYTES"), DefaultMaxUploadBytes, 1, 1<<40); err != nil {
 		return nil, err

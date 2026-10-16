@@ -54,7 +54,6 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		SessionTTL:     cfg.SessionTTL,
 		CookieSecure:   cfg.CookieSecure,
 		ClientVersions: cfg.ClientVersions,
-		WebDir:         cfg.WebDir,
 		MasterKey:      cfg.MasterKey,
 		Upload:         file.Options{TmpDir: cfg.TmpDir, MaxUploadBytes: cfg.MaxUploadBytes, MaxImagePixels: cfg.MaxImagePixels},
 		Jobs: jobs.Options{Concurrency: cfg.JobConcurrency, Heartbeat: cfg.JobHeartbeat,
@@ -75,14 +74,6 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 
-	switch {
-	case cfg.WebDir == "":
-		log.Warn("没有设置 WEB_DIR：只提供 /api，不托管网页")
-	default:
-		if st, err := os.Stat(cfg.WebDir); err != nil || !st.IsDir() {
-			log.Warn("WEB_DIR 目录不存在，网页暂时打不开（build 之后不用重启）", "web_dir", cfg.WebDir)
-		}
-	}
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           a.Handler(),

@@ -39,8 +39,6 @@ type Options struct {
 	CookieSecure   bool
 	Password       auth.PasswordParams // 零值表示用 auth.DefaultPasswordParams
 	ClientVersions config.ClientVersions
-	// WebDir 是网页构建产物目录；为空时不托管网页（`/api` 以外的路径一律 404）。
-	WebDir string
 	// MasterKey 是主密钥（加密存储配置的 secret_key），必填。
 	MasterKey config.MasterKey
 	// Stream 是实时通道的保活、复核间隔；零值用默认的 15 秒、60 秒（测试里调短）。
@@ -144,16 +142,15 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	audit.NewHandler(audit.NewService(pool)).Routes(api, gate)
 	storage.NewMigrateHandler(migrator).Routes(api, gate)
 
-	// /api 的最外层是客户端版本检查（先于鉴权）；/api 以外是网页。
+	// /api 的最外层是客户端版本检查（先于鉴权）。server 只提供接口（M7-5，requirements 1.3：界面由 web 模块单独
+	// 提供），/api 以外的路径一律 JSON 404。
 	apiHandler := auth.ClientVersionCheck(opts.ClientVersions)(api)
 	root := http.NewServeMux()
 	root.Handle("/api", apiHandler)
 	root.Handle("/api/", apiHandler)
-	if opts.WebDir != "" {
-		root.Handle("/", httpx.WebHandler(opts.WebDir))
-	} else {
-		root.Handle("/", http.NotFoundHandler())
-	}
+	root.Handle("/", httpx.HandlerFunc(func(http.ResponseWriter, *http.Request) error {
+		return httpx.NewError(http.StatusNotFound, httpx.CodeNotFound, "接口不存在")
+	}))
 
 	cleanupEvery := opts.ExportCleanupInterval
 	if cleanupEvery <= 0 {

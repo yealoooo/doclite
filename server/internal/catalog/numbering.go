@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"doclite/server/internal/audit"
+	"doclite/server/internal/platform/archiveno"
 	"doclite/server/internal/platform/db"
-	"doclite/shared/archiveno"
 )
 
 // 档号和件号（requirements 5.9"档号和件号"，用户决定 Q2；撞号和分档是总控定的，见 requirements 第 10 节）：

@@ -2,7 +2,7 @@
 //
 //   INIT_ADMIN_PASSWORD=admin123456 npm run screenshots -- --spec scripts/shots/m1-files.mjs --base <前端地址>
 //
-// 前端地址是 vite preview / dev（/api 代理到 server），或者托管了 web/dist 的 server 本身。脚本在页面之外调接口时
+// 前端地址是 vite preview / dev（/api 代理到 server）。脚本在页面之外调接口时
 // 也走这个地址。
 //
 // 数据来自 seed:demo 和 seed:files，用到 DEMO-A 里的：

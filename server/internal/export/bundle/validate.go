@@ -3,7 +3,7 @@ package bundle
 import (
 	"strings"
 
-	"doclite/shared/imagehdr"
+	"doclite/server/internal/platform/imagehdr"
 )
 
 // 状态的中文（目录.xlsx、清单.csv 里写中文）。

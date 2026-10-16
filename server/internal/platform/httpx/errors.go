@@ -1,4 +1,4 @@
-// Package httpx 是 HTTP 的基础设施：路由、中间件、统一错误体、JSON 读写、分页和路径参数、托管网页。
+// Package httpx 是 HTTP 的基础设施：路由、中间件、统一错误体、JSON 读写、分页和路径参数。
 //
 // 错误体：所有接口出错时返回 `{"code": "<错误码>", "message": "<给人看的中文说明>", "details": …}`，
 // details 可选、没有时不输出。错误码见 requirements 第 8 节。

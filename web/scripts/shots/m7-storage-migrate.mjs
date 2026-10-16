@@ -1,10 +1,10 @@
 // M7-2 的截图清单和断言：系统 → 存储配置里的存储迁移（"迁移到…"、进度、取消、完成后停用源存储、失败清单）。
 //
 //   INIT_ADMIN_PASSWORD=admin123456 \
-//     npm run screenshots -- --spec scripts/shots/m7-storage-migrate.mjs --base http://127.0.0.1:<server 端口>
+//     npm run screenshots -- --spec scripts/shots/m7-storage-migrate.mjs --base http://127.0.0.1:<web 端口>
 //
 // 前提：
-// - --base 指向托管了 web/dist 的 server（或 vite preview），这个 server **在执行后台任务**（拿到了执行器锁；同一个库上
+// - --base 是 web 的入口（vite preview 或 dev），它代理到的 server **在执行后台任务**（拿到了执行器锁；同一个库上
 //   只有一个 server 执行，见 README"后台任务"）——迁移在它里面执行，拿不到锁时迁移一直排队，脚本在"迁移中"那步失败；
 // - 本机 SeaweedFS：S3 地址 M72_S3（默认 http://127.0.0.1:8333），密钥 M72_S3_ACCESS_KEY / M72_S3_SECRET_KEY（默认同
 //   weed mini 的 doclite-dev / doclite-dev-secret）；要有第二个桶 doclite-migrate-test

@@ -6,7 +6,7 @@
 //   - 每块 512×512，和相邻块各重叠 1 像素（块最大 514×514）；
 //   - 灰度、彩色是 JPEG（质量 90）；1 位黑白是 PNG（原尺寸一级 1 位，缩小后的各级是 8 位灰度）。
 //
-// 做法是整张解码（internal/imgdecode，和封面共用），按 shared/imagehdr 读出的方向转正，
+// 做法是整张解码（internal/imgdecode，和封面共用），按 internal/imagehdr 读出的方向转正，
 // 再逐级减半、编码写盘。整张解码要占内存，所以先按文件头估算（[Plan.Estimate]），调用方据此排队、超出上限就不切；
 // 时间由 ctx 控制（读文件、编码每一块之前都看一眼）。这个包不管缓存、来源和并发名额，见 internal/imagecache。
 package tiles
