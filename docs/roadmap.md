@@ -247,11 +247,15 @@
 
 **用户决定（2026-10-16）：** 存储迁移允许只改快照的存放位置；许可证按登录会话数算；审计日志页做简单版；**先不走打包流程**，用户在自己电脑上验证没问题后再定打包。详见 requirements 第 11 节。**排期：** M7-1 ∥ M7-2 ∥ M7-3 → M7-4 验收 → 用户验证 → M8 打包交付。
 
-### [~] M7-1 许可证
+### [x] M7-1 许可证（commit 1bbc87e）
 - **范围：** requirements 第 11 节"许可证"：install_id（首次启动生成，存 system_settings）、导入和查看接口、Ed25519 验签（兼容 `../bak/doclite-license` 签发的 .lic 格式，`hardware_id` = install_id）、登录和每个请求的席位与到期检查、到期提醒；前端"系统 → 许可证"页（替换占位页）、登录页的错误提示、到期提醒条。开发和测试用的密钥对：私钥只放测试数据或 scratchpad，**正式公钥由用户提供**，先留配置位置。
 - **完成标志：** API 测试：没许可证只有 admin 能登录、导入（签名错、install_id 不符、过期）、席位满拒绝、同人两处登录算 2、30 分钟无活动不计、admin 总能登录、到期后已登录的请求被拒、导入新证立即恢复、权限表；截图脚本新建一个 `m7-license.mjs`。
 - **前置：** M5、M6。
 
+- **结果：** 三项检查通过（server、client 含 `GOOS=windows`、web）；`m7-license.mjs` 7/7、`m0.mjs` 13/13；`bak/doclite-license` 未留任何文件。
+- **做法：** `internal/license`：.lic 兼容上一版签发工具——签名签的是 payload 重新序列化的规范 JSON（字段按名排序、紧凑、serde_json 转义规则、chrono 时间格式），`lic.go` 手写序列化复现；夹具 5 份（工具命令行签 1 份 + 按路径编译工具源码签 4 份，含整秒、毫秒、纳秒、特殊字符公司名）和工具算出的规范 JSON，逐字节比对。**install_id = `sha256:` + 64 位十六进制**（工具 `--hardware-id` 只收这种格式；总控同意），首次启动生成存 `system_settings.install_id`。公钥 `-ldflags "-X doclite/server/internal/license.publicKey=<pem 中间一行或 32 字节 base64>"`，无环境变量覆盖；没编进去 = 开发版不检查；值不对拒绝启动。接口 `GET/PUT /api/system/license`（PUT 体 `{"license":"<全文>"}`，导入、替换写审计 `target_type=license`、`action=import|replace`；相同内容不动；开发版 409 `invalid_state`）。错误码：403 `license_missing`、`license_expired`、`license_seats_full`（details 带 max_users、online_sessions）；400 `invalid_license`（details.reason format|signature）、`license_mismatch`、`license_file_expired`。登录事务里（锁住用户行后）取咨询锁 (6011,0) 数在线会话；admin（内置角色）不受限但计数；密码错仍先 401；到期后非 admin 每个请求 403（只看内存）；SSE 复核会话时更新 last_seen_at（已有，加了测试）。`me` 加可选 `license_notice {status, expires_at, days_left}`，给有 system.license 菜单的人。前端 `LicenseView.vue`、`LicenseBanner.vue`、登录页提示、全局处理 `license_expired`/`license_missing` 回登录页；客户端上传队列、热文件夹、重扫遇到这两个码和 401 一样暂停。
+- **遗留：** 多个 server 同库时导入后其他进程要重启才生效（按单进程设计）；被许可证拒的旧会话不撤销，30 分钟后自然不计；正式构建的 Windows 实测随 M8。requirements 第 8 节接口和错误码表待补（M7-4）。
+- **须知：** 用户要用签发工具 `keygen` 生成正式密钥对（`backup-key` 加密备份私钥），`public.pem` 在 M8 写进构建脚本；签发：许可证页复制 install_id → `doclite-license issue --hardware-id <install_id> --max-users N --duration 1y --company … --edition …`，续期 `renew`。测试用 `app.Options.License` 注入测试公钥和时钟，apitest 有 `InitLicense`。
 ### [~] M7-2 存储迁移
 - **范围：** requirements 第 11 节"存储迁移"：`POST storage-profiles/{id}/migrate`（把这个存储里的原图和封面迁到目标存储）、进度查询、取消；后台任务 `storage_migrate`（复用 `internal/platform/jobs`），分批复制 → sha256 核对 → 改快照位置 → 写审计，断点续；迁移时照常上传；共用对象只复制一次；完成后原存储可停用。前端在"系统 → 存储配置"里加迁移按钮、进度和结果。
 - **完成标志：** API 测试：端到端（两个桶，迁完新存储能读、原存储停用后照常看图和导出）、迁移中上传和重扫、中途重启续传、取消、核对不一致不改、共用对象、权限表；截图脚本新建 `m7-storage-migrate.mjs`。
