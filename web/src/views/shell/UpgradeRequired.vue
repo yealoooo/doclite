@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 客户端版本过低（只在壳里出现）：启动时壳的版本低于服务器的最低版本，或者任何请求返回 426。
-// 下载地址用系统浏览器打开（壳的 open_external）。自动更新在 M7。
+// 下载地址用系统浏览器打开（壳的 open_external）。自动更新在 M8（打包交付）。
 import { DownloadIcon, TriangleAlertIcon } from '@lucide/vue'
 import { computed, ref } from 'vue'
 import { toast } from 'vue-sonner'

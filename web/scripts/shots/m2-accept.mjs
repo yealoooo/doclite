@@ -48,7 +48,7 @@
 // 12. m2-accept-restore：用 `GET /api/files/{fid}/logs`、`/reviews`、`/snapshots` 还原 3 个文件的全过程并断言（A：驳回 → 浏览器
 //     重扫 → 通过 → 撤回 → 再通过；B：改派 → 驳回 → 壳重扫 → 通过；C：改派 → 驳回 → 审核人停用后重扫 → 负责人重新分配 → 通过），
 //     打印一行 `ACCEPT_IDS {...}` 给外面的 SQL 核对；核对别的演示文件夹的计数没变。截图是 C 在 /review-assign 右栏的日志。
-// 13. m2-accept-big-browser-g4、m2-accept-big-browser-200mb：浏览器（独立的上下文）打开 DEMO-A/M2-3 分块实测 的 a4-600-g4.tif、
+// 13. m2-accept-big-browser-g4、m2-accept-big-browser-200mb：浏览器（独立的上下文）打开 DEMO-A/M2-3 分块实测 的 G4 TIFF（a4-g4-1bit.tif）、
 //     a3-600-none-rgb.tif，记下到画完的耗时和渲染进程的内存峰值。
 // 14. m2-accept-big-shell：打包的壳 `--smoke`（cold，tiles + viewer 两步只对这一个文件）各打开这两张，记下切块耗时、viewer
 //     画完的耗时、壳进程和 WebKit 的 WebContent 进程的内存峰值。截图只是 M2-3 分块实测 文件夹。
@@ -97,8 +97,9 @@ const SHELL = process.env.M2_ACCEPT_SHELL ?? ''
  */
 const SHELL_MOCK = process.env.M2_ACCEPT_SHELL_MOCK === '1'
 const BENCH_FOLDER = 'M2-3 分块实测'
-// M2-3 分块实测 重建过时 G4 样本的名字可能不同（M5-3 时 doclite_dev 里是 300 DPI 的 a4-g4-1bit.tif），用 M2_ACCEPT_BIG_G4 指定。
-const BIG_G4 = process.env.M2_ACCEPT_BIG_G4 ?? 'a4-600-g4.tif'
+// M2-3 分块实测 里的 G4 样本：Go 版的 doclite_dev 里是 300 DPI 的 a4-g4-1bit.tif（上一版是 a4-600-g4.tif）；重建过、名字不同时
+// 用 M2_ACCEPT_BIG_G4 指定。
+const BIG_G4 = process.env.M2_ACCEPT_BIG_G4 ?? 'a4-g4-1bit.tif'
 const BIG_200 = 'a3-600-none-rgb.tif'
 
 /** 驳回：键（1–9 按项目原因列表的顺序：模糊、倾斜、裁切过度、污渍、缺页、重页、方向、其他）、原因代码、说明。 */

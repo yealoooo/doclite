@@ -4,13 +4,63 @@
 
 ## 目录
 
+- [本机试用](#本机试用)
 - [本机开发](#本机开发)
 - [跑测试](#跑测试)
 - [跑截图脚本](#跑截图脚本)
 - [桌面客户端](#桌面客户端)
-- [后台任务（导出）](#后台任务导出)
+- [后台任务（导出、存储迁移）](#后台任务导出存储迁移)
 - [演示账号](#演示账号)
 - [许可证](#许可证)
+
+## 本机试用
+
+在这台 Mac 上自己试：server 跑在 9080、连本机的 `doclite_dev`（已经有演示账号和演示数据），浏览器和桌面客户端都连它。PostgreSQL 16 是 Homebrew 服务，一直在跑；`server/.env` 已经配好（不要改里面的 `MASTER_KEY`）。
+
+1. **SeaweedFS**（没在跑时；`lsof -i :8333` 没有输出就是没在跑）：
+
+   ```sh
+   AWS_ACCESS_KEY_ID=doclite-dev AWS_SECRET_ACCESS_KEY=doclite-dev-secret S3_BUCKET=doclite \
+     /Users/yanlong/project/smart_scan_bak/backend_storage/bin/weed mini \
+     -dir=$HOME/doclite-dev/seaweedfs -ip=127.0.0.1 -admin.ui=false
+   ```
+
+2. **网页**（第一次、或者 `web/` 改过之后）：`cd web && npm ci && npm run build`（产物在 `web/dist`）。
+3. **server**（要在 `server/` 下运行，它读当前目录的 `.env`；启动时自动执行迁移，Ctrl+C 退出）：
+
+   ```sh
+   cd server
+   go build -o bin/doclite-server ./cmd/server
+   WEB_DIR=../web/dist ./bin/doclite-server
+   ```
+
+   浏览器打开 <http://127.0.0.1:9080>。这是开发版，不检查许可证。导出、存储迁移由拿到执行器锁的 server 执行：启动日志里有"另一个 server 进程正在执行后台任务"时，是别的 server（例如开发任务临时起的 2908x）先拿到了锁，导出会交给它——先停掉那个再重启 9080（见[后台任务](#后台任务导出存储迁移)）。
+4. **桌面客户端**：
+
+   ```sh
+   cd client
+   ~/go/bin/wails3 package     # 顺带重新构建 web/，产物 client/bin/Doclite.app
+   open bin/Doclite.app
+   ```
+
+   第一次启动填服务器地址 `http://127.0.0.1:9080`。关窗口只是缩到托盘（菜单栏图标），托盘里"退出"才真的退出；再次打开会回到已经开着的那个窗口。客户端的设置、上传队列、图片缓存在 `~/Library/Application Support/Doclite/`。
+
+**账号**：`admin` / `admin123456`（系统管理员，什么都能做）；演示账号的密码都是 `demo123456`，常用的有 `demo_scanner`（扫描上传、重扫）、`demo_manager`（审核分配、看板、导出）、`demo_reviewer`（审核）、`demo_cataloger`（归类），全部见[演示账号](#演示账号)。同一个人可以在浏览器和客户端各登录一次。
+
+**可以拿来试的数据**（都在项目 DEMO-A；会改东西的操作最好在自己新建的文件夹里做）：
+
+| 想试 | 用哪里 |
+|---|---|
+| 上传 | 文件目录里新建一个文件夹，用"上传文件 / 上传文件夹"（浏览器、客户端都行）；客户端的"扫描上传"页选一个本机目录当热文件夹，往里放 JPEG、PNG、TIFF。样本在 `server/testdata/samples/`（`tiff-multipage-2p.tif` 是故意会被拒的多页 TIFF）；同样内容的图在项目里只入库一次 |
+| 浏览、看原图 | 「2025 文书档案/盒 WS-2025-001」2000 页；「M2-3 分块实测」有 200 MB 的 TIFF（客户端里切块看，浏览器里会慢或只显示封面）；「M6-3 切块自检」是各种压缩的 TIFF |
+| 审核分配 | demo_manager → 审核分配：「M2-5 分配演示」40 页待分配 |
+| 审核 | demo_reviewer → 我的审核：「M2-6 审核演示」还有 29 页待审（键盘 A 通过、R 驳回、C 对比上一轮） |
+| 重扫 | demo_scanner → 扫描上传，右边"待重扫"：「M2 验收演示 2026-10-16 M6-4/盒 04/IMG_0003」是特意留着的已驳回页，「M2-7 重扫演示」里也还有几页。重扫件要选一张内容不同的图 |
+| 归类挂接 | demo_cataloger → 归类：全宗 Z206「M3-6 挂接演示」（文件池选文件夹「M3-6 挂接演示」）；Z201「M3-5 归类演示」有 1200 多件 |
+| 看板 | demo_manager → 项目看板：全宗 Z109「M3-7 看板演示」 |
+| 导出 | demo_manager → 导出，或在归类树上右键"导出…"：全宗 Z405「M4-5 导出演示」的 BGS 有 3 件就绪；客户端里的下载交给系统浏览器 |
+| 存储迁移 | admin → 系统管理 → 存储配置：「M7-2 迁移演示·源」已经迁到「·目标」并停用，可以看结果和失败详情 |
+| 审计日志、许可证 | admin → 系统管理 → 审计日志（筛选、展开看前后差异）；许可证页在开发版只显示 install_id，不能导入 |
 
 ## 本机开发
 
@@ -52,14 +102,14 @@ cd ../server && WEB_DIR=../web/dist go run ./cmd/server
 - `WEB_DIR` 设了才托管网页（`/api` 以外的路径回退到 `index.html`）；不设只提供 `/api`。重新 `npm run build` 不用重启 server。
 - 改前端时也可以用 vite：`cd web && DOCLITE_SERVER=http://127.0.0.1:9080 npm run dev`（`/api` 代理到 server，默认 9080）。
 - 端口约定：自己的 server 用 9080；并行的子任务用 29080–29082（server）和 24173–24175（vite preview），互不干扰。
-- 同一个库上开多个 server 时，只有一个执行导出（见[后台任务](#后台任务导出)）；多个 server 的 `TMP_DIR` 要分开（启动时会清空 `TMP_DIR/uploads`）。
+- 同一个库上开多个 server 时，只有一个执行导出（见[后台任务](#后台任务导出存储迁移)）；多个 server 的 `TMP_DIR` 要分开（启动时会清空 `TMP_DIR/uploads`）。
 
 ## 跑测试
 
 提交前：每个 Go 模块 `gofmt -l .` 没有输出、`go vet ./...`、`go test ./...` 通过；改了 `web/` 时 `npm run build` 通过。
 
 ```sh
-cd server && gofmt -l . && go vet ./... && go test ./...   # API 测试（76 个）+ 单元测试，本机约 15 秒
+cd server && gofmt -l . && go vet ./... && go test ./...   # API 测试（82 个）+ 单元测试，本机约 20 秒
 cd shared && go test ./...                                 # 文件头、名称规则、档号模板
 cd client && go test ./...                                 # 客户端的纯逻辑（Mac 上要 cgo，Wails 需要）
 cd web && npm run build                                    # vue-tsc 类型检查 + 构建
@@ -104,7 +154,7 @@ npm run seed:files -- --base http://127.0.0.1:9080 --user demo_scanner:demo12345
 - `m1-accept`：`ACCEPT_DEMO` 指定热文件夹演示的文件夹（5 个盒 × 100 页，没有时用 `seed:files` 造）。
 - `m2-accept`：要先建「M2 验收演示 <日期>」（脚本开头有命令）；只能走一遍，再跑换一个文件夹（`M2_ACCEPT_FOLDER`）。
 - `m3-accept`：自己建「M3 验收演示 <日期>」和全宗 Z308，只能走一遍；再跑换 `M3_ACCEPT_FOLDER`、`M3_ACCEPT_FONDS`，或者 `M3_ACCEPT_TRIAL=1` 试跑（最后删掉自己建的数据）。
-- `m4-export`：server 要在执行导出（见下一节）。
+- `m4-export`：server 要在执行导出（见[后台任务](#后台任务导出存储迁移)）。
 - `m7-storage-migrate`：server 要在执行后台任务（迁移在它里面执行）；要有第二个桶 `doclite-migrate-test`（`echo 's3.bucket.create -name doclite-migrate-test' | weed shell -master=127.0.0.1:9333`）。脚本自己起一个转发到 SeaweedFS 的慢速代理当"源"存储的 server 地址（让迁移持续几秒），每跑一次在 DEMO-A 的「M7-2 迁移演示」下传一批文件，迁到「M7-2 迁移演示·目标」，跑完"源"迁空并停用。
 - 壳的部分（`m1-shell`、`m1-scan`、`m1-cache` 和 `m1-organize`、`m2-rescan`、`m2-viewer`、`m2-review`、`m2-accept` 里名字带 `shell` 的几张）：`--base` 要指向 **devshell**（见下面）。这几张用 `http://wails.localhost:<端口>` 打开页面（`lib/client.ts` 的 `isShell()` 认 Windows 上 WebView2 的这个地址，Chrome 把 `*.localhost` 解析到本机），在页面脚本运行前注入 Wails 桥的模拟（`scripts/lib/wails-mock.mjs`：拦下 `/wails/runtime` 的命令调用、`_wails.dispatchWailsEvent` 推事件、`_wails.streamFactory` 给实时通道），正式前端代码不改。
 - `m2-accept`：`M2_ACCEPT_SHELL_MOCK=1` 时壳模式审核那两步用上面的模拟（否则改在浏览器里做）；`M2_ACCEPT_SHELL=client/bin/Doclite.app/Contents/MacOS/Doclite`、`M2_ACCEPT_SERVER=<server 本身的地址>` 时壳重扫、壳的大图两步跑打包的客户端 `--smoke`（隔离的数据目录、后台模式），不设时壳重扫改用接口模拟。`m3-accept` 的 `M3_ACCEPT_SHELL` 同理。
@@ -118,7 +168,7 @@ cd web && INIT_ADMIN_PASSWORD=<管理员密码> npm run screenshots -- --spec sc
 
 ## 桌面客户端
 
-Wails v3（命令行工具 `wails3`，`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.29`）。目前只有 Mac 的构建，Windows 在 M7。
+Wails v3（命令行工具 `wails3`，`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.29`）。目前只有 Mac 的构建；Windows 的构建和安装包在 M8（打包交付）做。
 
 ```sh
 cd client && wails3 package     # 构建 web/、编译、打包成 client/bin/Doclite.app（ad-hoc 签名）
@@ -148,7 +198,7 @@ DOCLITE_BACKGROUND=1 client/bin/Doclite.app/Contents/MacOS/Doclite --smoke
 
 其他环境变量：`DOCLITE_DATA_DIR` 换数据目录（默认 `~/Library/Application Support/Doclite/`、`%LOCALAPPDATA%\Doclite\`；自检用其中的 `smoke/`）；`DOCLITE_BACKGROUND=1` 不抢焦点（开发、测试用）；`DOCLITE_LOG_LEVEL=debug`；`DOCLITE_LOG_STDERR=1` 日志同时写到标准错误。删掉数据目录里的 `upload-queue.db` 就是重置上传队列。
 
-## 后台任务（导出）
+## 后台任务（导出、存储迁移）
 
 导出在 server 进程里执行（`background_jobs` 表排队）。配置（都在 `server/.env.example` 里有说明）：
 

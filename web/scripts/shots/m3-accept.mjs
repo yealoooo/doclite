@@ -11,8 +11,8 @@
 // 数据目录用 SHOTS_TMP 下的隔离目录（DOCLITE_DATA_DIR，另设隔离的 HOME），不碰 ~/Library/Application Support/Doclite；服务器地址是 M3_ACCEPT_SERVER（默认同
 // --base 的 origin，必须是 server 本身）。tiles、viewer 两步有意让它们立即失败（viewer 要求窗口看得见，锁屏时会卡住整个
 // 自检，见 runShell），其余各步都要通过。
-// 没给 M3_ACCEPT_SHELL 时，壳的重扫改用接口模拟（带 content_sha256，同壳的字段）。审计没有读接口，核对审计和"整理前后的
-// 挂接"时只读库（psql，DATABASE_URL，默认本机 doclite_dev）。
+// 没给 M3_ACCEPT_SHELL 时，壳的重扫改用接口模拟（带 content_sha256，同壳的字段）。核对审计和"整理前后的挂接"时
+// 直接读库（psql，DATABASE_URL，默认本机 doclite_dev；写脚本时还没有审计的读接口）。
 //
 // 演示数据（脚本自己建；只能走一遍，再跑会换一个新的文件夹，全宗编码已被占用时失败）：
 // - DEMO-A 根下「M3 验收演示 <日期>」（M3_ACCEPT_FOLDER 指定名字）：盒 01、盒 02 各 30 页，盒 03、盒 04 各 20 页，
@@ -1095,7 +1095,7 @@ async function verifyItem(ctx, key, { status, pages }) {
   return it
 }
 
-/** 条目的审计（没有读接口，只读库）。 */
+/** 条目的审计（直接读库）。 */
 function itemAudits(itemId) {
   return runSql(`SELECT json_build_object('action', action, 'detail', detail, 'at', created_at)::text FROM audit_logs WHERE target_type = 'archive_item' AND target_id = ${lit(itemId)} ORDER BY id;`)
     .split('\n')

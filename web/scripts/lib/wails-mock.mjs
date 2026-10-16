@@ -25,7 +25,7 @@
 //      }, scenario)
 //    清单里的这一张写 `shell: true`，screenshots.mjs 就用 shellOrigin(base) 打开 path；脚本自己 goto 的地址也要用它。
 //    页面之外登录拿到的 Cookie 要设在 shellOrigin(base) 上（`useShellSession`）。
-// 以后 Windows 上（M7）照样能用：只要本机有 Chrome、node 和 devshell。
+// 以后 Windows 上（M8）照样能用：只要本机有 Chrome、node 和 devshell。
 
 /** 壳模式的地址：把 base 的主机换成 wails.localhost（端口不变）。 */
 export function shellOrigin(base) {

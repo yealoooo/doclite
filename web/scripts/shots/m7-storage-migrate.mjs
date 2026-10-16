@@ -48,7 +48,11 @@ const SRC_NAME = 'M7-2 迁移演示·源'
 const DST_NAME = 'M7-2 迁移演示·目标'
 const DEFAULT_NAME = 'SeaweedFS（随系统部署）'
 const PAGES = 24
-const OUT = '../docs/screenshots/m7'
+// 另存的截图和清单的截图放在同一个目录：--out，默认 docs/screenshots/m7。
+const OUT = (() => {
+  const i = process.argv.indexOf('--out')
+  return i > 0 ? process.argv[i + 1] : '../docs/screenshots/m7'
+})()
 const BASE = '/api/system/storage-profiles'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))

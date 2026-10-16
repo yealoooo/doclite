@@ -8,7 +8,7 @@
 // Z201 的归类树和 8 个条目）。挂接在 M3-3 合入前是直接写库造的，M3-6 起一律经 PUT 接口（m3-demo 的 linkPages）。每张
 // 截图自己造的临时数据（节点、条目、设置的改动）在 after 里还原或删掉：临时条目经 M3-3 的删除接口（已定稿的先解锁；
 // M3-6 去掉了直接写库的兜底），每一步各自兜住错误，前面失败了也执行。
-// 截图写死到 ../docs/screenshots/m3（回归时在别的目录下跑）。
+// 截图默认放 ../docs/screenshots/m3（--out 可改）。
 //
 // 断言（失败时这一张算失败，脚本退出码 1）：
 // - m3-catalog-tree（demo_cataloger）：归类树每个节点显示编码和子树里的条目数，和接口一致；办公室 BGS 的条目列表
@@ -80,7 +80,11 @@ const demoPassword = process.env.DEMO_PASSWORD ?? 'demo123456'
 const CATALOGER = 'demo_cataloger'
 const MANAGER = 'demo_manager'
 const IDLE = 'networkidle2'
-const OUT = '../docs/screenshots/m3'
+// 另存的截图和清单的截图放在同一个目录：--out，默认 docs/screenshots/m3。
+const OUT = (() => {
+  const i = process.argv.indexOf('--out')
+  return i > 0 ? process.argv[i + 1] : '../docs/screenshots/m3'
+})()
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 

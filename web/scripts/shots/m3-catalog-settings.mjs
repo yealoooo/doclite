@@ -42,7 +42,11 @@ import { apiLogin, interceptRequests } from '../lib/m3-demo.mjs'
 
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
 const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
-const OUT = '../docs/screenshots/m3'
+// 另存的截图和清单的截图放在同一个目录：--out，默认 docs/screenshots/m3。
+const OUT = (() => {
+  const i = process.argv.indexOf('--out')
+  return i > 0 ? process.argv[i + 1] : '../docs/screenshots/m3'
+})()
 const CODE = 'M37-SET'
 const NEW_TEMPLATE = '{fonds}.{category}.{year}-{item_no:05}'
 

@@ -6,7 +6,7 @@
 #                         先 cd ../web && npm run dev，再 FRONTEND_DEVSERVER_URL=http://localhost:5173 bin/Doclite
 #
 # 版本号只有 web/package.json 一个来源：编译时写进 main.version（X-Client-Version），打包时写进 Info.plist。
-# Windows 的构建和安装包在 M7 做。
+# Windows 的构建和安装包在 M8（打包交付）做。
 version: '3'
 
 vars:
@@ -31,7 +31,7 @@ tasks:
     deps: [frontend]
     preconditions:
       - sh: '[ "{{.GOOS}}" = "darwin" ]'
-        msg: "目前只有 macOS 的构建；Windows 在 M7 做"
+        msg: "目前只有 macOS 的构建；Windows 在 M8（打包交付）做"
     cmds:
       - mkdir -p {{.BIN_DIR}}
       - go build -tags production -trimpath -buildvcs=false -ldflags="-w -s -X main.version={{.VERSION}}" -o {{.BIN_DIR}}/{{.APP_NAME}} .

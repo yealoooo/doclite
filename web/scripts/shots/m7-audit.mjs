@@ -11,7 +11,8 @@
 // - 按项目 + 对象类型筛选（地址栏参数）：每一行都是 DEMO-A 的文件夹，刚才的删除、修改、新建都在，操作译成中文；
 // - 展开"修改"那一条：备注的之前、之后；
 // - 筛选栏操作（日期 = 今天、操作人 = admin、对象 = 文件夹、操作 = 删除）后地址栏同步、结果都符合；
-// - 不认识的对象类型、动作原样显示，存储迁移、许可证的审计译成中文（页面里包一层 fetch，往列表响应里加三条假的）。
+// - 不认识的对象类型、动作原样显示，存储迁移（快照改位置、开始、结束）、许可证的审计译成中文（页面里包一层 fetch，往列表
+//   响应里加五条假的，detail 照 server 写的样子）。
 //
 // 另有一张是 M7-3 的另一半（上传时拒绝导出不了的罕见编码）：在 DEMO-A 根目录下临时建一个文件夹，浏览器里上传
 // shared/imagehdr/testdata/encoding 的两个夹具（算术编码的 JPEG、JPEG 2000 压缩的 TIFF），上传面板里显示服务器给的
@@ -129,11 +130,32 @@ async function injectFakeItems(page) {
         project_id: null, project_code: null, project_name: null, target_type: 'mystery_type',
         target_id: '01a1ffff-0000-7000-8000-000000000003', action: 'mystery_action', detail: { foo: 'bar', after: { level: 3 } },
       },
+      // 存储迁移的三种审计，detail 照 server/internal/storage 写的样子（M7-2）。
       {
         id: 900000002, created_at: new Date().toISOString(), operator_id: null, operator_name: '系统管理员', operator_username: 'admin',
         project_id: null, project_code: 'DEMO-A', project_name: '演示项目 A · 文书档案', target_type: 'file_snapshot',
         target_id: '01a1ffff-0000-7000-8000-000000000002', action: 'storage_migrate',
-        detail: { before: { storage_key: 'doclite/DEMO-A/x/v1.jpg' }, after: { storage_key: 'archive/DEMO-A/x/v1.jpg' } },
+        detail: {
+          job_id: '01a1ffff-0000-7000-8000-000000000010', file_id: '01a1ffff-0000-7000-8000-000000000011',
+          file_name: 'IMG_0001.png', version_no: 1,
+          before: { storage_profile_id: 'p-src', storage_profile_name: '旧存储', storage_key: 'doclite/DEMO-A/x/v1.png', cover_key: 'doclite/DEMO-A/x/v1.cover.jpg' },
+          after: { storage_profile_id: 'p-dst', storage_profile_name: '新存储', storage_key: 'archive/DEMO-A/x/v1.png', cover_key: 'archive/DEMO-A/x/v1.cover.jpg' },
+        },
+      },
+      {
+        id: 900000005, created_at: new Date().toISOString(), operator_id: null, operator_name: '系统管理员', operator_username: 'admin',
+        project_id: null, project_code: null, project_name: null, target_type: 'storage_profile',
+        target_id: '01a1ffff-0000-7000-8000-000000000005', action: 'migrate_start',
+        detail: { job_id: '01a1ffff-0000-7000-8000-000000000010', profile_name: '旧存储', target_profile_id: 'p-dst', target_profile_name: '新存储', total: 25 },
+      },
+      {
+        id: 900000004, created_at: new Date().toISOString(), operator_id: null, operator_name: null, operator_username: null,
+        project_id: null, project_code: null, project_name: null, target_type: 'storage_profile',
+        target_id: '01a1ffff-0000-7000-8000-000000000005', action: 'migrate_end',
+        detail: {
+          job_id: '01a1ffff-0000-7000-8000-000000000010', result: 'done', profile_name: '旧存储', target_profile_id: 'p-dst',
+          target_profile_name: '新存储', total: 25, migrated: 24, failed: 1, failed_objects: 1, remaining: 1,
+        },
       },
       {
         id: 900000001, created_at: new Date().toISOString(), operator_id: null, operator_name: '系统管理员', operator_username: 'admin',
@@ -284,13 +306,27 @@ export default {
         await page.select('[data-testid=audit-type]', '')
         await page.waitForFunction((sel) => document.querySelector(`${sel}[data-audit-id="900000003"]`), { timeout: 15000 }, ROWS)
         await waitList(page)
-        const rows = (await readRows(page)).slice(0, 3)
-        const [mystery, migrate, license] = rows
+        const byId = new Map((await readRows(page)).map((r) => [r.id, r]))
+        const [mystery, migrate, start, end, license] = [900000003, 900000002, 900000005, 900000004, 900000001].map((id) => {
+          const r = byId.get(id)
+          if (!r) throw new Error(`列表里没有假的第 ${id} 条`)
+          return r
+        })
         if (!mystery.object.startsWith('mystery_type') || mystery.actionText !== 'mystery_action' || mystery.operator !== '系统') {
           throw new Error(`不认识的应原样显示：${JSON.stringify(mystery)}`)
         }
-        if (!migrate.object.startsWith('文件快照') || migrate.actionText !== '存储迁移' || !migrate.summary.includes('对象 key')) {
+        if (!migrate.object.startsWith('文件快照') || !migrate.object.includes('IMG_0001.png v1') || migrate.actionText !== '存储迁移' ||
+          migrate.summary !== '「旧存储」→「新存储」') {
           throw new Error(`存储迁移：${JSON.stringify(migrate)}`)
+        }
+        if (!start.object.startsWith('存储配置') || !start.object.includes('旧存储') || start.actionText !== '开始迁移' ||
+          !start.summary.includes('迁到「新存储」，共 25 个快照')) {
+          throw new Error(`开始迁移：${JSON.stringify(start)}`)
+        }
+        if (!end.object.includes('旧存储') || end.actionText !== '迁移结束' || end.operator !== '系统' ||
+          !end.summary.includes('已完成：迁到「新存储」24 个快照') || !end.summary.includes('核对不一致 1 个') ||
+          !end.summary.includes('源存储里还剩 1 个')) {
+          throw new Error(`迁移结束：${JSON.stringify(end)}`)
         }
         if (!license.object.includes('许可证') || !license.object.includes('演示公司') || license.actionText !== '替换许可证' ||
           !license.summary.includes('标准版') || !license.summary.includes('20 个会话') || !license.summary.includes('到期 2027-10-16')) {
@@ -302,7 +338,7 @@ export default {
         if (!detail.includes('foo') || !detail.includes('bar') || !detail.includes('level')) {
           throw new Error(`不认识的字段应原样显示：${detail}`)
         }
-        console.log('  断言：mystery_type / mystery_action 原样显示；文件快照 / 存储迁移、许可证 / 替换许可证译成中文')
+        console.log('  断言：mystery_type / mystery_action 原样显示；文件快照 / 存储迁移、存储配置 / 开始迁移、迁移结束，许可证 / 替换许可证译成中文')
       },
     },
 

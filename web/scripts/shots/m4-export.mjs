@@ -6,7 +6,7 @@
 // 前端地址是 vite preview（/api 代理到 server，server 要开着执行器：JOB_CONCURRENCY 不是 0）或托管了 web/dist 的 server。
 // 演示数据用 scripts/lib/m4-demo.mjs 的 ensureM45Demo 建好（常驻，没有就建）：DEMO-A 的文件夹「M4-5 导出演示」16 页、
 // 「M4-5 导出演示（大页）」160 页（带透明的 PNG，导出 PDF 要转换，一次约 10 秒，用来截进度），全宗 Z405 / WS / 2025 / Y /
-// BGS（5 件：3 件定稿就绪，1 件没定稿且有页待审，1 件没有页）、DY（2 件大页，定稿）。截图写死到 ../docs/screenshots/m4。
+// BGS（5 件：3 件定稿就绪，1 件没定稿且有页待审，1 件没有页）、DY（2 件大页，定稿）。截图默认放 ../docs/screenshots/m4（--out 可改）。
 // 各张按顺序依赖前面建的任务（D 建的原图包任务给 E、G 用），用 --only 单独跑后面几张时前面的会缺。
 // 每跑一次新建 5–6 个导出任务（原图包、PDF 各约 9 页 3 MB，大页 PDF 约 9 MB，取消的两个不留导出物），导出物 7 天后
 // 自动删除；下载到的 zip 放在系统临时目录，核对完删掉。
@@ -66,7 +66,11 @@ const MANAGER = 'demo_manager'
 const CATALOGER = 'demo_cataloger'
 const SCANNER = 'demo_scanner'
 const IDLE = 'networkidle2'
-const OUT = '../docs/screenshots/m4'
+// 另存的截图和清单的截图放在同一个目录：--out，默认 docs/screenshots/m4。
+const OUT = (() => {
+  const i = process.argv.indexOf('--out')
+  return i > 0 ? process.argv[i + 1] : '../docs/screenshots/m4'
+})()
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 

@@ -7,7 +7,8 @@
 // ensureM36Demo 建好（常驻，全部经接口：文件夹「M3-6 挂接演示」24 页、全宗 Z206 的归类树、办公室 BGS 的 2 个条目）；
 // 2000 页的文件夹用 DEMO-A 已有的「2025 文书档案/盒 WS-2025-001」（只读，不挂接）。每张截图自己造的临时数据（文件夹、
 // 节点、条目）在 after 里删掉（条目经删除接口，已定稿的先解锁；文件夹在条目删掉之后才删得掉），前面失败了也执行。
-// 截图写死到 ../docs/screenshots/m3（回归时在别的目录下跑）。审计没有读接口，核对审计时只读库（psql，DATABASE_URL）。
+// 截图默认放 ../docs/screenshots/m3（--out 可改）。核对审计时直接读库（psql，DATABASE_URL；写脚本时还没有审计的读接口，
+// M7-3 之后有 GET /api/system/audit-logs）。
 //
 // 断言（失败时这一张算失败，脚本退出码 1）：
 // - m3-workbench（demo_cataloger，工作台全貌）：打开演示条目第 1 件，页序条 6 页的顺序、审核状态、版本和接口一致；池里
@@ -61,7 +62,11 @@ const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
 const demoPassword = process.env.DEMO_PASSWORD ?? 'demo123456'
 const CATALOGER = 'demo_cataloger'
 const IDLE = 'networkidle2'
-const OUT = '../docs/screenshots/m3'
+// 另存的截图和清单的截图放在同一个目录：--out，默认 docs/screenshots/m3。
+const OUT = (() => {
+  const i = process.argv.indexOf('--out')
+  return i > 0 ? process.argv[i + 1] : '../docs/screenshots/m3'
+})()
 const LIVE_MS = 3000
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -154,7 +159,7 @@ const getItem = (ctx, id) => ctx.api('GET', `/api/archive-items/${id}`)
 const pageIds = (it) => it.pages.map((p) => p.file_id)
 const fileLogs = async (ctx, fid) => (await ctx.api('GET', `/api/files/${fid}/logs`)).logs
 
-/** 条目的审计（没有读接口，只读库）。 */
+/** 条目的审计（直接读库）。 */
 function audits(itemId) {
   const out = runSql(
     `SELECT json_build_object('id', id, 'action', action, 'detail', detail)::text FROM audit_logs WHERE target_type = 'archive_item' AND target_id = ${lit(itemId)} ORDER BY id;`,

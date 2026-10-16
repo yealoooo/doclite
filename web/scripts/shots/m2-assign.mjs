@@ -40,6 +40,8 @@
 //   review_assign 的人：显示提示、页头计数来自 review-summary 并随事件更新（另存 m2-assign-no-browse.png）；
 //   拦截 stream 请求（实时连接断开）时按文件夹分配，下面已展开的文件夹的计数也刷新。
 
+import { mkdirSync } from 'node:fs'
+
 import { makeScanPage } from '../lib/scan-pages.mjs'
 
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
@@ -51,7 +53,13 @@ const MANAGER = 'demo_manager'
 const REV1 = 'demo_reviewer'
 const REV2 = 'demo_reviewer2'
 const IDLE = 'networkidle2'
-const OUT = '../docs/screenshots/m2'
+// 另存的截图和清单的截图放在同一个目录：--out，默认 docs/screenshots/m2。
+const OUT = (() => {
+  const i = process.argv.indexOf('--out')
+  const dir = i > 0 ? process.argv[i + 1] : '../docs/screenshots/m2'
+  mkdirSync(dir, { recursive: true })
+  return dir
+})()
 
 // ---------- 页面之外调接口 ----------
 
