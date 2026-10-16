@@ -86,17 +86,17 @@ docs/
 
 模块之间通过对方的 service 调用，不直接查对方的表（只读的查询可以例外，写在 store 里并注明）。一个文件太长就按功能拆（`upload.go`、`move.go`……），不要一个文件几千行。
 
-## 开发环境（macOS，无 Docker；数据库和存储在远程）
+## 开发环境（macOS；数据库在远程，S3 在本机 Docker）
 
-**PostgreSQL 和 S3 都在用户的一台公网云服务器上（2026-10-16 起），本机不装 PostgreSQL 和 SeaweedFS。** 地址、账号、密码、密钥都在 `server/.env`（server 和 API 测试都读它）和 `server/.env.remote`（远程服务器的连接参数），两个文件都不提交、**不要打印**（里面有数据库超级管理员的密码、S3 密钥、`MASTER_KEY`），日志、报告、文档里也不能出现。
+**PostgreSQL 在用户的一台公网云服务器上；S3（SeaweedFS）在本机 Docker 里（`server/dev/compose.yml`）。** 本机不装 PostgreSQL 服务给 Doclite 用（本机的 Homebrew PostgreSQL 是用户别的项目的，不要动）。地址、账号、密码、密钥都在 `server/.env`（server 和 API 测试都读它）和 `server/.env.remote`（远程服务器的连接参数），两个文件都不提交、**不要打印**（里面有数据库超级管理员的密码、S3 密钥、`MASTER_KEY`），日志、报告、文档里也不能出现。
 
 - **PostgreSQL 18.6**：用的是超级管理员账号（用户的选择），所以格外小心：
   - **同一个实例上有用户自己的业务库（castoon、castoon_v2 等），绝对不能碰。** 只动 Doclite 的库：`doclite_dev`（开发、演示数据）、`doclite_test`（API 测试只拿它建库删库）、`doclite_test_tpl_<哈希>`（测试的模板库）、`doclite_test_<16 位十六进制>`（每个测试一个，用完删掉）。手工清理只删最后这种。
   - 不改服务器设置（`postgresql.conf`、角色、扩展……）。
   - `max_connections=100`，平时已用约 10 个，和别的业务共用：server 的连接池（`DATABASE_URL` 的 `pool_max_conns`）加上同时跑的测试不要占满（测试的连接数见"测试"）。
-- **S3**：SeaweedFS 4.48（生产用 4.45，交付前复验预签名和 CORS）。桶 `doclite`（开发和测试共用，测试的对象在 `apitest/<日期>/…` 下）、`doclite-migrate-test`（存储迁移的第二个桶，测试也用）。
-- **网络**：往返约 43 ms，**服务器出口带宽 6 Mbps**（从服务器下载约 0.7 MB/s，上传快一些）。一个接口请求要几次数据库往返，比本机慢得多；看原图、下载导出物要等。不要批量下载对象，不跑性能测试（`-tags perf`：远程的数字没有意义，还会往库里造 10 万行）。
-- **本机代理**：这台 Mac 开着 Clash Verge（TUN 模式，环境变量里有 `http_proxy=http://127.0.0.1:7897`），到远程的连接都经过它。Go 代码连 S3 不走 `http_proxy`（server 的 S3 客户端、测试的 `testTransport` 都是直连）；测试里不要用 `http.Get`、`http.DefaultClient`、默认 Transport 的 `httputil.ReverseProxy`。
+- **S3**：本机 Docker 里的 SeaweedFS 4.48（`weed mini`，镜像版本写死在 `server/dev/compose.yml`），只监听 `127.0.0.1:8333`，开发用的固定密钥 `doclite-dev` / `doclite-dev-secret`，数据在 Docker 数据卷 `doclite-dev_s3data`。桶 `doclite`（开发和测试共用，测试的对象在 `apitest/<日期>/…` 下）、`doclite-migrate-test`（存储迁移的第二个桶，测试也用）。启动：`docker compose -f server/dev/compose.yml up -d`（Docker Desktop 开着就会随它自动起来）；`docker` 命令在 `/Applications/Docker.app/Contents/Resources/bin/`，不在默认 PATH 里时加上。用户服务器上也有 SeaweedFS 4.48，2026-10-16 起不再给 Doclite 用。
+- **网络**：到数据库往返约 43 ms（服务器出口带宽 6 Mbps）。一个接口请求要几次数据库往返，比本机慢得多；图片、导出物在本机 S3，不受带宽影响。不跑性能测试（`-tags perf`：远程的数字没有意义，还会往库里造 10 万行）。
+- **本机代理**：这台 Mac 开着 Clash Verge（TUN 模式，环境变量里有 `http_proxy=http://127.0.0.1:7897`），到远程的连接都经过它（Go 不会代理 127.0.0.1）。Go 代码连 S3 不走 `http_proxy`（server 的 S3 客户端、测试的 `testTransport` 都是直连）；测试里不要用 `http.Get`、`http.DefaultClient`、默认 Transport 的 `httputil.ReverseProxy`。
 - **工具链**：Go 1.25、Node 23、npm 11。Wails v3 命令行工具 `~/go/bin/wails3`（v3.0.0-beta.29）。
 - **环境变量**：`server/.env`（不提交）。**不要修改或重新生成 `MASTER_KEY`，不要打印它。** 模板写在 `server/.env.example`。
 - **端口**：用户自己的 server 跑在 9080，**不要碰**。子任务起 server 用 29080、29081、29082，预览用 24173、24174、24175（每个并行任务用一组，总控在派任务时指定）。起 server 时还要设自己的 `TMP_DIR`（比如 scratchpad 里的任务子目录）：`.env` 里的 `/tmp/doclite` 是共用的，server 启动时会清空其中的 `uploads/`。

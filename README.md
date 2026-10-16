@@ -15,7 +15,7 @@
 
 ## 本机试用
 
-在这台 Mac 上自己试：server 跑在 9080、连远程服务器上的 `doclite_dev`（已经有演示账号和演示数据），只提供接口；网页由 web 单独提供（vite preview，4173，把 `/api` 转给 9080），浏览器打开网页的地址。PostgreSQL 和 S3（SeaweedFS）都在远程服务器上（见[本机开发](#本机开发)），本机不用起；`server/.env` 已经配好（不要改里面的 `MASTER_KEY`）。server 和网页各占一个终端窗口。数据在远程、服务器下载带宽只有 6 Mbps，翻页、看原图比本机慢。
+在这台 Mac 上自己试：server 跑在 9080、连远程服务器上的 `doclite_dev`（已经有演示账号和演示数据），只提供接口；网页由 web 单独提供（vite preview，4173，把 `/api` 转给 9080），浏览器打开网页的地址。PostgreSQL 在远程服务器上，S3（SeaweedFS）在本机 Docker 里（Docker Desktop 开着就行，见[本机开发](#本机开发)）；`server/.env` 已经配好（不要改里面的 `MASTER_KEY`）。server 和网页各占一个终端窗口。数据库在远程，翻页等操作比本机慢一些。
 
 1. **server**（要在 `server/` 下运行，它读当前目录的 `.env`；启动时自动执行迁移，Ctrl+C 退出）：
 
@@ -66,7 +66,15 @@
 
 ## 本机开发
 
-需要 Go 1.25、Node 23 / npm 11。Mac 上不用 Docker。**数据库和存储都在远程**：用户的一台公网云服务器上的 PostgreSQL 18.6 和 SeaweedFS 4.48（S3），本机不装（2026-10-16 起；详细约定见 `CLAUDE.md` 的"开发环境"）。
+需要 Go 1.25、Node 23 / npm 11、Docker Desktop。**数据库在远程**：用户的一台公网云服务器上的 PostgreSQL 18.6；**S3 在本机 Docker**：SeaweedFS 4.48（2026-10-16 起；详细约定见 `CLAUDE.md` 的"开发环境"）。
+
+**S3**（第一次、或者 Docker Desktop 没开时）：
+
+```sh
+docker compose -f server/dev/compose.yml up -d     # 127.0.0.1:8333，密钥 doclite-dev / doclite-dev-secret
+```
+
+第一次启动后建桶 `doclite`、`doclite-migrate-test`（用任何 S3 工具，或 `docker compose -f server/dev/compose.yml exec s3 sh -c "echo 's3.bucket.create -name doclite' | weed shell"`）。数据在 Docker 数据卷 `doclite-dev_s3data`，删卷就清空。
 
 **`server/.env`**：server 和 API 测试的连接参数都在这里——`DATABASE_URL`（库 `doclite_dev`）、`S3_*`（桶 `doclite`）、`MASTER_KEY`，测试用的 `TEST_DATABASE_URL`（库 `doclite_test`）、`TEST_S3_*`。远程服务器的连接参数另有一份 `server/.env.remote`。两个文件都**不提交、不要打印**（里面有数据库超级管理员的密码和 S3 密钥）；新的 worktree 从主工作区拷一份 `server/.env`。`MASTER_KEY` 不要改（存储配置的密钥用它加密，换了就解不开）。环境变量优先于 `.env`。
 
@@ -74,7 +82,7 @@
 
 - 数据库账号是超级管理员。**同一个实例上有用户自己的业务库（castoon、castoon_v2 等），绝对不能碰**；只动 `doclite_` 开头的库，不改服务器设置。
 - `max_connections=100`，平时已用约 10 个：自己的 server（`DATABASE_URL` 的 `pool_max_conns`）加上同时跑的测试不要占满。
-- 往返约 43 ms，服务器出口带宽 6 Mbps（下载约 0.7 MB/s）：接口比本机慢得多，看原图、下载导出物要等；不要批量下载对象。
+- 到数据库往返约 43 ms：接口比本机慢；图片、导出物在本机 S3，不受服务器带宽影响。
 - 本机开着 Clash Verge（TUN 模式，`http_proxy=http://127.0.0.1:7897`）：Go 程序访问 S3 要直连，不要走 `http_proxy`。
 
 **换一套自己的环境**（例如另一台机器、自己的 PostgreSQL 和 S3）：PostgreSQL 要一个能建库的账号（API 测试要克隆库，所以要 `CREATEDB`；迁移里的 `pg_trgm` 是可信扩展，库的属主就能建）和两个库 `doclite_dev`、`doclite_test`；S3 建好桶 `doclite`、`doclite-migrate-test`。`server/.env` 从 `server/.env.example` 复制（每一项的说明都在模板里），要改的：
@@ -175,7 +183,7 @@ npm run seed:files -- --base http://127.0.0.1:9080 --user demo_scanner:demo12345
 - `m2-accept`：要先建「M2 验收演示 <日期>」（脚本开头有命令）；只能走一遍，再跑换一个文件夹（`M2_ACCEPT_FOLDER`）。
 - `m3-accept`：自己建「M3 验收演示 <日期>」和全宗 Z308，只能走一遍；再跑换 `M3_ACCEPT_FOLDER`、`M3_ACCEPT_FONDS`，或者 `M3_ACCEPT_TRIAL=1` 试跑（最后删掉自己建的数据）。
 - `m4-export`：server 要在执行导出（见[后台任务](#后台任务导出存储迁移)）。
-- `m7-storage-migrate`：server 要在执行后台任务（迁移在它里面执行）；要有第二个桶 `doclite-migrate-test`（远程已经建好）。脚本自己起一个转发到 SeaweedFS 的慢速代理当"源"存储的 server 地址（让迁移持续几秒），每跑一次在 DEMO-A 的「M7-2 迁移演示」下传一批文件，迁到「M7-2 迁移演示·目标」，跑完"源"迁空并停用。
+- `m7-storage-migrate`：server 要在执行后台任务（迁移在它里面执行）；要有第二个桶 `doclite-migrate-test`（本机 S3 里已经建好）。脚本自己起一个转发到 SeaweedFS 的慢速代理当"源"存储的 server 地址（让迁移持续几秒），每跑一次在 DEMO-A 的「M7-2 迁移演示」下传一批文件，迁到「M7-2 迁移演示·目标」，跑完"源"迁空并停用。
 - 壳的部分（`m1-shell`、`m1-scan`、`m1-cache` 和 `m1-organize`、`m2-rescan`、`m2-viewer`、`m2-review`、`m2-accept` 里名字带 `shell` 的几张）：`--base` 要指向 **devshell**（见下面）。这几张用 `http://wails.localhost:<端口>` 打开页面（`lib/client.ts` 的 `isShell()` 认 Windows 上 WebView2 的这个地址，Chrome 把 `*.localhost` 解析到本机），在页面脚本运行前注入 Wails 桥的模拟（`scripts/lib/wails-mock.mjs`：拦下 `/wails/runtime` 的命令调用、`_wails.dispatchWailsEvent` 推事件、`_wails.streamFactory` 给实时通道），正式前端代码不改。
 - `m2-accept`：`M2_ACCEPT_SHELL_MOCK=1` 时壳模式审核那两步用上面的模拟（否则改在浏览器里做）；`M2_ACCEPT_SHELL=client/bin/Doclite.app/Contents/MacOS/Doclite`、`M2_ACCEPT_SERVER=<网页的入口>`（vite 的地址；不设时用 `--base`）时壳重扫、壳的大图两步跑打包的客户端 `--smoke`（隔离的数据目录、后台模式），不设时壳重扫改用接口模拟。`m3-accept` 的 `M3_ACCEPT_SHELL` 同理。
 

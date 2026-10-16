@@ -1,0 +1,24 @@
+# 开发用的 S3（SeaweedFS，`weed mini` 单进程），只给本机开发和测试用；数据库连远程（见 CLAUDE.md"开发环境"）。
+# 只监听 127.0.0.1:8333，别的机器连不到。数据在 Docker 数据卷 doclite-dev_s3data 里。
+#
+#   docker compose -f server/dev/compose.yml up -d      # 启动（Docker Desktop 开着就会随它自动起来）
+#   docker compose -f server/dev/compose.yml logs -f s3
+#
+# 访问密钥是开发用的固定值，和 server/.env 的 S3_*、TEST_S3_* 一致。桶 doclite、doclite-migrate-test 第一次启动后建一次。
+name: doclite-dev
+
+services:
+  s3:
+    image: chrislusf/seaweedfs:4.48   # 2026-10-16 的最新版，和用户服务器上的一致
+    command: ["mini", "-dir=/data", "-ip=127.0.0.1", "-admin.ui=false"]
+    environment:
+      AWS_ACCESS_KEY_ID: doclite-dev
+      AWS_SECRET_ACCESS_KEY: doclite-dev-secret
+    ports:
+      - "127.0.0.1:8333:8333"
+    volumes:
+      - s3data:/data
+    restart: unless-stopped
+
+volumes:
+  s3data:
