@@ -63,6 +63,30 @@ func testDatabaseURL() string {
 	return "postgres://doclite@127.0.0.1:5432/doclite_test"
 }
 
+// redactedTestURL 是报错里用的连接串：密码换成 xxxxx。
+func redactedTestURL() string {
+	u, err := url.Parse(testDatabaseURL())
+	if err != nil {
+		return "（TEST_DATABASE_URL 格式不对）"
+	}
+	return u.Redacted()
+}
+
+// testPoolDSN 给每个测试的连接池加上连接数上限（连接串里没写 pool_max_conns 时默认 3）：
+// 开发用的 PostgreSQL 可能在远程、和别的业务共用连接上限（见 main_test.go）。
+func testPoolDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		panic(fmt.Sprintf("TEST_DATABASE_URL 格式不对：%v", err))
+	}
+	q := u.Query()
+	if q.Get("pool_max_conns") == "" {
+		q.Set("pool_max_conns", "3")
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
+}
+
 // withDatabase 把连接串里的库名换成 name。
 func withDatabase(dsn, name string) string {
 	u, err := url.Parse(dsn)
@@ -90,7 +114,7 @@ func maintenancePool() (*pgxpool.Pool, error) {
 			adminErr = adminPool.Ping(context.Background())
 		}
 		if adminErr != nil {
-			adminErr = fmt.Errorf("连不上测试库 %s（设置 TEST_DATABASE_URL）：%w", testDatabaseURL(), adminErr)
+			adminErr = fmt.Errorf("连不上测试库 %s（设置 TEST_DATABASE_URL）：%w", redactedTestURL(), adminErr)
 		}
 	})
 	return adminPool, adminErr
@@ -113,7 +137,7 @@ func buildTemplate() (string, error) {
 	// 咨询锁要在同一个连接上加和解，单独开一个连接。
 	conn, err := pgx.Connect(ctx, testDatabaseURL())
 	if err != nil {
-		return "", fmt.Errorf("连不上测试库 %s（设置 TEST_DATABASE_URL）：%w", testDatabaseURL(), err)
+		return "", fmt.Errorf("连不上测试库 %s（设置 TEST_DATABASE_URL）：%w", redactedTestURL(), err)
 	}
 	defer conn.Close(ctx)
 	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock(6000, 2)"); err != nil {
@@ -211,7 +235,7 @@ func NewEnv(t *testing.T, opts ...func(*app.Options)) *Env {
 // NewEnvWithLog 同 [NewEnv]，server 的日志写到 log（要检查日志的测试用，见 logCapture）。
 func NewEnvWithLog(t *testing.T, log *slog.Logger, opts ...func(*app.Options)) *Env {
 	t.Helper()
-	dsn := cloneDB(t)
+	dsn := testPoolDSN(cloneDB(t))
 	ctx := context.Background()
 	pool, err := db.Open(ctx, dsn)
 	if err != nil {

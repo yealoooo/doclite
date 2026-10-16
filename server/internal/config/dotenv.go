@@ -9,6 +9,9 @@ import (
 	"strings"
 )
 
+// LoadDotEnv 同 loadDotEnv，给 API 测试用：测试的连接参数（TEST_DATABASE_URL、TEST_S3_*）和 server 写在同一个 `.env` 里。
+func LoadDotEnv(path string) error { return loadDotEnv(path) }
+
 // loadDotEnv 读 path（不存在就跳过），把里面的变量设进环境变量；已经有的环境变量不覆盖。
 //
 // 格式：`KEY=VALUE`，一行一个；`#` 开头的行和空行忽略；可以有 `export ` 前缀；
