@@ -15,6 +15,8 @@
 
 ## 本机试用
 
+**最简单的用法**：`cd server && make run`（编译并运行 server，Ctrl+C 退出）；另开一个终端 `cd client && make run`（编译并运行客户端，服务器地址填 `http://127.0.0.1:9080`）。只编译不运行用 `make build`。下面是分开的写法和说明。
+
 **交付只有客户端**（界面在客户端里，不提供网页服务和浏览器访问）。在这台 Mac 上试就是两样：server（9080，只提供接口，连远程服务器上的 `doclite_dev`，已经有演示账号和演示数据）和客户端。PostgreSQL 在远程服务器上，S3（SeaweedFS）在本机 Docker 里（Docker Desktop 开着就行，见[本机开发](#本机开发)）；`server/.env` 已经配好（不要改里面的 `MASTER_KEY`）。数据库在远程，翻页等操作比本机慢一些。
 
 1. **server**（要在 `server/` 下运行，它读当前目录的 `.env`；启动时自动执行迁移）：
