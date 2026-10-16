@@ -281,11 +281,14 @@
 - **修了什么：** 前端、客户端、服务端没发现 bug；脚本：`m7-audit` 的迁移假数据改成实际格式、多个脚本另存截图改为跟 `--out` 走、`m2-accept` G4 默认名改为 `a4-g4-1bit.tif`；"Windows 在 M7"改为 M8；README 开头加"本机试用"、测试个数、后台任务一节改名"导出、存储迁移"。
 - **遗留：** doclite_dev 有三个「M2 验收演示 …」（不带后缀、M6-4、M7-4，各有一页驳回的「盒 04/IMG_0003」），「客户端自检」下多个自检文件夹；`doclite_test` 下 12 个没人连的 `doclite_test_<随机>` 克隆库可手工删；许可证页"当前在线"可能超过席位数（admin 不受限），可加一句说明；devshell 页面取消请求时记 WARN；seed:demo 不建 `demo_reviewer2`。M8：Windows 验证项、正式公钥写进构建脚本、`wails3` 不在 PATH（用 `~/go/bin/wails3`）。
 
-### [~] M7-5 模块独立：去掉 shared，server 只提供接口，web 单独启动
+### [x] M7-5 模块独立：去掉 shared，server 只提供接口，web 单独启动（commit c998548）
 **用户决定（2026-10-16）：** server、web、client 三个独立模块，代码上互不依赖，为以后拆仓库做准备；web 本地开发单独启动，部署时是单独的 nginx 容器（requirements 第 1 节）。
 - **范围：** ① `shared/archiveno` → 服务端归类模块下的独立小包；`shared/names` → 服务端 `platform/`；`shared/imagehdr` → 服务端、客户端各一份（只用标准库，不依赖各自的其他模块）；删掉 `shared/`、`go.work`、`go.work.sum`，server 和 client 各自独立编译、能 `go mod tidy`。② server 去掉 `WEB_DIR` 托管网页，只提供 `/api`。③ web 自成一体：截图脚本和 seed 脚本用 web 自己的样本（不再读 `server/testdata/samples`），本地试用、截图脚本的 `--base` 改成 vite（dev 或 preview）。④ 更新 CLAUDE.md、README（本机试用：分别启动 server 和 web）。
 - **完成标志：** 三项检查和全部测试通过；截图脚本抽跑（m0、m1-files、m4-export）以 vite preview 为入口通过。
 
+- **结果：** server、client 在 `GOWORK=off` 下三项检查全过，`go mod tidy` 没升版本；`npm run build`、`wails3 package` 过；以 vite preview 为入口 m0 13/13、m1-files 10/10、m4-export 13/13、m7-audit 5/5；server 日志无 ERROR、5xx。
+- **做法：** `shared/names` → `server/internal/platform/names`；`shared/archiveno` → `server/internal/platform/archiveno`（project 也用，自带禁用字符常量，只依赖标准库）；`shared/imagehdr` → `server/internal/platform/imagehdr` 和 `client/internal/imagehdr` 各一份（代码相同，开头写明另一份在哪、改动两边同步、拒收以 server 为准）。删掉 `shared/`、`go.work`、`go.work.sum`。样本：`client/testdata/samples` 全量副本、`client/internal/imgdecode/testdata` 和 `server/internal/export/bundle/testdata` 互补夹具、`web/scripts/samples`（截图要的 8 个 + `encoding/` 2 个罕见编码）。server 去掉 `WEB_DIR`（配置、`httpx/web.go`、测试），`/api` 以外一律 JSON 404。vite 默认监听 `127.0.0.1`（本机 localhost 只监听 ::1）。CLAUDE.md 加"三个模块"一节；README 改成分别启动 server 和 web；requirements 1.2 容器说明改为 web（nginx）+ server（只提供 /api）。
+- **须知：** server `cd server && go run ./cmd/server`（9080 只有 `/api`）；web `npm run dev`（5173）或 `npm run build && npm run preview`（4173），都把 `/api` 和实时推送转给 `DOCLITE_SERVER`（默认 9080）；并行任务 `DOCLITE_SERVER=http://127.0.0.1:2908x npm run preview -- --port 2417x --strictPort`；截图脚本 `--base` 用 web 的地址。imagehdr 改一份要同步另一份。
 ### [~] M7-6 客户端界面跟 web 服务走
 **用户决定（2026-10-16）：** 改掉 2026-09-27 的"界面打包进客户端"；客户端不依赖 web 的代码（requirements 第 1 节）。
 - **范围：** 客户端的"服务器地址"是 web 服务入口；资产服务器把页面请求同源转发到这个地址（本机缓存：带哈希的静态文件长期缓存，`index.html` 每次启动重新取、取不到用缓存），`/api/` 代理照旧；首次连接、连不上、需要升级几页用简单 HTML 写在客户端里，客户端编译不再需要 web；桥按能力协商（页面用 `shell_info` 的能力决定显示哪些本机功能），客户端旧、页面新时不报错；桥命令写成约定文档；CSP、导航保护照旧。devshell、自检、壳模式截图脚本相应调整。
