@@ -340,7 +340,7 @@
 
 - **标识**【用户 2026-09-27】：identifier `com.doclite.desktop`（不再改，改了安装更新会当成另一个应用）；productName `Doclite`；单实例（再启动聚焦已有窗口）。
 - **数据目录**【用户 2026-09-27】：`%LOCALAPPDATA%\Doclite\`（macOS `~/Library/Application Support/Doclite/`）：设置、会话 Cookie、上传队列库、日志（按天滚动）、图片缓存、`smoke\`。
-- **会话**【用户 2026-09-27；界面来源 2026-10-16 改为跟服务端走，见第 1 节】：首次启动填服务器地址（探测 `/api/health`、`/api/shell/latest`），连不上可重试或改地址。页面和 server 跨源，**壳代理全部 `/api/` 请求**：只许已配置 server 的 `/api/` 路径；壳保存 Cookie（退出或换服务器清空），页面拿不到令牌；壳加 `X-Client-Type: desktop`、`X-Client-Version`；SSE 经壳逐块转发；不用 Bearer（Wails 下怎么实现由重写定，"页面拿不到令牌、客户端头由壳统一加"保留）。热文件夹、缓存、页面共用会话；到期时队列暂停，登录后自动继续。本机能力只开给壳的资产服务器给出的页面（同源，CSP、导航保护照旧）。
+- **会话**【用户 2026-09-27；界面随客户端打包、地址填 server 的接口地址，见第 1 节】：首次启动填服务器地址（探测 `/api/health`，再不带会话请求一次 `/api/me` 识别 426 需要升级；`/api/shell/latest` 和 `shell/download` 还没做，随自动更新 M8 做），连不上可重试或改地址。页面和 server 跨源，**壳代理全部 `/api/` 请求**：只许已配置 server 的 `/api/` 路径；壳保存 Cookie（退出或换服务器清空），页面拿不到令牌；壳加 `X-Client-Type: desktop`、`X-Client-Version`；SSE 经壳逐块转发；不用 Bearer（Wails 下怎么实现由重写定，"页面拿不到令牌、客户端头由壳统一加"保留）。热文件夹、缓存、页面共用会话；到期时队列暂停，登录后自动继续。本机能力只开给壳的资产服务器给出的页面（同源，CSP、导航保护照旧）。
 - **版本**【用户 2026-09-27】：server 配 `MIN_CLIENT_VERSION`（不设不限）、`CLIENT_LATEST_VERSION`、`CLIENT_DOWNLOAD_URL`；低于最低 426 `client_upgrade_required`（details 带版本和下载地址），格式错 400 `invalid_client_version`；不带头放行；`/api/health`、`/api/shell/*` 不查。壳启动查 `shell/latest`，低于最低或收到 426 时整页提示更新。只在接口不兼容时调高；不做版本范围。
 - **上传队列**：本机库，一行一个本地文件（路径、大小、修改时间、sha、目标、状态 等待写入 / 排队 / 上传中 / 已入库 / 重复 / 失败、重试、错误）；一个数据目录只一个进程开队列；重启时上传中回到排队。热文件夹和壳里的上传按钮都进它。
 - **热文件夹**【用户 2026-09-27】：只监控一个目录，对应目标文件夹（可换）；子文件夹逐层按名字建（if_exists）并记住 folder_id（服务端改名移动照传，删除后重建）。写完判定：大小和修改时间 2 秒不变 → Windows 能独占打开 → JPEG 尾 `FF D9`、PNG 有 IEND；60 秒仍不完整记失败。忽略隐藏、系统、临时文件（`.`、`~$` 开头、`.tmp`、Thumbs.db 等）；不跟符号链接，≤ 32 层。同一子文件夹按文件名自然顺序串行（IMG_2 在 IMG_10 前），≤ 2 个子文件夹并行。
@@ -372,7 +372,7 @@
 
 | 路径（省略 /api/） | 菜单 | 说明 |
 |---|---|---|
-| GET health · shell/latest · shell/download/{v}（M5） | 不用登录 | 健康、客户端版本、安装包 |
+| GET health · shell/latest · shell/download/{v}（shell/* 还没做，随自动更新 M8） | 不用登录 | 健康、客户端版本、安装包 |
 | POST auth/login · auth/logout · GET me · me/menus · projects | 登录 | 会话、菜单、我的项目 |
 | system/users（GET/POST）· {id}（GET/PATCH）· {id}/disable·enable·reset-password（POST）· {id}/roles（PUT） | system.users | 用户 |
 | GET system/roles | roles 或 users | 角色列表 |
@@ -443,7 +443,7 @@
 **用户决定（2026-10-16，服务端报告 `doclite-project/server-report.html`）：**
 
 - **存储迁移**【用户 2026-10-16】：允许迁移**只改快照的存放位置**（`file_snapshots.storage_profile_id`、`storage_key`、`cover_key`），这是"快照只追加"的唯一例外。先复制、按 sha256 核对一致才改；迁原图和封面，导出物不迁（7 天自动删）；迁移时照常上传审核（新上传进默认存储）；中断后从断点继续；每个改了位置的快照写一条审计（`target_type=file_snapshot`、`action=storage_migrate`），任务开始、结束、取消也写审计。`storage-profiles/{id}/migrate` 由后台任务（`job_type=storage_migrate`）执行；多个快照共用一个对象（恢复、复制）时只复制一次。迁完原存储可停用。
-- **许可证**【用户 2026-10-16】：**按登录会话数算**（同一个人在两处登录算 2）。【总控】在线会话 = 未撤销、未到期、30 分钟内有活动（`last_seen_at`；打开的实时通道算活动）；满了新登录被拒（403 `license_seats_full`）；持有内置 admin 角色的人总能登录（会话照样计数）；到期后非 admin 不能登录、已登录的下一次请求被拒（`license_expired`），数据不动，导入新许可证立即恢复；到期前 30 天在页面顶部提醒 admin；还没导入许可证时只有 admin 能登录（`license_missing`）。许可证绑定服务端首次启动生成的 `install_id`（存 `system_settings`），"系统 → 许可证"页显示 install_id、导入（粘贴或选 .lic 文件）、显示公司、版本、人数、到期、当前在线数。签发用上一版的工具 `../bak/doclite-license`（Ed25519，`hardware_id` 填 install_id），服务端只验签，公钥编进程序。
+- **许可证**【用户 2026-10-16】：**按登录会话数算**（同一个人在两处登录算 2）。【总控】在线会话 = 未撤销、未到期、30 分钟内有活动（`last_seen_at`；打开的实时通道算活动）；满了新登录被拒（403 `license_seats_full`）；持有内置 admin 角色的人总能登录（会话照样计数）；到期后非 admin 不能登录、已登录的下一次请求被拒（`license_expired`），数据不动，导入新许可证立即恢复；到期前 30 天在页面顶部提醒有 `system.license` 菜单的人（M7-1，admin 一定有）；还没导入许可证时只有 admin 能登录（`license_missing`）。许可证绑定服务端首次启动生成的 `install_id`（存 `system_settings`），"系统 → 许可证"页显示 install_id、导入（粘贴或选 .lic 文件）、显示公司、版本、人数、到期、当前在线数。签发用上一版的工具 `../bak/doclite-license`（Ed25519，`hardware_id` 填 install_id），服务端只验签，公钥编进程序。
 - **审计日志页**【用户 2026-10-16】：做简单版——只读分页列表，按时间、操作人、操作类型（target_type、action）、项目筛选，有 `system.audit` 菜单的人能看；新加一个查询接口。
 - **上传时拒绝导出不了的罕见格式**【总控建议，用户未反对 2026-10-16】：算术编码、无损、12 位的 JPEG，JPEG2000、JBIG 等压缩的 TIFF，上传时按文件头拒绝（`invalid_image`，提示换格式重扫）。
 - **新建导出任务**【总控建议，用户未反对 2026-10-16】：5 万页实测 0.97–1.04 秒，先接受，正式硬件上重测（perf 测试按 1.5 秒判失败）。
