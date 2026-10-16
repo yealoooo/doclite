@@ -49,6 +49,8 @@
 //           没有出错提示（toast）和未处理的异常。壳还不支持的功能（"还不支持"）、server 还没有的接口（"接口不存在"，
 //           服务端并行开发时会有）的提示单独记下，不算失败
 //   nav_guard  导航保护：让主页面跳到服务器的网页，要求被壳拦下（页面还在 wails 的地址上）。壳没装上导航保护时跳过
+//   runtime_guard  桥的白名单（M7-6）：页面自己发几种不在白名单里的 /wails/runtime 调用（带查询串的 GET、text/plain、
+//           System.Environment、别的绑定方法），都要 403。失败时照样跑完后面各步
 //   scan_page  打开 /scan（M1-13）：经真实的壳命令和事件读出上传队列、热文件夹和缓存摘要。账号没有"扫描上传"
 //           菜单时跳过（detail 里 skipped）。失败时照样跑完后面各步。
 //   rescan  重扫件（M2-7，lib/smoke-rescan.ts）：设置了 DOCLITE_SMOKE_RESCAN_PATH 才跑，否则跳过。经真实的
@@ -994,6 +996,38 @@ async function checkNavGuard(serverUrl: string) {
   return { target, blocked: true, still_at: window.location.origin }
 }
 
+/**
+ * runtime_guard 一步（M7-8）：桥的入口 /wails/runtime 只放行 Bridge.Invoke 和取消调用（client/BRIDGE.md 的"桥的白名单"）。
+ * 页面自己发几种不在白名单里的调用，都要 403（壳的日志里各记一条"拦下了不在白名单里的运行时调用"）。挑的都是即使放过去
+ * 也无害的调用：System.Environment（只读）和一个不存在的绑定方法。
+ */
+async function checkRuntimeGuard() {
+  const url = '/wails/runtime'
+  const json = { 'Content-Type': 'application/json' }
+  const environment = JSON.stringify({ object: 8, method: 1 })
+  const probes: [string, RequestInit & { query?: string }][] = [
+    ['get_query', { method: 'GET', query: '?object=8&method=1' }],
+    ['post_text_plain', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: environment }],
+    ['post_system_environment', { method: 'POST', headers: json, body: environment }],
+    [
+      'post_other_binding',
+      {
+        method: 'POST',
+        headers: json,
+        body: JSON.stringify({ object: 0, method: 0, args: { methodName: 'doclite/client/internal/shell.Bridge.NotAllowed', args: [] } }),
+      },
+    ],
+  ]
+  const results: { name: string; status: number }[] = []
+  for (const [name, { query, ...init }] of probes) {
+    const res = await fetch(url + (query ?? ''), { ...init, cache: 'no-store' })
+    results.push({ name, status: res.status })
+  }
+  const passed = results.filter((r) => r.status !== 403)
+  if (passed.length > 0) throw new Error(`不在白名单里的调用没有被拦下：${passed.map((r) => `${r.name} → ${r.status}`).join('、')}`)
+  return { rejected: results.length, probes: results }
+}
+
 function waitForSelector(selector: string): Promise<Element> {
   return new Promise((resolve, reject) => {
     const started = Date.now()
@@ -1272,6 +1306,14 @@ export async function runSmoke(hooks: SmokeHooks) {
         if (outcomeOf(e) !== 'failed') throw e
         deferred.push({ name: 'nav_guard', error: e })
       }
+    }
+
+    // 桥的白名单（M7-6 的加固，M7-8 加的自检）。失败时同样接着跑后面各步。
+    try {
+      await step('runtime_guard', checkRuntimeGuard)
+    } catch (e) {
+      if (outcomeOf(e) !== 'failed') throw e
+      deferred.push({ name: 'runtime_guard', error: e })
     }
 
     await step('logout', async () => {

@@ -82,7 +82,7 @@ Wails 的运行时在 `POST /wails/runtime` 上不只有绑定方法，还有 Br
   - `Call`（object 0）的 CallBinding（method 0），`methodName` 是 `doclite/client/internal/shell.Bridge.Invoke`——所有命令都走它；
   - `CancelCall`（object 10，method 0）——运行时取消一个还在进行的调用；
 - 运行时把超过 512 KB 的请求体分块发（`x-wails-chunk-id`、`-index`、`-total`）：壳先把各块收齐拼好再按上面校验，放行时当作一个普通请求交给 Wails；
-- 其余一律 403（日志里记一条"拦下了不在白名单里的运行时调用"）。
+- 其余一律 403（日志里记一条"拦下了不在白名单里的运行时调用"）。`--smoke` 的 `runtime_guard` 一步在打包的客户端里核对（页面自己发带查询串的 GET、text/plain、System.Environment、别的绑定方法，都要 403）。
 
 运行时另有一条不经 HTTP 的消息通道（macOS 的 `webkit.messageHandlers`、Windows 的 `chrome.webview.postMessage`），Wails 只认窗口拖动、改大小、`wails:runtime:ready` 几种消息（壳没有打开 `AllowSimpleEventEmit`），碰不到命令和本机功能。
 

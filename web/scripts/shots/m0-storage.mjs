@@ -1,6 +1,6 @@
 // M0-6 的截图清单（存储配置）：npm run screenshots -- --spec scripts/shots/m0-storage.mjs
-// 前提：server 连的库里已经有首次启动时按 S3_* 登记的默认存储"SeaweedFS（随系统部署）"，
-// 本机 SeaweedFS 在运行（测试连接要真正访问它）。管理员账号同 m0.mjs：
+// 前提：server 连的库里有默认存储（首次启动时按 S3_* 登记的，桶 doclite；M7-8 起按"默认"标记找，不认名字——
+// 开发库的默认存储已改名为"SeaweedFS（本机 Docker）"），它指向的 SeaweedFS 在运行（测试连接要真正访问它）。管理员账号同 m0.mjs：
 // INIT_ADMIN_USERNAME / INIT_ADMIN_PASSWORD，默认 admin / change-me-now，也可以用 --account 覆盖。
 //
 // 截图不保存任何修改：失败的那张只是在编辑表单里改了桶名再测试，不点保存。
@@ -8,7 +8,8 @@
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
 const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
 
-const CARD = '[data-testid=storage-card][data-profile-name="SeaweedFS（随系统部署）"]'
+/** 默认存储的卡片（带"默认"标记的那一张）。 */
+const CARD = '[data-testid=storage-card]:has([data-testid=default-badge])'
 
 /** 打开默认存储的编辑表单。 */
 async function editDefault(page) {

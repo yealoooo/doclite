@@ -46,7 +46,6 @@ const S3_SECRET_KEY = process.env.M72_S3_SECRET_KEY ?? 'doclite-dev-secret'
 const DELAY_MS = Number(process.env.M72_DELAY_MS ?? 400)
 const SRC_NAME = 'M7-2 迁移演示·源'
 const DST_NAME = 'M7-2 迁移演示·目标'
-const DEFAULT_NAME = 'SeaweedFS（随系统部署）'
 const PAGES = 24
 // 另存的截图和清单的截图放在同一个目录：--out，默认 docs/screenshots/m7。
 const OUT = (() => {
@@ -241,12 +240,13 @@ export default {
       path: '/system/storage',
       waitFor: '[data-testid=storage-card]',
       async prepare(page) {
-        await context(page)
+        // 默认存储按接口里的 is_default 找，不写死名字（开发库的默认存储改过名，M7-8）。
+        const c = await context(page)
         await page.reload({ waitUntil: 'networkidle2' })
         await page.waitForSelector(card(SRC_NAME))
         const srcBlock = await blockedReason(page, SRC_NAME, 'storage-migrate')
         assert(srcBlock === null, `源存储的"迁移到…"应该能点：${srcBlock}`)
-        const defBlock = await blockedReason(page, DEFAULT_NAME, 'storage-migrate')
+        const defBlock = await blockedReason(page, c.def.profile_name, 'storage-migrate')
         assert(typeof defBlock === 'string' && defBlock.includes('默认存储'), `默认存储的"迁移到…"应禁用：${defBlock}`)
         await page.$eval(card(SRC_NAME), (el) => el.scrollIntoView({ block: 'center' }))
       },
