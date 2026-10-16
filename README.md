@@ -250,7 +250,7 @@ go build -ldflags "-X doclite/server/internal/license.publicKey=$(grep -v -- ---
 
 **install_id**：server 首次启动时生成，存在 `system_settings`（键 `install_id`），以后不变；格式是 `sha256:` + 64 位十六进制（签发工具要求的 `--hardware-id` 格式，内容是随机数）。许可证页显示，可以复制。
 
-**签发**（工具在 `../bak/doclite-license`，Rust，Ed25519；`cargo build --release`，Web 管理后台见它的 README）：
+**签发**（工具在 `../bak/doclite-license`，Rust，Ed25519；编好的程序在 `../bak/doclite-license/bin/doclite-license`（Mac arm64，2026-10-16 清理编译产物时留下的），直接用；要重新编译用 `cargo build --release`，Web 管理后台见它的 README）：
 
 ```sh
 doclite-license keygen --output ./keys            # 只做一次：private.pem 妥善保管（backup-key 做加密备份），public.pem 给构建用
