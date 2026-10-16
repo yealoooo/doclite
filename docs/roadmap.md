@@ -261,11 +261,15 @@
 - **完成标志：** API 测试：端到端（两个桶，迁完新存储能读、原存储停用后照常看图和导出）、迁移中上传和重扫、中途重启续传、取消、核对不一致不改、共用对象、权限表；截图脚本新建 `m7-storage-migrate.mjs`。
 - **前置：** M5、M6。
 
-### [~] M7-3 审计日志页、上传拒绝罕见格式
+### [x] M7-3 审计日志页、上传拒绝罕见格式（commit c75fd18）
 - **范围：** ① 审计日志查询接口（时间、操作人、target_type、action、项目筛选，按 id 倒序游标分页）和"系统 → 审计日志"页（替换占位页），显示可读的操作说明；② 上传时按文件头拒绝导出不了的罕见格式（`shared/imagehdr`，服务端上传和客户端、浏览器上传前的检查都用它）。
 - **完成标志：** API 测试（筛选、分页、权限表、10 万行审计时的耗时）；罕见格式的样本被拒、常见格式不受影响；截图脚本新建 `m7-audit.mjs`。
 - **前置：** M5、M6。
 
+- **结果：** server、shared、client（含 `GOOS=windows`）、`-tags perf` vet、web 检查都过；`m7-audit.mjs` 5/5、`m1-files.mjs` 10/10；`TestPerfAudit`（10 万条，含 3 万条迁移）17 种筛选中位数 0.7–7 ms（目标 200），不加索引。
+- **做法：** ① `GET /api/system/audit-logs?from=&to=&operator_id=&project_id=&target_type=&action=&limit=&cursor=` → `{items, next_cursor}`（id 倒序游标，limit 默认 50、上限 200，`[from, to)` RFC 3339；时间先在主键上二分换成 id 范围、两头各放宽 1 小时，再按 created_at 精确过滤；一页一条 SQL 带操作人、项目）；`GET /api/system/audit-logs/filter-options`（全部用户含停用、全部项目含已删除）。菜单 `system.audit`。前端 `AuditView.vue`（筛选同步到地址栏、加载更多、展开看前后差异），翻译集中在 `web/src/lib/audit.ts`（9 类对象、21 种动作 + license import/replace + file_snapshot/storage_migrate，不认识的原样显示）。② `shared/imagehdr.ParseUpload`（规则在 `encoding.go`，`Parse` 不变）：拒绝导出做不了的编码——JPEG 无损、分层、算术编码、非 8 位、分量数不是 1/3/4；TIFF 的 JPEG2000、JBIG 等压缩、非常规位数、浮点、CIELab、非 JPEG 的 YCbCr、找不到完整 JPEG 的旧式 6、JPEG 压缩又分平面或带透明等。server 上传、重扫和客户端上传队列、壳里重扫共用，400 `invalid_image`（"不支持的图片格式（…），请换个保存格式重扫"），客户端被拒的不发请求、不重试。`TestUploadCheckMatchesExport` 核对四个目录全部样本：导出不支持 ⇔ 上传拒绝。
+- **遗留：** 客户端看不了但导出能做的（不拒，客户端没封面、不能切块）：2、4 位 TIFF、非 JPEG 的 CMYK TIFF、灰度带透明 TIFF、非 JPEG 的分平面 TIFF、CCITT MH、4 分量无 Adobe APP14 的 JPEG。反过来分平面 JPEG TIFF 客户端能看但导出不行，现在上传被拒（已入库的不受影响）。时间筛选假设写审计的事务不超过 1 小时（M7-2 要短事务）；100 万条时全表扫估计约 70 ms。README 第 88 行"审计没有读接口"过时、requirements 第 8 节接口表待补（M7-4）。
+- **须知：** `m7-audit.mjs` 每跑一次在 DEMO-A 留一个已软删除的「截图验证 M7-3 审计 <时间>」文件夹。M7-2 的开始、结束、取消动作名定下后补进 `web/src/lib/audit.ts` 的 `AUDIT_ACTIONS` / `ACTION_LABELS`。
 ### [ ] M7-4 收尾验收
 - **范围：** M7-1 到 M7-3 合并后，全部截图脚本（浏览器和壳模式）、`--smoke`、API 测试再跑一遍；整理给用户的本机试用说明。
 - **前置：** M7-1、M7-2、M7-3。
