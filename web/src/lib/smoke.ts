@@ -4,7 +4,7 @@
 // smoke_config 的 stage：
 // - main：完整的自检，用嵌入的界面和真实的传输层依次执行下面各步（壳没有的功能——smoke_config 的
 //   capabilities——对应的步骤跳过，记为 ok 并在 detail.skipped 写原因）；交回结果后壳回 {next: 'edit_server'}，
-//   界面像"关于"里的"修改服务器地址"那样跳到客户端的修改地址页；
+//   界面像设置页里的"修改服务器地址"那样跳到客户端的修改地址页；
 // - page：换地址后进来的界面，只报告 GET /api/me 的状态码和界面版本，不挂载界面。
 //
 // main 的各步：
@@ -51,8 +51,12 @@
 //   nav_guard  导航保护：让主页面跳到服务器的网页，要求被壳拦下（页面还在 wails 的地址上）。壳没装上导航保护时跳过
 //   runtime_guard  桥的白名单（M7-6）：页面自己发几种不在白名单里的 /wails/runtime 调用（带查询串的 GET、text/plain、
 //           System.Environment、别的绑定方法），都要 403。失败时照样跑完后面各步
-//   scan_page  打开 /scan（M1-13）：经真实的壳命令和事件读出上传队列、热文件夹和缓存摘要。账号没有"扫描上传"
+//   scan_page  打开 /scan（M1-13）：经真实的壳命令和事件读出上传队列、热文件夹。账号没有"扫描上传"
 //           菜单时跳过（detail 里 skipped）。失败时照样跑完后面各步。
+//   settings_page  打开客户端的设置页 /settings（M7-11）：连接状态正常（经壳调 /api/health）、服务端版本；有 settings
+//           能力时 local_dirs 的数据目录和 shell_info 一致、页面上的日志目录和 local_dirs 一致，open_local_dir 认 logs
+//           （自检里不打开文件管理器、不抢焦点），不认别的名字（invalid_request）；有 images 时读出缓存占用，有 upload 时
+//           读出上传队列的计数。失败时照样跑完后面各步。
 //   rescan  重扫件（M2-7，lib/smoke-rescan.ts）：设置了 DOCLITE_SMOKE_RESCAN_PATH 才跑，否则跳过。经真实的
 //           pick_and_rescan（自检里用那个本机文件，不弹对话框）重扫一页已驳回的文件，用接口核对新版本、封面、
 //           自动再分配和 rescan 日志。失败时照样跑完后面各步。
@@ -96,9 +100,15 @@ import {
 } from '@/lib/smoke-flow'
 import router from '@/router'
 import { useSessionStore } from '@/stores/session'
+import { shellHas } from '@/lib/client'
+import { invoke } from '@/lib/wails'
+import { useShellStore } from '@/stores/shell'
 import {
   checkServer,
   editServerAddress,
+  isShellError,
+  localDirs,
+  openLocalDir,
   shellErrorMessage,
   shellStream,
   shellStreamCancel,
@@ -887,7 +897,6 @@ async function checkScanPage() {
   await router.push('/scan')
   await waitForSelector('[data-testid=scan-page][data-state=ready]')
   await waitForSelector('[data-testid=hotfolder-card]')
-  const summary = await waitForSelector('[data-testid=image-cache-summary] [data-testid=cache-total]')
   const tiles = Object.fromEntries(
     [...document.querySelectorAll('[data-testid=queue-stats] button')].map((b) => [
       (b.getAttribute('data-testid') ?? '').replace('tile-', ''),
@@ -901,8 +910,60 @@ async function checkScanPage() {
     rows: document.querySelectorAll('[data-testid=queue-row]').length,
     hotfolder_configured: card?.getAttribute('data-configured') === 'true',
     hotfolder_running: card?.getAttribute('data-running') === 'true',
-    cache_summary: summary.textContent?.trim() ?? '',
   }
+}
+
+/** settings_page 一步（M7-11，见文件开头）。 */
+async function checkSettingsPage() {
+  const info = useShellStore().info
+  await router.push('/settings')
+  await waitForSelector('[data-testid=settings-page][data-state=ready]')
+  const text = (selector: string) => document.querySelector(selector)?.textContent?.trim() ?? ''
+  const health = document.querySelector('[data-testid=settings-health]')
+  if (health?.getAttribute('data-ok') !== 'true') throw new Error(`连接状态不是正常：${text('[data-testid=settings-health]')}`)
+  const result: Record<string, unknown> = {
+    path: window.location.pathname,
+    server_url: text('[data-testid=settings-server-url]'),
+    server_version: text('[data-testid=settings-server-version]'),
+    health: text('[data-testid=settings-health-ms]'),
+    runtime: text('[data-testid=settings-runtime]'),
+  }
+  if (shellHas('settings')) {
+    const dirs = await localDirs()
+    if (dirs.data.path !== info?.data_dir) throw new Error(`local_dirs 的数据目录和 shell_info 不一致：${dirs.data.path}`)
+    const shownLogs = text('[data-testid=settings-logs-path]')
+    if (shownLogs !== dirs.logs.path) throw new Error(`页面上的日志目录不对：${shownLogs}`)
+    // 自检里 open_local_dir 不打开文件管理器（不抢焦点），照常校验参数。
+    await openLocalDir('logs')
+    const wrong: string[] = []
+    for (const bad of ['../logs', 'DATA', ' data', '/', dirs.logs.path]) {
+      let rejected = false
+      try {
+        await invoke('open_local_dir', { dir: bad })
+      } catch (e) {
+        rejected = isShellError(e) && e.kind === 'invalid_request'
+      }
+      if (!rejected) wrong.push(JSON.stringify(bad))
+    }
+    if (wrong.length > 0) throw new Error(`open_local_dir 没有拒绝这些名字：${wrong.join('、')}`)
+    result.data_dir = { path: dirs.data.path, size_bytes: dirs.data.size_bytes, file_count: dirs.data.file_count }
+    result.logs_dir = { size_bytes: dirs.logs.size_bytes, file_count: dirs.logs.file_count }
+  }
+  if (shellHas('images')) {
+    const total = await waitForSelector('[data-testid=settings-cache] [data-testid=cache-total]')
+    for (let i = 0; i < 50 && total.textContent?.trim() === '—'; i++) await new Promise((r) => setTimeout(r, 100))
+    result.cache_total = total.textContent?.trim() ?? ''
+  }
+  if (shellHas('upload')) {
+    result.queue = Object.fromEntries(
+      [...document.querySelectorAll('[data-testid=settings-queue-stats] > [data-testid^=queue-]')].map((el) => [
+        (el.getAttribute('data-testid') ?? '').replace('queue-', ''),
+        el.querySelector('[data-testid=queue-count]')?.textContent?.trim() ?? '',
+      ]),
+    )
+    result.hotfolder = text('[data-testid=settings-hotfolder-state]')
+  }
+  return result
 }
 
 /** img_direct 一步（M6-1，见文件开头）。 */
@@ -1273,6 +1334,14 @@ export async function runSmoke(hooks: SmokeHooks) {
       }
     }
 
+    // 客户端的设置页（M7-11）。失败时同样接着跑后面各步。
+    try {
+      await step('settings_page', checkSettingsPage)
+    } catch (e) {
+      if (outcomeOf(e) !== 'failed') throw e
+      deferred.push({ name: 'settings_page', error: e })
+    }
+
     // 主流程（M6-4）。没设置 DOCLITE_SMOKE_FLOW_SAMPLES 时跳过；每一步失败时同样接着跑后面各步。
     const flowSteps: [string, (st: ReturnType<typeof newFlowState>) => Promise<unknown>, number][] = [
       ['flow_upload', checkFlowUpload, FLOW_STEP_TIMEOUT_MS],
@@ -1373,6 +1442,6 @@ export async function runSmoke(hooks: SmokeHooks) {
   } catch (e) {
     console.error('提交自检结果失败', errorMessage(e))
   }
-  // 壳接着测换地址：像"关于"里的"修改服务器地址"一样去客户端的修改地址页。
+  // 壳接着测换地址：像设置页里的"修改服务器地址"一样去客户端的修改地址页。
   if (next === 'edit_server') editServerAddress()
 }

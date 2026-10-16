@@ -3,11 +3,9 @@
 // - 总占用、上限、文件数、缓存目录；各项目的占用（封面、原图张数），项目名取自 GET /api/projects，
 //   当前账号进不了的项目（例如别的账号在这台电脑上看过）只显示 id；
 // - 按项目清空、全部清空（都先确认）；修改上限（GB）。
-// 独立组件：用户菜单的"本机图片缓存"对话框里用（ImageCacheDialog）；M1-13 的 /scan 页头部可以复用（只要摘要时
-// 传 compact）。打开时加载一次，`refresh()` 可以从外面调用。
-// compact（M1-13）：一行摘要"本机图片缓存 1.3 GB / 2.0 GB · 清空"，放进页面头部；"清空"是全部清空（先确认），
-// 不读项目列表。浏览器里不显示。
-import { HardDriveIcon, RefreshCwIcon } from '@lucide/vue'
+// 独立组件：客户端设置页的"本机存储"里用（M7-11，原来在用户菜单的"本机图片缓存"对话框里；/scan 页头部的一行摘要
+// 去掉了，缓存占用只在设置页看）。打开时加载一次，`refresh()` 可以从外面调用。
+import { RefreshCwIcon } from '@lucide/vue'
 import { computed, onMounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
 
@@ -29,11 +27,6 @@ import {
   type CacheStats,
 } from '@/lib/image-cache'
 import { shellErrorMessage } from '@/lib/shell'
-
-const props = defineProps<{
-  /** 只显示总占用一行（给别的页面的头部用）。 */
-  compact?: boolean
-}>()
 
 const GB = 1024 ** 3
 
@@ -157,7 +150,7 @@ async function saveLimit() {
 }
 
 onMounted(() => {
-  if (!props.compact) void loadProjects()
+  void loadProjects()
   void refresh()
 })
 
@@ -165,31 +158,7 @@ defineExpose({ refresh })
 </script>
 
 <template>
-  <!-- compact（M1-13）：一行摘要，放进页面头部。 -->
-  <div
-    v-if="props.compact && inShell"
-    class="flex shrink-0 items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"
-    :title="stats ? `缓存目录：${stats.dir}（${stats.file_count} 个文件）` : undefined"
-    data-testid="image-cache-summary"
-  >
-    <HardDriveIcon class="size-3.5" />
-    <span>本机图片缓存</span>
-    <span class="font-medium text-foreground tabular-nums" data-testid="cache-total">
-      {{ stats ? `${formatBytes(stats.total_bytes)} / ${formatBytes(stats.limit_bytes)}` : loadError ? '读取失败' : '…' }}
-    </span>
-    <span v-if="stats && !stats.available" class="text-warn" :title="stats.error ?? undefined">（不可用）</span>
-    <span>·</span>
-    <button
-      type="button"
-      class="text-info hover:underline disabled:cursor-default disabled:text-muted-foreground disabled:no-underline"
-      :disabled="!stats || !stats.available || stats.file_count === 0"
-      data-testid="cache-clear-all"
-      @click="clearTarget = null"
-    >
-      清空
-    </button>
-  </div>
-  <div v-else-if="!props.compact" class="flex flex-col gap-4 text-sm" data-testid="image-cache-panel">
+  <div class="flex flex-col gap-4 text-sm" data-testid="image-cache-panel">
     <p v-if="!inShell" class="text-muted-foreground">本机图片缓存只在桌面客户端里有；浏览器使用自带的缓存。</p>
 
     <template v-else>
@@ -214,7 +183,7 @@ defineExpose({ refresh })
             :style="{ width: `${usedPercent}%` }"
           />
         </div>
-        <div v-if="!props.compact && stats" class="mt-3 text-xs text-muted-foreground">
+        <div v-if="stats" class="mt-3 text-xs text-muted-foreground">
           超过上限后自动删除最久没看过的图片。位置：
           <span class="font-mono break-all text-foreground" data-testid="cache-dir">{{ stats.dir }}</span>
         </div>
@@ -229,104 +198,102 @@ defineExpose({ refresh })
         </p>
       </div>
 
-      <template v-if="!props.compact">
-        <!-- 各项目 -->
-        <div class="rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
-          <Table>
-            <TableHeader>
-              <TableRow class="bg-muted/60 hover:bg-muted/60">
-                <TableHead class="pl-4">项目</TableHead>
-                <TableHead class="w-16 text-right">封面</TableHead>
-                <TableHead class="w-16 text-right">原图</TableHead>
-                <TableHead class="w-24 text-right">占用</TableHead>
-                <TableHead class="w-20 pr-4 text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              <TableRow
-                v-for="u in stats?.projects ?? []"
-                :key="u.project_id"
-                :data-project-id="u.project_id"
-                data-testid="cache-project-row"
-              >
-                <TableCell class="pl-4 whitespace-normal">
-                  <div
-                    :class="projectLabel(u.project_id).known ? 'text-foreground' : 'text-muted-foreground'"
-                    :title="projectLabel(u.project_id).known ? undefined : `当前账号进不了这个项目（项目 id ${u.project_id}）`"
-                  >
-                    {{ projectLabel(u.project_id).name }}
-                  </div>
-                  <div v-if="projectLabel(u.project_id).code" class="font-mono text-xs text-muted-foreground">
-                    {{ projectLabel(u.project_id).code }}
-                  </div>
-                </TableCell>
-                <TableCell class="text-right text-muted-foreground tabular-nums">{{ u.cover_count }}</TableCell>
-                <TableCell class="text-right text-muted-foreground tabular-nums">{{ u.original_count }}</TableCell>
-                <TableCell class="text-right font-medium text-foreground tabular-nums">{{ formatBytes(u.total_bytes) }}</TableCell>
-                <TableCell class="pr-4 text-right">
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    class="text-destructive hover:text-destructive"
-                    data-testid="cache-clear-project"
-                    @click="clearTarget = u"
-                  >
-                    清空
-                  </Button>
-                </TableCell>
-              </TableRow>
-              <TableRow v-if="stats && stats.projects.length === 0">
-                <TableCell colspan="5" class="py-8 text-center text-muted-foreground" data-testid="cache-empty">
-                  缓存是空的：查看过的封面和原图会存在这里，下次打开不用重新下载。
-                </TableCell>
-              </TableRow>
-              <TableRow v-if="!stats && loading">
-                <TableCell colspan="5" class="py-8 text-center text-muted-foreground">加载中…</TableCell>
-              </TableRow>
-            </TableBody>
-          </Table>
-        </div>
+      <!-- 各项目 -->
+      <div class="rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
+        <Table>
+          <TableHeader>
+            <TableRow class="bg-muted/60 hover:bg-muted/60">
+              <TableHead class="pl-4">项目</TableHead>
+              <TableHead class="w-16 text-right">封面</TableHead>
+              <TableHead class="w-16 text-right">原图</TableHead>
+              <TableHead class="w-24 text-right">占用</TableHead>
+              <TableHead class="w-20 pr-4 text-right">操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow
+              v-for="u in stats?.projects ?? []"
+              :key="u.project_id"
+              :data-project-id="u.project_id"
+              data-testid="cache-project-row"
+            >
+              <TableCell class="pl-4 whitespace-normal">
+                <div
+                  :class="projectLabel(u.project_id).known ? 'text-foreground' : 'text-muted-foreground'"
+                  :title="projectLabel(u.project_id).known ? undefined : `当前账号进不了这个项目（项目 id ${u.project_id}）`"
+                >
+                  {{ projectLabel(u.project_id).name }}
+                </div>
+                <div v-if="projectLabel(u.project_id).code" class="font-mono text-xs text-muted-foreground">
+                  {{ projectLabel(u.project_id).code }}
+                </div>
+              </TableCell>
+              <TableCell class="text-right text-muted-foreground tabular-nums">{{ u.cover_count }}</TableCell>
+              <TableCell class="text-right text-muted-foreground tabular-nums">{{ u.original_count }}</TableCell>
+              <TableCell class="text-right font-medium text-foreground tabular-nums">{{ formatBytes(u.total_bytes) }}</TableCell>
+              <TableCell class="pr-4 text-right">
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  class="text-destructive hover:text-destructive"
+                  data-testid="cache-clear-project"
+                  @click="clearTarget = u"
+                >
+                  清空
+                </Button>
+              </TableCell>
+            </TableRow>
+            <TableRow v-if="stats && stats.projects.length === 0">
+              <TableCell colspan="5" class="py-8 text-center text-muted-foreground" data-testid="cache-empty">
+                缓存是空的：查看过的封面和原图会存在这里，下次打开不用重新下载。
+              </TableCell>
+            </TableRow>
+            <TableRow v-if="!stats && loading">
+              <TableCell colspan="5" class="py-8 text-center text-muted-foreground">加载中…</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </div>
 
-        <!-- 上限和操作 -->
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <form class="flex items-center gap-2" @submit.prevent="saveLimit">
-            <label for="cache-limit" class="text-muted-foreground">上限</label>
-            <Input
-              id="cache-limit"
-              v-model="limitGb"
-              inputmode="decimal"
-              class="h-8 w-20 text-right tabular-nums"
-              :aria-invalid="!!limitError"
-              data-testid="cache-limit"
-            />
-            <span class="text-muted-foreground">GB</span>
-            <Button
-              type="submit"
-              size="sm"
-              variant="outline"
-              :disabled="!limitChanged || savingLimit || !stats?.available"
-            >
-              {{ savingLimit ? '保存中…' : '保存' }}
-            </Button>
-            <span v-if="limitError && limitGb.trim()" class="text-xs text-destructive">{{ limitError }}</span>
-          </form>
-          <div class="flex items-center gap-2">
-            <Button size="sm" variant="ghost" :disabled="loading" @click="refresh">
-              <RefreshCwIcon :class="loading ? 'animate-spin' : ''" />刷新
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              class="text-destructive hover:text-destructive"
-              :disabled="!stats || !stats.available || stats.file_count === 0"
-              data-testid="cache-clear-all"
-              @click="clearTarget = null"
-            >
-              全部清空
-            </Button>
-          </div>
+      <!-- 上限和操作 -->
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <form class="flex items-center gap-2" @submit.prevent="saveLimit">
+          <label for="cache-limit" class="text-muted-foreground">上限</label>
+          <Input
+            id="cache-limit"
+            v-model="limitGb"
+            inputmode="decimal"
+            class="h-8 w-20 text-right tabular-nums"
+            :aria-invalid="!!limitError"
+            data-testid="cache-limit"
+          />
+          <span class="text-muted-foreground">GB</span>
+          <Button
+            type="submit"
+            size="sm"
+            variant="outline"
+            :disabled="!limitChanged || savingLimit || !stats?.available"
+          >
+            {{ savingLimit ? '保存中…' : '保存' }}
+          </Button>
+          <span v-if="limitError && limitGb.trim()" class="text-xs text-destructive">{{ limitError }}</span>
+        </form>
+        <div class="flex items-center gap-2">
+          <Button size="sm" variant="ghost" :disabled="loading" @click="refresh">
+            <RefreshCwIcon :class="loading ? 'animate-spin' : ''" />刷新
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            class="text-destructive hover:text-destructive"
+            :disabled="!stats || !stats.available || stats.file_count === 0"
+            data-testid="cache-clear-all"
+            @click="clearTarget = null"
+          >
+            全部清空
+          </Button>
         </div>
-      </template>
+      </div>
     </template>
   </div>
 

@@ -15,6 +15,7 @@ import type { LicenseState, LicenseStatusCode } from '@/api/types'
 import PageHeader from '@/components/app/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { copyText } from '@/lib/clipboard'
 import { formatDateTime } from '@/lib/format'
 import { useSessionStore } from '@/stores/session'
 
@@ -92,32 +93,6 @@ const summary = computed(() => {
 })
 
 // ---------- 复制 install_id ----------
-
-async function copyText(text: string): Promise<boolean> {
-  try {
-    if (window.isSecureContext && navigator.clipboard) {
-      await navigator.clipboard.writeText(text)
-      return true
-    }
-  } catch {
-    // 落到下面的兜底。
-  }
-  const ta = document.createElement('textarea')
-  ta.value = text
-  ta.setAttribute('readonly', '')
-  ta.style.position = 'fixed'
-  ta.style.opacity = '0'
-  document.body.appendChild(ta)
-  ta.select()
-  let ok = false
-  try {
-    ok = document.execCommand('copy')
-  } catch {
-    ok = false
-  }
-  ta.remove()
-  return ok
-}
 
 async function copyInstallId() {
   if (!state.value) return

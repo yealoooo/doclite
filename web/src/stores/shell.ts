@@ -48,7 +48,7 @@ export const useShellStore = defineStore('shell', () => {
   /** 能不能在网页里改服务器地址（客户端自带的修改地址页）。 */
   const canEditServer = computed(() => inShell && info.value !== null && shellPagesAvailable())
 
-  /** 去客户端自带的修改地址页（关于、登录页）。 */
+  /** 去客户端自带的修改地址页（设置页、登录页）。 */
   function editServer() {
     if (canEditServer.value) editServerAddress()
   }

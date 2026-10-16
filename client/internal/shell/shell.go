@@ -72,6 +72,11 @@ type Shell struct {
 	navBlocked bool
 	// confirmServer 问用户要不要换服务器地址（nil 时弹系统确认框，见 bridge.go 的 changeServer；测试里换掉）。
 	confirmServer func(ctx context.Context, from, to string) (bool, error)
+	// openDir 用系统的文件管理器打开目录（nil 时用 Wails 的，见 settings.go 的 openLocalDir；测试里换掉）。
+	openDir func(path string) error
+	// osVersion 是系统的名字和版本（shell_info 的 os_version，第一次用到时问 Wails，之后不变）。
+	osVersionOnce sync.Once
+	osVersion     *string
 
 	// quitting：正在退出（托盘的"退出"、Cmd+Q、自检结束），这时关窗不再缩到托盘。
 	quitting atomic.Bool

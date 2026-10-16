@@ -41,7 +41,7 @@ const (
 //     shell_unreachable  配置成连不上的地址：出现"连不上"页，重试仍是连不上，点"修改地址"回到连接页；
 //     shell_connect  填 DOCLITE_SMOKE_SERVER 连接：进到嵌入的界面（界面调 smoke_config）。连不上、要升级时到此结束；
 //  2. 界面里的自检（web/src/lib/smoke.ts，stage=main）：登录、取图、切块、托盘、各页面……交回 smoke_report；
-//     壳回 {next: "edit_server"}，界面随即像"关于"里的"修改服务器地址"那样跳到 /shell/?edit；
+//     壳回 {next: "edit_server"}，界面随即像设置页里的"修改服务器地址"那样跳到 /shell/?edit；
 //  3. 换地址（壳起一个转发到 DOCLITE_SMOKE_SERVER 的小服务 smokeWeb，它是另一个地址）：
 //     shell_edit     界面跳到客户端的修改地址页；
 //     change_server  换成 smokeWeb 的地址：会话清空（/api/me 是 401），之后的接口请求走新地址。

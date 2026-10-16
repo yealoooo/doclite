@@ -19,7 +19,9 @@
 //      open、chunk、end（和壳的 handleAPIStream 一样）。`window.__shell.stream = async (req, send, signal) => …` 可以换掉。
 //    - 默认的命令（脚本可以覆盖）：shell_info（含能力 capabilities，options.capabilities 可换）、check_server、
 //      probe_server、set_server、api_fetch（同源 fetch，响应头按壳的白名单）、open_external（只记下）、tray_status、
-//      上传队列和热文件夹的空状态；prepare_tiles、cache_stats、cache_clear 转给 devshell 的真实实现。
+//      上传队列和热文件夹的空状态；prepare_tiles、cache_stats、cache_clear 转给 devshell 的真实实现；设置页的
+//      local_dirs（数据目录下的 logs、image-cache，大小是假的）、open_local_dir（和壳一样只认 data、logs、cache，
+//      记在 `window.__shell.openedDirs`，不打开任何东西）。
 // 3. 写法：
 //      import { installWailsMock, shellOrigin } from '../lib/wails-mock.mjs'
 //      init: (page) => installWailsMock(page, { serverUrl: 'http://192.168.1.10:9080' }, (scenario) => {
@@ -30,8 +32,8 @@
 //    页面之外登录拿到的 Cookie 要设在 shellOrigin(base) 上（`useShellSession`）。
 // 以后 Windows 上（M8）照样能用：只要本机有 Chrome、node 和 devshell。
 
-/** 客户端（0.2.0 起）的能力，见 client/BRIDGE.md。 */
-export const ALL_CAPABILITIES = ['api', 'server', 'pages', 'external', 'tray', 'upload', 'rescan', 'images']
+/** 当前客户端的能力，见 client/BRIDGE.md（settings 是 M7-11 加的）。 */
+export const ALL_CAPABILITIES = ['api', 'server', 'pages', 'external', 'tray', 'upload', 'rescan', 'images', 'settings']
 
 /** 壳模式的地址：把 base 的主机换成 wails.localhost（端口不变）。 */
 export function shellOrigin(base) {
@@ -47,8 +49,8 @@ export async function useShellSession(page, base, cookie) {
 }
 
 /**
- * 在页面脚本运行前装上 Wails 桥的模拟。options：{serverUrl, dataDir, platform, version, webVersion, capabilities}
- * （shell_info 用）。
+ * 在页面脚本运行前装上 Wails 桥的模拟。options：{serverUrl, dataDir, platform, arch, osVersion, version, webVersion,
+ * capabilities}（shell_info 用；arch、osVersion 给 null 时 shell_info 里没有这两项，像 M7-11 之前的客户端）。
  * extra(arg) 在通用的模拟之后执行（同样在页面里、会被序列化），用来覆盖或补充 window.__shell.commands。
  */
 export async function installWailsMock(page, options = {}, extra = null, arg = undefined) {
@@ -97,6 +99,9 @@ function wailsBridgeMock(options) {
     return data
   }
   const emptyStats = { waiting: 0, queued: 0, uploading: 0, done: 0, duplicate: 0, failed: 0, retrying: 0, total: 0 }
+  const dataDir = options.dataDir ?? 'C:\\Users\\scan01\\AppData\\Local\\Doclite'
+  const sep = dataDir.includes('\\') ? '\\' : '/'
+  const MB = 1024 * 1024
 
   const shell = {
     serverUrl,
@@ -112,8 +117,11 @@ function wailsBridgeMock(options) {
         version,
         web_version: options.webVersion ?? '0.1.0',
         server_url: shell.serverUrl,
-        data_dir: options.dataDir ?? 'C:\\Users\\scan01\\AppData\\Local\\Doclite',
+        data_dir: dataDir,
         platform: options.platform ?? 'windows',
+        // null：没有这一项（M7-11 之前的客户端）。
+        arch: options.arch === null ? undefined : (options.arch ?? 'amd64'),
+        os_version: options.osVersion === null ? undefined : (options.osVersion ?? 'Windows 10 Pro 2009 (Build: 19045)'),
         smoke: false,
         capabilities: options.capabilities,
       }),
@@ -162,8 +170,19 @@ function wailsBridgeMock(options) {
       prepare_tiles: (args) => devshell('prepare_tiles', { fileId: args.fileId, snapshotId: args.snapshotId }),
       cache_stats: () => devshell('cache_stats'),
       cache_clear: (args) => devshell('cache_clear', { projectId: args.projectId ?? null }),
+      local_dirs: () => ({
+        data: { path: dataDir, size_bytes: Math.round(1342.6 * MB), file_count: 15262 },
+        logs: { path: `${dataDir}${sep}logs`, size_bytes: Math.round(3.4 * MB), file_count: 14 },
+        cache: { path: `${dataDir}${sep}image-cache`, size_bytes: Math.round(1331.2 * MB), file_count: 15230 },
+      }),
+      open_local_dir: (args) => {
+        if (!['data', 'logs', 'cache'].includes(args.dir)) throw { kind: 'invalid_request', message: 'dir 只能是 data、logs、cache' }
+        shell.openedDirs.push(args.dir)
+        return null
+      },
     },
   }
+  shell.openedDirs = []
   window.__shell = shell
 
   async function invoke(cmd, args) {

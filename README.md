@@ -199,9 +199,10 @@ cd client && wails3 package      # 打包成 client/bin/Doclite.app（ad-hoc 签
 ```
 
 - `client/WEB_VERSION` 记要嵌入的 web 版本。打包（`wails3 build`、`wails3 package`）前的 frontend 任务（`client/cmd/webartifact`）按 `DOCLITE_WEB_ARTIFACT`（产物包的路径）取，没给就找 `../web/release/doclite-web-<WEB_VERSION>.tar.gz`；核对包里清单的版本和 `WEB_VERSION` 一致后解到 `client/frontend/`（不提交），再 embed 进可执行文件。找不到产物包或版本不对时构建失败并说明怎么办。别处构建好的产物包：`DOCLITE_WEB_ARTIFACT=/path/doclite-web-0.1.0.tar.gz wails3 package`（不需要 `web/` 目录）。以后拆仓库，改成从发布地址下载这个包；
-- 升级界面：改 `web/package.json` 的版本、`npm run release`，改 `client/WEB_VERSION`，重新打包客户端。客户端的版本号在 `client/VERSION`（`X-Client-Version`，server 的 `MIN_CLIENT_VERSION` 和它比），"关于"里同时显示客户端版本和界面版本；
+- 升级界面：改 `web/package.json` 的版本、`npm run release`，改 `client/WEB_VERSION`，重新打包客户端。客户端的版本号在 `client/VERSION`（`X-Client-Version`，server 的 `MIN_CLIENT_VERSION` 和它比），设置页的"关于"里同时显示客户端版本和界面版本；
 - 客户端里的"服务器地址"是 **server 的接口地址**（本机 `http://127.0.0.1:9080`；交付时是服务器的 IP 和端口），客户端只访问 `/api`（探测只要 `GET /api/health` 通），不依赖网页服务（交付不提供网页服务）。开发时也可以填 vite 的地址（5173），vite 会把 `/api` 转给 server。已经配置过地址、再改成别的地址时，客户端弹系统确认框；
 - 连接服务器、连不上、需要升级几页是客户端自带的（`client/internal/shellpages`）；
+- **设置页**（M7-11，侧栏用户区的"设置"、托盘菜单的"设置…"）：服务器地址和连接状态、服务端版本、修改服务器地址；当前账号和退出登录；本机存储（数据目录、本机图片缓存、上传队列、日志目录，目录可以在访达或资源管理器中打开）；热文件夹的状态；版本、运行环境和"复制诊断信息"。侧栏可以收起（顶部的按钮或 ⌘B / Ctrl+B，按本机记住）；
 - 界面和客户端之间的约定（桥的命令、事件、能力、白名单、地址、信任边界）只有一份：[`client/BRIDGE.md`](client/BRIDGE.md)。
 
 **开发时**：界面热更新用开发构建接 vite（只在开发构建里；正式构建只用嵌入的产物）：
@@ -221,7 +222,7 @@ DOCLITE_SMOKE_SERVER=http://127.0.0.1:9080 DOCLITE_SMOKE_USERNAME=demo_scanner D
 DOCLITE_BACKGROUND=1 client/bin/Doclite.app/Contents/MacOS/Doclite --smoke
 ```
 
-自检分三段：① 客户端自带的页面（壳操作 `/shell/`）：`shell_page` 还没配置地址时出现连接页、填连不上的地址提示连不上且不保存；`shell_unreachable` 配置成连不上的地址时出现"连不上"页、重试、改地址；`shell_connect` 填 `DOCLITE_SMOKE_SERVER` 进到嵌入的界面。② 界面里的各步（probe、login……csp，同以前）。③ 换地址：`shell_edit` 界面跳到客户端的修改地址页；`change_server` 换到壳另起的一个转发到 `DOCLITE_SMOKE_SERVER` 的地址，会话清空，接口请求走新地址（自检里不弹确认框）。
+自检分三段：① 客户端自带的页面（壳操作 `/shell/`）：`shell_page` 还没配置地址时出现连接页、填连不上的地址提示连不上且不保存；`shell_unreachable` 配置成连不上的地址时出现"连不上"页、重试、改地址；`shell_connect` 填 `DOCLITE_SMOKE_SERVER` 进到嵌入的界面。② 界面里的各步（probe、login……csp，同以前；M7-11 加了 `settings_page`：打开设置页，核对连接状态、本机目录，`open_local_dir` 只认 data、logs、cache，自检里不打开文件管理器）。③ 换地址：`shell_edit` 界面跳到客户端的修改地址页；`change_server` 换到壳另起的一个转发到 `DOCLITE_SMOKE_SERVER` 的地址，会话清空，接口请求走新地址（自检里不弹确认框）。
 
 | 变量 | 说明 |
 |---|---|

@@ -2,7 +2,6 @@
 // 扫描上传页 /scan（M1-13，参考 plan.html 的 p-upload Mockup）。
 //
 // 在壳里：
-// - 头部：本机图片缓存的摘要（ImageCachePanel 的 compact 模式："本机图片缓存 1.3 GB / 2 GB · 清空"）。
 // - 队列因 401 暂停：提示重新登录（登录成功后壳自动继续，M1-9）；因 426 暂停：显示升级提示。
 // - 热文件夹：监控目录（系统对话框）、目标文件夹（FolderPicker，可以新建文件夹）、备注、开始和暂停（HotFolderCard）。
 // - 各项计数：等待写入完成、排队、上传中、已入库、内容重复已跳过、失败；点一格只看这种状态的文件，再点一次取消。
@@ -19,7 +18,6 @@ import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 
 import { request } from '@/api/http'
-import ImageCachePanel from '@/components/app/ImageCachePanel.vue'
 import { Button } from '@/components/ui/button'
 import { useUploadQueue } from '@/composables/useUploadQueue'
 import { type HotFolderStatus, type ItemStatus, type QueueItem, uploadResume, uploadRetryFailed } from '@/lib/scan-queue'
@@ -161,8 +159,6 @@ onMounted(() => {
     <header class="flex h-14 shrink-0 items-center gap-3 border-b px-5">
       <h1 class="text-base font-semibold tracking-tight text-foreground">扫描上传</h1>
       <span v-if="inShell" class="rounded-full bg-info-soft px-2 py-0.5 text-xs text-info">桌面客户端</span>
-      <div class="flex-1" />
-      <ImageCachePanel v-if="shell.has('images')" compact />
     </header>
 
     <div class="flex min-h-0 flex-1">

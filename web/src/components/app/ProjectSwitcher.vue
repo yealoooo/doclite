@@ -4,14 +4,38 @@
 // - 已归档的项目默认不显示，勾选"显示已归档"后才列出（当前项目是已归档的也照常显示）；
 // - 一个能进的项目都没有时显示空状态，提示找管理员授权。
 // 当前项目放在 Pinia（stores/project.ts），业务页从那里取。
-import { ArchiveIcon, CheckIcon, ChevronsUpDownIcon, FolderKanbanIcon, RefreshCwIcon } from '@lucide/vue'
+// 侧栏收起时（M7-11，collapsed）：只显示项目编码的缩写（悬停提示项目名），点开照样是切换列表；没有项目、加载失败时
+// 是一个图标，点了展开侧栏（看完整的说明）或重试。
+import { ArchiveIcon, CheckIcon, ChevronsUpDownIcon, FolderKanbanIcon, RefreshCwIcon, TriangleAlertIcon } from '@lucide/vue'
 import { computed, onMounted, ref } from 'vue'
 
 import { Checkbox } from '@/components/ui/checkbox'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useProjectStore } from '@/stores/project'
 
+const props = defineProps<{
+  /** 侧栏收起了（M7-11）。 */
+  collapsed?: boolean
+}>()
+
+const emit = defineEmits<{
+  /** 收起时点了"没有项目"：展开侧栏看说明。 */
+  expand: []
+}>()
+
 const project = useProjectStore()
+
+/** 收起时显示的项目编码（最多 12 个字符，窄栏里折成两行）。 */
+const shortCode = computed(() => {
+  const code = project.current?.project_code ?? ''
+  return code.length > 12 ? code.slice(0, 12) : code
+})
+const collapsedTitle = computed(() => {
+  const p = project.current
+  if (p) return `${p.project_name}（${p.project_code}）· 点击切换项目`
+  return project.state === 'ready' ? '选择项目' : '正在加载项目…'
+})
 
 const open = ref(false)
 const showArchived = ref(false)
@@ -39,10 +63,29 @@ async function choose(id: string) {
 </script>
 
 <template>
-  <div class="mb-2" data-testid="project-switcher">
+  <div class="mb-2" data-testid="project-switcher" :data-collapsed="props.collapsed ? 'true' : 'false'">
+    <!-- 收起时没有项目、加载失败：一个图标。 -->
+    <Tooltip v-if="props.collapsed && (noProjects || project.state === 'error')">
+      <TooltipTrigger as-child>
+        <button
+          type="button"
+          class="flex h-10 w-full items-center justify-center rounded-lg text-muted-foreground hover:bg-sidebar-accent"
+          :class="project.state === 'error' ? 'text-destructive' : ''"
+          :aria-label="noProjects ? '没有可进入的项目' : '项目列表加载失败，点击重试'"
+          @click="noProjects ? emit('expand') : project.refresh()"
+        >
+          <FolderKanbanIcon v-if="noProjects" class="size-4" />
+          <TriangleAlertIcon v-else class="size-4" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="right" :side-offset="8">
+        {{ noProjects ? '没有可进入的项目' : '项目列表加载失败，点击重试' }}
+      </TooltipContent>
+    </Tooltip>
+
     <!-- 一个能进的项目都没有：空状态。 -->
     <div
-      v-if="noProjects"
+      v-else-if="noProjects"
       class="rounded-lg border border-dashed border-sidebar-border px-3 py-3 text-center"
       data-testid="project-empty"
     >
@@ -70,7 +113,24 @@ async function choose(id: string) {
     </div>
 
     <Popover v-else :open="open" @update:open="onOpenChange">
-      <PopoverTrigger as-child>
+      <PopoverTrigger v-if="props.collapsed" as-child>
+        <button
+          type="button"
+          class="flex h-10 w-full items-center justify-center rounded-lg bg-background px-0.5 shadow-[0_0_0_1px_rgba(0,0,0,0.1)] hover:bg-sidebar-accent"
+          :disabled="project.state !== 'ready'"
+          :title="collapsedTitle"
+          :aria-label="collapsedTitle"
+          data-testid="project-switcher-trigger"
+        >
+          <span
+            v-if="project.current"
+            class="line-clamp-2 text-center font-mono text-[9px] leading-tight font-semibold break-all text-foreground"
+            data-testid="project-current-code"
+          >{{ shortCode }}</span>
+          <FolderKanbanIcon v-else class="size-4 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverTrigger v-else as-child>
         <button
           type="button"
           class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-sidebar-accent"

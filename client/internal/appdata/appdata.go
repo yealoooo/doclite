@@ -83,6 +83,12 @@ func SaveSettings(dir string, s Settings) error {
 // CookiesPath 是会话 Cookie 罐的文件。
 func CookiesPath(dir string) string { return filepath.Join(dir, "cookies.json") }
 
+// LogsDir 是日志目录（按天滚动，见 logfile.go）。
+func LogsDir(dir string) string { return filepath.Join(dir, "logs") }
+
+// ImageCacheDir 是本机图片缓存的目录（internal/imagecache）。
+func ImageCacheDir(dir string) string { return filepath.Join(dir, "image-cache") }
+
 // WriteFileAtomic 先写同目录下的临时文件再改名，避免写到一半断电留下坏文件。
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

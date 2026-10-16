@@ -25,6 +25,10 @@ export interface ShellInfo {
   data_dir: string
   /** `windows`、`macos`…… */
   platform: string
+  /** 处理器架构（`amd64`、`arm64`……）；M7-11 之前的客户端没有。 */
+  arch?: string
+  /** 系统的名字和版本（例如 `Windows 10 Pro 2009 (Build: 19045)`）；取不到时 null，M7-11 之前的客户端没有。 */
+  os_version?: string | null
   /** 是否在跑 `--smoke` 自检。 */
   smoke: boolean
   /** 客户端的能力（lib/client.ts 的 ShellCapability；不认识的忽略）。 */
@@ -101,6 +105,36 @@ export function showUpgradePage() {
 /** 用系统浏览器打开 http(s) 地址。 */
 export function openExternal(url: string) {
   return invoke<void>('open_external', { url })
+}
+
+// ---- 设置页（能力 settings，M7-11） ----
+
+/** 本机目录的名字：数据目录、日志目录、本机图片缓存目录。路径由客户端按名字算，页面给不了路径。 */
+export type LocalDirName = 'data' | 'logs' | 'cache'
+
+export interface LocalDir {
+  path: string
+  size_bytes: number
+  file_count: number
+}
+
+/** 三个本机目录的路径和大小（data 的大小含日志、图片缓存、上传队列库）。 */
+export type LocalDirs = Record<LocalDirName, LocalDir>
+
+export function localDirs() {
+  return invoke<LocalDirs>('local_dirs')
+}
+
+/** 用系统的文件管理器（访达、资源管理器）打开一个本机目录。 */
+export function openLocalDir(dir: LocalDirName) {
+  return invoke<void>('open_local_dir', { dir })
+}
+
+/** 文件管理器在这个系统上的叫法（"在访达中打开"）。 */
+export function fileManagerName(platform: string | null | undefined): string {
+  if (platform === 'macos') return '访达'
+  if (platform === 'windows') return '资源管理器'
+  return '文件管理器'
 }
 
 // ---- 传输层（http.ts、stream.ts 用） ----

@@ -7,7 +7,6 @@
 // - 上传队列和热文件夹的命令（upload_status、upload_recent、upload_retry_failed、upload_resume、hotfolder_*）在页面里
 //   模拟一份队列；脚本用 `window.__mock.emit(事件, 数据)` 推壳的事件（upload:item、upload:progress、upload:state……，
 //   即 Wails 的 _wails.dispatchWailsEvent）；
-// - cache_stats：头部的缓存摘要（1.3 GB / 2.0 GB）。
 // 登录：脚本在页面之外登录，把会话 Cookie 放进浏览器上下文（壳模式的地址），直接打开 /scan。
 // 账号：demo_scanner / demo123456（只能进 DEMO-A）；新建文件夹那张用 admin（INIT_ADMIN_USERNAME / INIT_ADMIN_PASSWORD），
 // 在 DEMO-B 里建一个临时文件夹（上一版用 M1-9 的 HOTFOLDER-TEST 项目，Go 版的库里没有），截图后删掉。
@@ -227,7 +226,6 @@ function hotfolderStatus(target, running) {
 // ---------- 页面里的模拟（会被序列化，不能引用外部变量） ----------
 
 function scanMock(scenario) {
-  const GB = 1024 ** 3
   const shell = window.__shell
   const state = {
     status: scenario.status,
@@ -289,16 +287,6 @@ function scanMock(scenario) {
       }
       return res
     },
-    cache_stats: () => ({
-      dir: 'C:\\Users\\scan01\\AppData\\Local\\Doclite\\image-cache',
-      available: true,
-      error: null,
-      total_bytes: Math.round(1.3 * GB),
-      file_count: 15230,
-      limit_bytes: 2 * GB,
-      projects: [],
-      counters: { hits: 0, misses: 0, downloads: 0, download_bytes: 0, rejected: 0, errors: 0 },
-    }),
     upload_status: (args) => slowly('upload_status', state.status),
     upload_recent(args) {
       const want = args.status
@@ -425,8 +413,8 @@ export default {
         expect(width === '64%', `进度条应该是 64%，实际 ${width}`)
         const tiles = await texts(page, '[data-testid=queue-stats] [data-testid=tile-count]')
         expect(tiles.join(',') === '1,37,2,140,1,1', `计数不对：${tiles}`)
-        const cache = await texts(page, '[data-testid=image-cache-summary] [data-testid=cache-total]')
-        expect(cache[0] === '1.3 GB / 2.0 GB', `缓存摘要不对：${cache}`)
+        // M7-11：头部不再有本机图片缓存的摘要（缓存只在设置页看）。
+        expect(!(await page.$('[data-testid=image-cache-summary]')), '扫描上传页头部不该再有缓存摘要')
         const remark = await texts(page, '[data-testid=hotfolder-remark]')
         expect(remark[0]?.includes('3 号库 A 架 14 层'), `要显示目标文件夹的备注：${remark}`)
         const headline = await texts(page, '[data-testid=hotfolder-headline]')
@@ -556,6 +544,8 @@ export default {
         const toast = await texts(page, '[data-sonner-toast]')
         expect(toast.some((t) => t.includes('监控目录不存在')), `应该弹出托盘的出错提示：${toast}`)
         expect((await action.evaluate((el) => el.textContent.trim())) === '去扫描上传', '提示上应该有"去扫描上传"')
+        // 提示从顶上滑进来，等它停在视口里再点（滑到一半时按钮还在视口外，点不到）。
+        await page.waitForFunction(() => (document.querySelector('[data-sonner-toast] [data-button]')?.getBoundingClientRect().top ?? -1) >= 0, { timeout: 5000 })
         await action.click()
         await page.waitForSelector('[data-testid=scan-page][data-state=ready]', { timeout: 5000 })
       },

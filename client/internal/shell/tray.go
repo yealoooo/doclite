@@ -13,7 +13,7 @@ import (
 // 提示文字第一行是状态："Doclite · 还没有连接服务器 / 客户端需要升级 / 未登录 / 登录已失效，需要重新登录 /
 // 已登录 <服务器>"；第二行是上传队列的统计（队列打不开时写"上传队列不可用"）。M6-2 的上传队列和热文件夹见
 // upload_tray.go（状态行加热文件夹的状态，统计行换成各状态的数量）。
-// 菜单：两行状态（不能点）、打开 Doclite、暂停 / 继续热文件夹、退出。关窗缩到托盘，只有"退出"真正退出。
+// 菜单：两行状态（不能点）、打开 Doclite、设置…（M7-11）、暂停 / 继续热文件夹、退出。关窗缩到托盘，只有"退出"真正退出。
 // macOS 上点一下图标弹菜单（菜单栏图标的习惯）；Windows 上左键打开窗口、右键弹菜单。
 type tray struct {
 	s    *Shell
@@ -42,6 +42,8 @@ func newTray(s *Shell) *tray {
 	t.countsItem = menu.Add(t.countsLine).SetEnabled(false)
 	menu.AddSeparator()
 	menu.Add("打开 Doclite").OnClick(func(*application.Context) { s.showWindow(true) })
+	// M7-11：打开窗口并跳到设置页（settings.go）。
+	menu.Add("设置…").OnClick(func(*application.Context) { s.openSettings() })
 	t.addToggleItem(menu)
 	menu.AddSeparator()
 	menu.Add("退出").OnClick(func(*application.Context) {

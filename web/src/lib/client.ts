@@ -26,6 +26,7 @@ export type ShellCapability =
   | 'upload'
   | 'rescan'
   | 'images'
+  | 'settings'
   | 'smoke'
 
 let capabilities: Set<string> | null = null
@@ -54,6 +55,7 @@ export function commandCapability(cmd: string): ShellCapability | null {
   if (cmd === 'tray_status') return 'tray'
   if (cmd === 'pick_and_rescan') return 'rescan'
   if (cmd === 'prepare_tiles' || cmd.startsWith('cache_')) return 'images'
+  if (cmd === 'local_dirs' || cmd === 'open_local_dir') return 'settings'
   if (cmd.startsWith('upload_') || cmd.startsWith('hotfolder_') || cmd === 'pick_and_enqueue_upload') return 'upload'
   if (cmd.startsWith('smoke_')) return 'smoke'
   return null

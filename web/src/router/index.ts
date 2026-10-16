@@ -23,6 +23,8 @@ declare module 'vue-router' {
     public?: boolean
     /** 需要当前用户的菜单里有这个路径对应的菜单。 */
     requiresMenu?: boolean
+    /** 不在菜单里的页面的标题（浏览器标题栏用；菜单里的页面用菜单名）。 */
+    title?: string
   }
 }
 
@@ -123,6 +125,14 @@ const router = createRouter({
           component: PlaceholderView,
           meta: { requiresMenu: true },
         })),
+        // M7-11：客户端的设置页（服务器、账号、本机存储、热文件夹、关于）。不是菜单，登录了就能进；只在客户端里有
+        // 入口，浏览器里打开只显示一句说明。
+        {
+          path: 'settings',
+          name: 'settings',
+          component: () => import('@/views/settings/SettingsView.vue'),
+          meta: { title: '设置' },
+        },
         { path: 'forbidden', name: 'forbidden', component: ForbiddenView },
         {
           path: ':pathMatch(.*)*',
@@ -160,7 +170,8 @@ router.beforeEach(async (to): Promise<boolean | RouteLocationRaw> => {
 router.afterEach((to) => {
   const session = useSessionStore()
   const menu = session.menuForPath(to.path)
-  document.title = menu ? `${menu.menu_name} · Doclite` : 'Doclite'
+  const title = menu?.menu_name ?? to.meta.title
+  document.title = title ? `${title} · Doclite` : 'Doclite'
 })
 
 export default router

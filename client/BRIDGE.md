@@ -100,9 +100,10 @@ Wails 的运行时在 `POST /wails/runtime` 上不只有绑定方法，还有 Br
 | `upload` | `upload_status`、`upload_recent`、`upload_retry_failed`、`upload_resume`、`pick_and_enqueue_upload`、`hotfolder_status`、`hotfolder_pick_dir`、`hotfolder_set`、`hotfolder_start`、`hotfolder_pause` | `upload:*`、`hotfolder:state` |
 | `rescan` | `pick_and_rescan` | `rescan:progress` |
 | `images` | `cache_stats`、`cache_clear`、`cache_set_limit`、`prepare_tiles` | 取图地址 `/shell/img/…` |
+| `settings` | `local_dirs`、`open_local_dir` | `tray:open-settings` |
 | `smoke` | `smoke_*`（只在 `--smoke` 时有） | |
 
-0.2.0（第一个按能力协商的客户端）有上面除 `smoke` 以外的全部能力。`shell_info` 本身不属于任何能力，总是有。
+0.2.0（第一个按能力协商的客户端）有上面除 `settings`、`smoke` 以外的全部能力；`settings` 是 M7-11（客户端的设置页）加的。`shell_info` 本身不属于任何能力，总是有。
 
 ## 命令
 
@@ -125,6 +126,8 @@ Wails 的运行时在 `POST /wails/runtime` 上不只有绑定方法，还有 Br
   server_url: string | null    // 已配置的地址（web 服务的入口，或 server 本身），没配置时 null
   data_dir: string             // 本机数据目录（只用来显示）
   platform: string             // macos、windows……
+  arch?: string                // 处理器架构 amd64、arm64……（M7-11 起有）
+  os_version?: string | null   // 系统的名字和版本，例如 "Windows 10 Pro 2009 (Build: 19045)"、"MacOS 15.6"；取不到时 null（M7-11 起有）
   smoke: boolean               // 在跑 --smoke
   capabilities: string[]       // 见"能力"；不认识的忽略
 }
@@ -217,6 +220,19 @@ req = {
 | `cache_set_limit` | `{limitBytes}`（100 MB 到 1 TB） | 同 `cache_stats` |
 | `prepare_tiles` | `{fileId, snapshotId}` | `{status: 'ready' \| 'generating' \| 'queued' \| 'failed', code, message}`；不在来源记录里 `invalid_request` |
 
+### 设置页（能力 `settings`）
+
+客户端的设置页（web 的 `/settings`，只在客户端里出现）用：
+
+| 命令 | 参数 | 结果 |
+|---|---|---|
+| `local_dirs` | 无 | `{data, logs, cache}`，每项 `{path, size_bytes, file_count}` |
+| `open_local_dir` | `{dir: 'data' \| 'logs' \| 'cache'}` | `null` |
+
+- `local_dirs`：`data` 是整个数据目录（同 `shell_info.data_dir`，大小含日志、图片缓存、上传队列库），`logs` 是日志目录（按天滚动，留 14 天），`cache` 是本机图片缓存的目录（大小取缓存自己的统计，同 `cache_stats`）。路径只用来显示；
+- `open_local_dir`：用系统的文件管理器（macOS 访达、Windows 资源管理器）打开其中一个目录。**`dir` 只能是这三个名字**（区分大小写，不能带空白、斜杠、`..`），其余一律 `invalid_request`；**页面给不了路径**，路径由壳按名字算（都在数据目录里）。目录不在、打不开时 `internal`（不带路径）。`--smoke` 时不打开（不抢焦点），照常校验参数、返回 `null`；
+- 托盘菜单的"设置…"：壳显示主窗口，再发事件 `tray:open-settings`（没有数据），页面收到后跳到 `/settings`（没登录时先到登录页，登录后回来）。页面停在客户端自带的页面上时没人订阅，只是显示窗口。
+
 ## 事件
 
 页面用运行时的 `Events.On(名字, ev => …)` 订阅，数据在 `ev.data`。
@@ -232,6 +248,7 @@ req = {
 | `hotfolder:state` | `HotFolderStatus` | `upload` |
 | `rescan:progress` | `{file_id, phase: 'hashing' \| 'cover' \| 'uploading', sent, size}` | `rescan` |
 | `tray:error` | `{message}`（托盘上"继续热文件夹"失败） | `tray` |
+| `tray:open-settings` | 无（托盘菜单的"设置…"，页面跳到设置页） | `settings` |
 
 ## 流
 
@@ -267,7 +284,7 @@ req = {
 | 地址 | 用途 | 界面什么时候跳过来 |
 |---|---|---|
 | `/shell/` | 启动时的关口：没配置 → 连接页；连不上 → 连不上页（重试、修改地址）；版本过低 → 升级页；都没问题 → `location.replace('/')` | 不用跳（壳启动时自己打开） |
-| `/shell/?edit` | 修改服务器地址（带上原地址；"取消"回 `/`）。已经配置过地址时壳会弹系统确认框 | "关于""登录页"里的"修改服务器地址"：`location.assign('/shell/?edit')` |
+| `/shell/?edit` | 修改服务器地址（带上原地址；"取消"回 `/`）。已经配置过地址时壳会弹系统确认框 | 设置页、登录页里的"修改服务器地址"：`location.assign('/shell/?edit')` |
 | `/shell/?upgrade` | 需要升级：**只信探测的结果**——`check_server` 确认 `upgrade_required` 才显示升级页，版本和下载地址只用探测到的（查询串里的一概不用）；探测说不用升级就回 `/`（一分钟里被带过来 3 次以上时停在"连不上"页说明，不来回跳） | 任何请求返回 426（`client_upgrade_required`）：`location.replace('/shell/?upgrade')` |
 
 连接页先 `probe_server`，连得上才 `set_server`，再回 `/shell/`。macOS 上导航保护装不上时，资产服务器不给界面，在界面的地址上给出这一页的"客户端不能打开界面"（失败就关闭）。客户端没有 `pages` 能力时，界面隐藏"修改服务器地址"，426 时只提示。
@@ -278,7 +295,7 @@ req = {
 - **界面和客户端**：客户端嵌入哪个版本的 web 由 `client/WEB_VERSION` 定，打包时就配好。界面仍按能力判断本机功能：用到新命令前先看 `capabilities`，没有就隐藏或提示升级客户端；万一发出去了，客户端回 `unsupported`，界面照常提示，不报错；
 - **客户端**不删、不改已有命令的参数和结果的意思；加字段可以（界面忽略不认识的字段）；
 - **加功能**：新命令归进已有的一项能力（这项能力的含义没变时），或者加一项新能力；同时更新这份文档；
-- 客户端的版本号在 `client/VERSION`，嵌入的界面的版本在 `client/WEB_VERSION`（来自 `web/package.json`），各自独立，"关于"里都显示。
+- 客户端的版本号在 `client/VERSION`，嵌入的界面的版本在 `client/WEB_VERSION`（来自 `web/package.json`），各自独立，设置页的"关于"里都显示。
 
 ## 信任边界
 
@@ -299,10 +316,11 @@ req = {
 | `upload`、`rescan` | 把本机文件传到已配置服务器的某个文件夹 | 文件、监控目录只能由用户在系统对话框里选，页面给不了本机路径 |
 | `images` | 读、清空本机图片缓存，切块 | 只认来源记录里的图；上限 100 MB–1 TB |
 | `tray` | 读托盘状态 | |
+| `settings` | 读数据、日志、图片缓存三个目录的路径和大小；用系统的文件管理器打开其中一个 | 只认 `data`、`logs`、`cache` 三个名字，路径由壳算，页面给不了路径 |
 | `smoke` | 自检用的命令 | 只在 `--smoke` 进程里登记，正常启动时调了是 `unsupported` |
 
-**会把本机路径告诉页面的**（都是为了显示）：`shell_info.data_dir`（"关于"）；`cache_stats.dir`，缓存不可用时 `cache_stats.error` 也可能带路径（"本机图片缓存"面板）；`hotfolder_pick_dir` 的结果、`hotfolder_status.config.watch_dir`、`upload_recent` 的 `local_path`、`pick_and_enqueue_upload` 的 `skipped[].path`、`pick_and_rescan` 的 `local_name`（扫描上传页、上传结果）；`upload_status`、热文件夹的 `error` 和上传失败的 `error_message` 可能带用户选的目录。`internal` 错误不带：原始错误只写进客户端日志。
+**会把本机路径告诉页面的**（都是为了显示）：`shell_info.data_dir`、`local_dirs` 的三个 `path`（设置页）；`cache_stats.dir`，缓存不可用时 `cache_stats.error` 也可能带路径（设置页的"本机图片缓存"）；`hotfolder_pick_dir` 的结果、`hotfolder_status.config.watch_dir`、`upload_recent` 的 `local_path`、`pick_and_enqueue_upload` 的 `skipped[].path`、`pick_and_rescan` 的 `local_name`（扫描上传页、上传结果）；`upload_status`、热文件夹的 `error` 和上传失败的 `error_message` 可能带用户选的目录。`internal` 错误不带：原始错误只写进客户端日志。
 
 ## 自检用的命令
 
-只在 `--smoke` 时有（能力 `smoke`），说明见 `internal/shell/smoke.go`、`smokeflow.go`：`smoke_config`（`stage: 'main' | 'page'`）、`smoke_report {report}`（完整的自检交回后回 `{next: 'edit_server'}`，界面随即去 `/shell/?edit`）、`smoke_shell_view`（客户端自带的页面报告状态）、`smoke_flow_prepare`、`smoke_flow_drop`、`smoke_external_check {url, fileName, size}`。自检里 `open_external`、两个系统对话框不弹出，改走自检准备好的文件和目录。
+只在 `--smoke` 时有（能力 `smoke`），说明见 `internal/shell/smoke.go`、`smokeflow.go`：`smoke_config`（`stage: 'main' | 'page'`）、`smoke_report {report}`（完整的自检交回后回 `{next: 'edit_server'}`，界面随即去 `/shell/?edit`）、`smoke_shell_view`（客户端自带的页面报告状态）、`smoke_flow_prepare`、`smoke_flow_drop`、`smoke_external_check {url, fileName, size}`。自检里 `open_external`、两个系统对话框不弹出，改走自检准备好的文件和目录；`open_local_dir` 不打开文件管理器。

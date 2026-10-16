@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 
 	"doclite/client/internal/appdata"
@@ -66,7 +67,7 @@ type noArgs struct{}
 
 // capabilities 是这个客户端的能力（shell_info 的 capabilities），页面按它决定显示哪些本机功能。每一项对应哪些命令、
 // 事件、地址见 client/BRIDGE.md；加命令时要么归进已有的一项，要么加一项新的（页面没看到这一项就隐藏或提示升级）。
-var capabilities = []string{"api", "server", "pages", "external", "tray", "upload", "rescan", "images"}
+var capabilities = []string{"api", "server", "pages", "external", "tray", "upload", "rescan", "images", "settings"}
 
 func (s *Shell) registerCommands() {
 	s.commands = map[string]command{}
@@ -141,6 +142,8 @@ func (s *Shell) registerCommands() {
 	// M6-2：上传队列、热文件夹、重扫件（upload.go、hotfolder.go、rescan.go）。
 	s.initUploads()
 	s.registerImageCommands()
+	// M7-11：设置页（settings.go）。
+	s.registerSettingsCommands()
 
 	// 自检用的命令（能力 smoke）只在 --smoke 进程里登记：正常启动时页面调它们得到 unsupported。
 	if s.smoke == nil {
@@ -170,13 +173,18 @@ type ShellInfo struct {
 	ServerURL *string `json:"server_url"`
 	DataDir   string  `json:"data_dir"`
 	Platform  string  `json:"platform"`
+	// Arch 是处理器架构（amd64、arm64），OSVersion 是系统的名字和版本（Wails 给的，例如
+	// "Windows 10 Pro 2009 (Build: 19045)"、"MacOS 15.6"；取不到时为 null）。M7-11 加的，设置页的"关于"和诊断信息用。
+	Arch      string  `json:"arch"`
+	OSVersion *string `json:"os_version"`
 	Smoke     bool    `json:"smoke"`
 	// Capabilities 是这个客户端的能力（见 capabilities）。
 	Capabilities []string `json:"capabilities"`
 }
 
 func (s *Shell) shellInfo() ShellInfo {
-	info := ShellInfo{Version: s.cfg.Version, DataDir: s.cfg.DataDir, Platform: platformName(), Smoke: s.smoke != nil}
+	info := ShellInfo{Version: s.cfg.Version, DataDir: s.cfg.DataDir, Platform: platformName(), Arch: runtime.GOARCH,
+		OSVersion: s.osVersionText(), Smoke: s.smoke != nil}
 	if v := s.cfg.WebVersion; v != "" {
 		info.WebVersion = &v
 	}
@@ -188,6 +196,28 @@ func (s *Shell) shellInfo() ShellInfo {
 		info.Capabilities = append(info.Capabilities, "smoke")
 	}
 	return info
+}
+
+// osVersionText 是 shell_info 的 os_version：第一次用到时问 Wails（macOS 跑一次 sysctl，Windows 读注册表），之后不变。
+// 应用还没起来（测试）时为 null。
+func (s *Shell) osVersionText() *string {
+	if s.app == nil {
+		return nil
+	}
+	s.osVersionOnce.Do(func() {
+		sys := s.app.Env.Info().OSInfo
+		if sys == nil {
+			return
+		}
+		text := strings.TrimSpace(sys.Name)
+		if v := strings.TrimSpace(sys.Version); v != "" && v != "Unknown" && !strings.Contains(text, v) {
+			text = strings.TrimSpace(text + " " + v)
+		}
+		if text != "" {
+			s.osVersion = &text
+		}
+	})
+	return s.osVersion
 }
 
 // changeServer 是页面要换服务器地址（set_server）。页面证明不了是用户在操作（页面和客户端自带的页面同源，区分不出

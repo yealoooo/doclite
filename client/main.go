@@ -22,7 +22,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing/fstest"
@@ -71,7 +70,7 @@ func run() int {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return fatal(smoke, "建不了数据目录："+err.Error())
 	}
-	logFile, err := appdata.OpenDailyLog(filepath.Join(dataDir, "logs"))
+	logFile, err := appdata.OpenDailyLog(appdata.LogsDir(dataDir))
 	if err != nil {
 		return fatal(smoke, "打不开日志目录："+err.Error())
 	}

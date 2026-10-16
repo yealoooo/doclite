@@ -1,4 +1,5 @@
 // M1-11 本机图片缓存面板的截图：npm run screenshots -- --spec scripts/shots/m1-cache.mjs --base <devshell 的地址>
+// （M7-11 起面板在客户端的设置页"本机存储"里，原来用户区的"本机图片缓存"对话框去掉了。）
 //
 // 和 m1-shell.mjs 一样，以壳模式的地址打开、注入 Wails 桥的模拟（scripts/lib/wails-mock.mjs），让页面以为自己在壳里：
 // - shell_info / check_server：已配置服务器、连得上（Windows 的数据目录）；
@@ -8,8 +9,8 @@
 // 管理员账号同 m0.mjs（INIT_ADMIN_USERNAME / INIT_ADMIN_PASSWORD，默认 admin / change-me-now）。
 //
 // 截图：
-// - shell-cache-entry：左下角用户区的"本机图片缓存"入口（浏览器里没有）；
-// - shell-cache-panel：用户区 → 本机图片缓存，显示总占用、上限、缓存目录、各项目的占用；
+// - shell-cache-entry：左下角用户区的"设置"入口（浏览器里没有）；
+// - shell-cache-panel：用户区 → 设置 → 本机存储里的本机图片缓存，显示总占用、上限、缓存目录、各项目的占用；
 // - shell-cache-confirm：点 DEMO-B 那一行的"清空"，确认框；
 // - shell-cache-cleared：确认后 DEMO-B 那一行消失，总占用变小，右下角提示释放了多少。
 
@@ -87,14 +88,15 @@ function cacheMock() {
 
 const mock = (page) => installWailsMock(page, { serverUrl: 'http://127.0.0.1:9080' }, cacheMock)
 
-/** 登录，打开用户菜单里的"本机图片缓存"，等各项目的占用出来。 */
+/** 登录，从用户区进设置页，等本机图片缓存里各项目的占用出来，滚到缓存那一块。 */
 async function openPanel(page) {
   await page.type('#username', admin)
   await page.type('#password', adminPassword)
   await page.click('[data-testid=login-submit]')
   await page.waitForSelector('[data-testid=side-nav]')
-  await page.click('[data-testid=image-cache]')
-  await page.waitForSelector('[data-testid=image-cache-dialog] [data-testid=cache-project-row]')
+  await page.click('[data-testid=user-area] [data-testid=open-settings]')
+  await page.waitForSelector('[data-testid=settings-cache] [data-testid=cache-project-row]')
+  await page.$eval('[data-testid=settings-cache]', (el) => el.scrollIntoView({ block: 'start' }))
 }
 
 /** 点 DEMO-B 那一行的"清空"，等确认框。 */
@@ -115,7 +117,7 @@ export default {
   accounts: {},
   shots: [
     {
-      // 左下角用户区上方的入口（只在壳里出现）。
+      // 左下角用户区的"设置"入口（只在壳里出现）。
       name: 'shell-cache-entry',
       path: '/login',
       shell: true,
@@ -125,8 +127,8 @@ export default {
         await page.type('#username', admin)
         await page.type('#password', adminPassword)
         await page.click('[data-testid=login-submit]')
-        await page.waitForSelector('[data-testid=side-nav] [data-testid=image-cache]')
-        await page.hover('[data-testid=image-cache]')
+        await page.waitForSelector('[data-testid=side-nav] [data-testid=open-settings]')
+        await page.hover('[data-testid=side-nav] [data-testid=open-settings]')
       },
     },
     {

@@ -3,10 +3,10 @@ package shell
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
+	"doclite/client/internal/appdata"
 	"doclite/client/internal/imagecache"
 	"doclite/client/internal/proxy"
 )
@@ -19,7 +19,7 @@ import (
 // registerImageCommands 打开缓存、接上会话代理，登记缓存和切块的命令（registerCommands 最后调用）。
 func (s *Shell) registerImageCommands() {
 	s.images = imagecache.New(imagecache.Config{
-		Dir:    filepath.Join(s.cfg.DataDir, "image-cache"),
+		Dir:    appdata.ImageCacheDir(s.cfg.DataDir),
 		Log:    s.log,
 		Server: s.proxy.Server,
 	})
