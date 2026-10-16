@@ -28,20 +28,20 @@
 - **数据库**：生产 PostgreSQL 18，开发本机 16，只用 16 也有的特性（主键由应用生成 UUIDv7）。
 - **存储**：只支持 S3 兼容存储，默认 SeaweedFS。
 - **web**：Vue 3 + Vite + TypeScript + Tailwind 4 + shadcn-vue（reka-ui）+ Pinia + vue-router，npm。**从上一版原样复制过来**（`web/`），接口不变所以基本不用改；只有和桌面客户端打交道的部分（原来调 Tauri）在做客户端时改成调 Wails。本机单独启动（vite dev 或 preview，把 `/api` 代理给 server），部署时是单独的 nginx 容器（M8）。
-- **client**：Wails（v2 或 v3，做客户端时定）。界面就是 `web/` 的构建产物；上传队列、热文件夹、本机图片缓存、大图切块、托盘用 Go 写。
+- **client**：Wails v3。界面随客户端打包、版本跟客户端走（M7-6）：web 打出带版本号的产物包（`npm run release`），客户端按 `client/WEB_VERSION` 取产物包嵌进去，不依赖 web 源码；客户端的"服务器地址"是 web 服务的入口（也可以是 server 本身），只经它访问 `/api`。连接服务器、连不上、需要升级几页是客户端自带的。上传队列、热文件夹、本机图片缓存、大图切块、托盘用 Go 写。
 - **部署**：只用 Docker（web（nginx）、server、postgres、seaweedfs，可选 portainer），客户是 Windows 服务器上的 WSL2 + Docker，内网离线。本机没有 Docker。
 
 ## 三个模块
 
 **server、web、client 是三个独立模块，代码上互不依赖**【用户 2026-10-16，以后可能拆成三个仓库；requirements 1.3】：
 
-- 模块之间只靠约定：HTTP 接口（requirements 第 8 节）和壳的桥命令。**不 import 别的模块的代码，也不读别的模块目录里的文件**（测试样本、夹具各带各的）。
+- 模块之间只靠约定：HTTP 接口（requirements 第 8 节）和壳的桥命令（`client/BRIDGE.md`，网页和客户端之间唯一的约定）。**不 import 别的模块的代码，也不读别的模块目录里的文件**（测试样本、夹具各带各的）。
 - 没有共用代码。两边都要的各留一份：读图片文件头（`server/internal/platform/imagehdr` 和 `client/internal/imagehdr`），**改动要两边同步**，上传拒收以 server 为准。
 - 没有 Go 工作区：server、client 各自在自己的目录下 `go build`、`go vet`、`go test`、`go mod tidy`。
 - 各自启动（详见 README）：
   - server：`cd server && go run ./cmd/server`（读 `server/.env`；只提供 `/api`，`/api` 以外的路径一律 JSON 404）；
   - web：`cd web && npm run dev`（5173），或 `npm run build && npm run preview`（4173）；`/api`（含实时推送）代理给 `DOCLITE_SERVER`（默认 `http://127.0.0.1:9080`），端口、监听地址用 `-- --port … --host … --strictPort`。浏览器打开 web 的地址；
-  - client：`cd client && wails3 package`。
+  - client：`cd web && npm run release`（web 的产物包），再 `cd client && wails3 package`（只要产物包，不读 web 源码）。
 
 ## 目录
 
@@ -69,8 +69,11 @@ server/                 Go 模块 doclite/server（只提供 /api）
   migrations/             000N_*.sql（embed 进可执行文件）
   apitest/                API 测试（真实 PG + S3）
   testdata/samples/       常见扫描格式的样本（imagehdr、导出、API 测试用）
-web/                    网页前端（从上一版复制），vite 单独启动；scripts/ 是截图和 seed 脚本，scripts/samples/ 是它们的样本
-client/                 Go 模块 doclite/client，Wails 桌面客户端（M6）：cmd/devshell 是截图脚本用的开发服务器（不打包）；
+web/                    网页前端（从上一版复制），vite 单独启动；npm run release 打出产物包 release/doclite-web-<版本>.tar.gz
+                          （客户端嵌入它）；scripts/ 是截图、seed、打包脚本，scripts/samples/ 是截图和 seed 的样本
+client/                 Go 模块 doclite/client，Wails 桌面客户端（M6）：BRIDGE.md 是和界面的约定；VERSION 是客户端的版本，
+                          WEB_VERSION 是嵌入的界面（web 产物包）的版本；cmd/webartifact 是打包前取产物包的工具，
+                          cmd/devshell 是截图脚本用的开发服务器（都不打包）；internal/shellpages 是客户端自带的页面；
                           internal/imagehdr 是 server 那份的副本；testdata/samples/ 是客户端测试的样本
 deploy/                 （M8 打包交付时再建：compose、.env 示例、install.ps1、backup.ps1）
 docs/

@@ -1,18 +1,18 @@
-// Package shell 是 Wails 应用本身：主窗口、单实例、托盘、给页面的命令（bridge.go）、流式请求（stream.go）、
-// `--smoke` 自检（smoke.go）、导航保护（navguard_*.go）。
+// Package shell 是 Wails 应用本身：主窗口、单实例、托盘、资产服务器（assets.go：嵌入的界面、客户端自带的页面、取图）、
+// 桥的白名单（runtimeguard.go）、给页面的命令（bridge.go）、流式请求（stream.go）、`--smoke` 自检（smoke.go）、
+// 导航保护（navguard_*.go）。
 //
-// 页面和壳之间的约定沿用上一版（web/src/lib/shell.ts）：页面调 `invoke(命令, 参数)`，失败时 reject `{kind, message}`。
-// Wails 下是一个绑定方法 `Bridge.Invoke(cmd, args)` 按命令名分发，所以页面的写法和以前一样。
+// 页面和壳之间的约定写在 client/BRIDGE.md（web 和 client 之间唯一的约定）：页面调 `invoke(命令, 参数)`，失败时 reject
+// `{kind, message}`。Wails 下是一个绑定方法 `Bridge.Invoke(cmd, args)` 按命令名分发。
 package shell
 
 import (
+	"context"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
-	"path"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -39,8 +39,10 @@ type Config struct {
 	// Background 为 true 时不抢焦点、不打扰用户：不激活应用，窗口透明且在最后面（同自检，见 prepareSmokeWindow），
 	// 再启动、点托盘的"打开"都不显示窗口。只给开发和自动测试用（DOCLITE_BACKGROUND=1）。
 	Background bool
-	// Assets 是界面（web/dist 的副本）。
-	Assets fs.FS
+	// Assets 是嵌入的界面（web 产物包里的 dist，见 cmd/webartifact）；WebVersion 是它的版本（产物包的清单），
+	// 没有嵌入界面时为空。
+	Assets     fs.FS
+	WebVersion string
 	// AppIcon、TrayIcon、TrayTemplate 是图标（PNG）。
 	AppIcon      []byte
 	TrayIcon     []byte
@@ -65,8 +67,11 @@ type Shell struct {
 	// images 是取图协议、本机图片缓存和切块（M6-3，images.go）。
 	images *imagecache.Service
 
-	// navGuard：导航保护装上了（macOS）。
-	navGuard bool
+	// navGuard：导航保护装上了（macOS）。navBlocked：这个平台必须有导航保护却没装上，界面不开（assets.go）。
+	navGuard   bool
+	navBlocked bool
+	// confirmServer 问用户要不要换服务器地址（nil 时弹系统确认框，见 bridge.go 的 changeServer；测试里换掉）。
+	confirmServer func(ctx context.Context, from, to string) (bool, error)
 
 	// quitting：正在退出（托盘的"退出"、Cmd+Q、自检结束），这时关窗不再缩到托盘。
 	quitting atomic.Bool
@@ -81,13 +86,25 @@ type Shell struct {
 // Run 建应用、窗口和托盘，运行到退出。返回退出码（自检用；正常退出是 0）。
 func Run(cfg Config) (int, error) {
 	s := &Shell{cfg: cfg, log: cfg.Log, proxy: cfg.Proxy}
-	s.registerCommands()
+	switch {
+	case devServerURL() != "":
+		s.log.Info("开发构建：界面转给 vite 的开发服务器", "url", devServerURL())
+	case os.Getenv("FRONTEND_DEVSERVER_URL") != "":
+		s.log.Warn("正式构建不认 FRONTEND_DEVSERVER_URL，只用嵌入的界面")
+	}
+	removeOldWebCache(cfg.DataDir, s.log)
 	if cfg.Smoke != nil {
 		s.smoke = newSmokeRun(s, cfg.Smoke)
 	}
+	s.registerCommands()
 	s.proxy.Observe(s.observeResponse)
 
 	s.navGuard = installNavigationGuard(s.log)
+	// 导航保护在这个平台上是必需的却没装上：失败就关闭，只开客户端自带的页面（assets.go）。
+	s.navBlocked = navGuardRequired && !s.navGuard
+	if s.navBlocked {
+		s.log.Error("导航保护没装上：不打开界面，只显示客户端自带的说明页")
+	}
 
 	opts := application.Options{
 		Name:        ProductName,
@@ -96,8 +113,12 @@ func Run(cfg Config) (int, error) {
 		Logger:      cfg.WailsLog,
 		Services:    []application.Service{application.NewService(&Bridge{s: s})},
 		Assets: application.AssetOptions{
-			// 取图地址（/shell/img/）要在 spaHandler 之前处理（images.go）。
-			Handler: s.withImages(spaHandler(cfg.Assets)),
+			// 嵌入的界面、客户端自带的页面、取图（assets.go）；最外层核对主机和来源，再核对桥的调用在不在白名单里
+			// （runtimeguard.go）。中间件在 Wails 自己的 /wails/ 处理之前。
+			Handler: s.assetHandler(),
+			Middleware: func(next http.Handler) http.Handler {
+				return assetGuard(s.log)(newRuntimeGuard(s.log).wrap(next))
+			},
 		},
 		Mac: application.MacOptions{
 			// 关掉窗口（缩到托盘）后应用继续运行。
@@ -139,13 +160,14 @@ func Run(cfg Config) (int, error) {
 	s.app.OnShutdown(s.images.Close)
 
 	s.window = s.app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:             "main",
-		Title:            ProductName,
-		Width:            1360,
-		Height:           860,
-		MinWidth:         1024,
-		MinHeight:        640,
-		URL:              "/",
+		Name:      "main",
+		Title:     ProductName,
+		Width:     1360,
+		Height:    860,
+		MinWidth:  1024,
+		MinHeight: 640,
+		// 先到客户端自带的关口页（没配置地址、连不上、要升级时就停在那里），没问题再进界面（shellpages）。
+		URL:              "/shell/",
 		Hidden:           cfg.Smoke != nil || cfg.Background,
 		InitialPosition:  application.WindowCentered,
 		BackgroundColour: application.NewRGB(255, 255, 255),
@@ -238,25 +260,6 @@ func singleInstanceID(dataDir string) string {
 		b[i] = hex[(h>>(28-4*i))&0xf]
 	}
 	return Identifier + "." + string(b[:])
-}
-
-// spaHandler 托管界面：有这个文件就给文件；没有扩展名的路径（前端路由，例如刷新时停在 /files）回退到 index.html。
-// 开发时（非 production 构建、设置了 FRONTEND_DEVSERVER_URL）Wails 把请求转给 Vite，Vite 自己做回退，这里不插手。
-func spaHandler(dist fs.FS) http.Handler {
-	files := application.AssetFileServerFS(dist)
-	if os.Getenv("FRONTEND_DEVSERVER_URL") != "" {
-		return files
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
-		if name != "" && name != "." && path.Ext(name) == "" {
-			if _, err := fs.Stat(dist, name); err != nil {
-				r = r.Clone(r.Context())
-				r.URL.Path = "/"
-			}
-		}
-		files.ServeHTTP(w, r)
-	})
 }
 
 // platformName 是 shell_info 的 platform：windows、macos、linux。

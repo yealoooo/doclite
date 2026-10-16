@@ -23,7 +23,7 @@ import type { LastReject } from '@/api/types'
 import FileCover from '@/components/files/FileCover.vue'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { isTauri } from '@/lib/client'
+import { CLIENT_TOO_OLD, isShell, shellHas } from '@/lib/client'
 import { formatDateTime } from '@/lib/format'
 import { formatBytes } from '@/lib/files'
 import {
@@ -55,7 +55,9 @@ const props = defineProps<{
 const emit = defineEmits<{ finished: [outcome: RescanOutcome, message: RescanMessage | null] }>()
 
 const images = useImageInfoStore()
-const inShell = isTauri()
+/** 在壳里：重扫件由壳选文件、上传（能力 rescan）；页面在壳里传不了二进制，客户端没有这项能力时不能重扫。 */
+const inShell = isShell()
+const shellCanRescan = shellHas('rescan')
 
 type State = 'idle' | 'working' | 'done' | 'failed'
 const state = ref<State>('idle')
@@ -149,8 +151,12 @@ function onOpenChange(v: boolean) {
 
 function pick() {
   if (busy.value || !props.target) return
-  if (inShell) void run(null)
-  else input.value?.click()
+  if (!inShell) input.value?.click()
+  else if (shellCanRescan) void run(null)
+  else {
+    state.value = 'failed'
+    message.value = { tone: 'error', title: CLIENT_TOO_OLD, detail: null, location: null, canRetry: false, refresh: false }
+  }
 }
 
 function onPicked(ev: Event) {

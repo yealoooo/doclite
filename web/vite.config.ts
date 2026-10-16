@@ -5,7 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vite'
 
-// 版本号只有 package.json 这一个来源：壳（tauri.conf.json 的 version）也读它。
+// 网页的版本号来源是 package.json（"关于"里显示）；桌面客户端的版本号在 client/VERSION，两者各自独立。
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }
 
 // https://vite.dev/config/

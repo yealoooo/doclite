@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Doclite</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/shell/shell.css" />
+    <script type="module" src="/shell/shell.js"></script>
+  </head>
+  <!-- 客户端自带的页面（连接服务器、连不上、需要升级、不能打开界面），见 client/BRIDGE.md。data-view 由资产服务器填
+       （导航保护没装上时是 blocked）。 -->
+  <body data-view="{{.View}}" data-reason="{{.Reason}}">
+    <main class="wrap">
+      <header class="brand">
+        <span class="logo">D</span>
+        <p>Doclite 纸质档案数字化系统</p>
+      </header>
+
+      <section class="card">
+        <div id="view-checking" class="checking" data-testid="shell-checking">
+          <span class="spinner" aria-hidden="true"></span>正在连接服务器…
+        </div>
+
+        <form id="view-connect" data-testid="connect-server" novalidate hidden>
+          <div>
+            <h1 id="connect-title">连接服务器</h1>
+            <p class="muted">填写 Doclite 服务器的地址（和浏览器里打开 Doclite 用的同一个地址），可以问系统管理员要。</p>
+          </div>
+          <div class="field">
+            <label for="server-address">服务器地址</label>
+            <input id="server-address" autocomplete="off" spellcheck="false" placeholder="例如 http://192.168.1.10:9080" />
+          </div>
+          <p id="connect-error" class="alert error" role="alert" data-testid="connect-error" hidden></p>
+          <p id="connect-note" class="alert info" hidden>换到另一台服务器后需要重新登录。</p>
+          <div class="row">
+            <button type="button" id="connect-cancel" class="secondary" hidden>取消</button>
+            <button type="submit" id="connect-submit" data-testid="connect-submit">连接</button>
+          </div>
+        </form>
+
+        <div id="view-unreachable" data-testid="server-unreachable" hidden>
+          <div class="head">
+            <span class="badge error" aria-hidden="true">!</span>
+            <div>
+              <h1>连不上服务器</h1>
+              <p id="unreachable-server" class="mono muted"></p>
+            </div>
+          </div>
+          <p id="unreachable-reason" class="alert error" role="alert"></p>
+          <p class="muted">请确认服务器已经启动、网络是通的。服务器地址变了的话，点"修改地址"重新填写。</p>
+          <div class="row">
+            <button type="button" id="unreachable-edit" class="secondary">修改地址</button>
+            <button type="button" id="unreachable-retry" data-testid="retry">重试</button>
+          </div>
+        </div>
+
+        <div id="view-upgrade" data-testid="upgrade-required" hidden>
+          <div class="head">
+            <span class="badge warn" aria-hidden="true">!</span>
+            <div>
+              <h1>客户端版本过低，请更新</h1>
+              <p class="muted">服务器已经升级，这个版本的客户端不能再使用。</p>
+            </div>
+          </div>
+          <dl class="facts">
+            <dt>当前版本</dt>
+            <dd class="mono" id="upgrade-current" data-testid="upgrade-current">—</dd>
+            <dt>最低版本</dt>
+            <dd class="mono" id="upgrade-min" data-testid="upgrade-min">—</dd>
+            <dt>最新版本</dt>
+            <dd class="mono" id="upgrade-latest">—</dd>
+            <dt>下载地址</dt>
+            <dd class="mono" id="upgrade-url">—</dd>
+          </dl>
+          <p id="upgrade-error" class="alert error" role="alert" hidden></p>
+          <button type="button" id="upgrade-download" data-testid="upgrade-download" hidden>下载新版本</button>
+          <p id="upgrade-no-url" class="alert info" hidden>服务器没有配置下载地址，请联系系统管理员获取新版本的安装包。</p>
+          <div class="links">
+            <button type="button" id="upgrade-edit" class="link">修改服务器地址</button>
+            <button type="button" id="upgrade-recheck" class="link accent">已经更新了？重新检查</button>
+          </div>
+        </div>
+        <div id="view-blocked" data-testid="shell-blocked" hidden>
+          <div class="head">
+            <span class="badge error" aria-hidden="true">!</span>
+            <div>
+              <h1>客户端不能打开界面</h1>
+            </div>
+          </div>
+          <p id="blocked-reason" class="alert error" role="alert"></p>
+        </div>
+      </section>
+
+      <p class="version" data-testid="shell-version">客户端版本 <span id="client-version">—</span></p>
+    </main>
+  </body>
+</html>

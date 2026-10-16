@@ -50,9 +50,9 @@ setHttpHandlers({
       .refreshSession()
       .catch(() => {})
   },
-  // 壳的版本低于服务器要求的最低版本：整页提示更新（只在壳里出现）。
+  // 客户端的版本低于服务器要求的最低版本（只在壳里出现）：去客户端自带的升级页；客户端没有这一页时提示。
   onUpgradeRequired(err) {
-    useShellStore(pinia).requireUpgrade(err.details)
+    if (!useShellStore(pinia).requireUpgrade()) toast.error(err.message, { id: 'upgrade-required', duration: 10000 })
   },
   // M7-1：许可证到期（或没有有效的许可证），非管理员的请求被拒：提示原因，回登录页（管理员导入新的许可证后再登录）。
   onLicenseBlocked(err, redirect) {
@@ -72,16 +72,16 @@ function mountApp() {
 
 async function start() {
   const shell = useShellStore(pinia)
-  // 壳以 --smoke 启动时只跑自检（自检到"ui"一步才挂载界面）。
+  // 壳里先读客户端的信息和能力（界面按能力显示本机功能）；服务器已经由客户端自带的关口页探测过。
   const info = await shell.loadInfo()
+  // 壳以 --smoke 启动时只跑自检（自检到"ui"一步才挂载界面）。
   if (info?.smoke) {
     const { runSmoke } = await import('@/lib/smoke')
-    await runSmoke({ mountApp, markReady: () => shell.markReady() })
+    await runSmoke({ mountApp })
     return
   }
   mountApp()
-  // 壳里：探测服务器，决定显示"连接服务器"、"连不上"、升级提示还是进入界面；浏览器里什么也不做。
-  await shell.init()
+  if (shell.failure) toast.error(shell.failure, { id: 'shell-info', duration: 10000 })
 }
 
 void start()

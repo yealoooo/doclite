@@ -28,8 +28,12 @@ type ProbeResult struct {
 
 const probeTimeout = 8 * time.Second
 
-// Probe 探测一个服务器（server 是规整过的 origin）：`GET /api/health` 要返回 200 和 `{status, version}`，
-// 再查 `GET /api/shell/latest`，客户端版本低于 min_version 时 upgrade_required。两个接口都不用登录、不检查客户端版本。
+// Probe 探测一个服务器（server 是规整过的 origin：web 服务的入口，或者 server 本身，客户端只经它访问 `/api`）：
+//   - `GET /api/health` 要返回 200 和 `{status, version}`（不用登录、不检查客户端版本）；
+//   - `GET /api/shell/latest` 给最低、最新版本和下载地址（server 还没有这个接口时 404，跳过）；
+//   - 再用不带会话的 `GET /api/me` 问一次 server 收不收这个客户端版本：server 的版本检查在所有 `/api`（health、
+//     shell 除外）最外层、鉴权之前，版本过低就回 426 `client_upgrade_required`，details 带最低版本和下载地址；
+//     收的话是 401。升级页只信这里探测到的结果（不信页面带来的参数）。
 func (p *Proxy) Probe(ctx context.Context, server string) *ProbeResult {
 	res := &ProbeResult{ServerURL: server, ClientVersion: p.version}
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
@@ -53,10 +57,10 @@ func (p *Proxy) Probe(ctx context.Context, server string) *ProbeResult {
 	if json.Unmarshal(body, &health) != nil || health.Status == "" {
 		return fail("对方不是 Doclite 服务器（/api/health 的响应不对）")
 	}
-	res.Reachable = true
 	if health.Version != "" {
 		res.ServerVersion = &health.Version
 	}
+	res.Reachable = true
 
 	status, body, err = p.probeGet(ctx, server+"/api/shell/latest")
 	switch {
@@ -87,7 +91,41 @@ func (p *Proxy) Probe(ctx context.Context, server string) *ProbeResult {
 		}
 		res.UpgradeRequired = less
 	}
+	p.probeVersionCheck(ctx, server, res)
 	return res
+}
+
+// probeVersionCheck：不带会话 `GET /api/me`，server 回 426 就是要升级，用 426 的 details 补上探测不到的版本和下载地址。
+func (p *Proxy) probeVersionCheck(ctx context.Context, server string, res *ProbeResult) {
+	status, body, err := p.probeGet(ctx, server+"/api/me")
+	if err != nil {
+		p.log.Warn("查 server 收不收这个客户端版本失败", "server", server, "err", err)
+		return
+	}
+	if status != http.StatusUpgradeRequired {
+		return
+	}
+	var e struct {
+		Code    string `json:"code"`
+		Details struct {
+			MinVersion    *string `json:"min_version"`
+			LatestVersion *string `json:"latest_version"`
+			DownloadURL   *string `json:"download_url"`
+		} `json:"details"`
+	}
+	if json.Unmarshal(body, &e) != nil || e.Code != "client_upgrade_required" {
+		p.log.Warn("server 回了 426，但响应不是 client_upgrade_required", "server", server)
+	}
+	res.UpgradeRequired = true
+	if res.MinVersion == nil {
+		res.MinVersion = nonEmpty(e.Details.MinVersion)
+	}
+	if res.LatestVersion == nil {
+		res.LatestVersion = nonEmpty(e.Details.LatestVersion)
+	}
+	if res.DownloadURL == nil {
+		res.DownloadURL = nonEmpty(e.Details.DownloadURL)
+	}
 }
 
 func (p *Proxy) probeGet(ctx context.Context, target string) (int, []byte, error) {
@@ -96,8 +134,7 @@ func (p *Proxy) probeGet(ctx context.Context, target string) (int, []byte, error
 		return 0, nil, err
 	}
 	hr.Header.Set("Accept", "application/json")
-	hr.Header.Set("X-Client-Type", "desktop")
-	hr.Header.Set("X-Client-Version", p.version)
+	p.SetClientHeaders(hr.Header)
 	resp, err := p.fetchClient.Do(hr)
 	if err != nil {
 		return 0, nil, err

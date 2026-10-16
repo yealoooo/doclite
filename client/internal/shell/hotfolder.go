@@ -6,6 +6,7 @@ package shell
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 
 	"doclite/client/internal/proxy"
@@ -17,7 +18,7 @@ func (s *Shell) registerHotfolderCommands() {
 
 	hot := func() (*upload.HotFolder, error) {
 		if u.hot == nil {
-			return nil, proxy.Internal("热文件夹不可用（上传队列打不开）：" + u.openErr)
+			return nil, proxy.InternalDetail("热文件夹不可用（上传队列打不开）", errors.New(u.openErr))
 		}
 		return u.hot, nil
 	}
@@ -42,7 +43,7 @@ func (s *Shell) registerHotfolderCommands() {
 			d, err := s.openDialog().SetTitle("选择扫描软件保存文件的文件夹").CanChooseDirectories(true).CanChooseFiles(false).
 				CanCreateDirectories(true).ShowHiddenFiles(false).ResolvesAliases(true).PromptForSingleSelection()
 			if err != nil {
-				return nil, proxy.Internal("打不开系统对话框：" + err.Error())
+				return nil, proxy.InternalDetail("打不开系统对话框", err)
 			}
 			dir = d
 		}

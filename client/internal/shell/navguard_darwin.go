@@ -14,6 +14,9 @@ import (
 	"sync/atomic"
 )
 
+// navGuardRequired：macOS 上导航保护是必需的，装不上就不开界面（失败就关闭，assets.go）。
+const navGuardRequired = true
+
 var navLog atomic.Pointer[slog.Logger]
 
 //export docliteNavigationBlocked

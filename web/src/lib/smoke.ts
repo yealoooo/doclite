@@ -1,7 +1,13 @@
-// 壳的 `--smoke` 自检（只在壳以 --smoke 启动时运行，见 client/internal/shell/smoke.go）。
-// 用打包的页面和真实的传输层依次执行（壳没有的功能——smoke_config 的 capabilities——对应的步骤跳过，
-// 记为 ok 并在 detail.skipped 写原因；M6-1 的壳跑 probe、login、me、menus、stream、sse、img_direct、tray、ui、
-// （pages）、nav_guard、logout）：
+// 壳的 `--smoke` 自检里界面的那一段（只在壳以 --smoke 启动时运行，见 client/internal/shell/smoke.go：之前壳先测了
+// 客户端自带的连接页、连不上页，之后壳接着测换地址）。
+//
+// smoke_config 的 stage：
+// - main：完整的自检，用嵌入的界面和真实的传输层依次执行下面各步（壳没有的功能——smoke_config 的
+//   capabilities——对应的步骤跳过，记为 ok 并在 detail.skipped 写原因）；交回结果后壳回 {next: 'edit_server'}，
+//   界面像"关于"里的"修改服务器地址"那样跳到客户端的修改地址页；
+// - page：换地址后进来的界面，只报告 GET /api/me 的状态码和界面版本，不挂载界面。
+//
+// main 的各步：
 //   probe   探测服务器（health + shell/latest）
 //   login   用环境变量里的账号登录（api_fetch，壳加 X-Client-Type: desktop）
 //   me      GET /api/me，登录名对得上
@@ -90,6 +96,7 @@ import router from '@/router'
 import { useSessionStore } from '@/stores/session'
 import {
   checkServer,
+  editServerAddress,
   shellErrorMessage,
   shellStream,
   shellStreamCancel,
@@ -1003,11 +1010,45 @@ function waitForSelector(selector: string): Promise<Element> {
 export interface SmokeHooks {
   /** 挂载真正的界面（安装路由、mount）。 */
   mountApp: () => void
-  /** 让路由守卫放行（探测已经由自检做过）。 */
-  markReady: () => void
+}
+
+/** stage=page：只报告会话（GET /api/me 的状态码）和界面版本（壳据此核对换地址）。 */
+async function reportPage() {
+  let meStatus = 0
+  try {
+    await request<Me>('/api/me', { authRedirect: false, handle: true })
+    meStatus = 200
+  } catch (e) {
+    meStatus = e instanceof ApiError ? e.status : -1
+  }
+  try {
+    await smokeReport({ stage: 'page', me_status: meStatus, path: window.location.pathname, web_version: __APP_VERSION__ })
+  } catch (e) {
+    console.error('提交自检结果失败', errorMessage(e))
+  }
+}
+
+/**
+ * 开发构建接 vite 开发服务器时，热更新的 WebSocket 连不上（或被 CSP 挡下）的不算违规。只在 vite 的开发模式里
+ * （import.meta.env.DEV）。
+ */
+function ignorableViolation(blocked: string): boolean {
+  return import.meta.env.DEV && /^wss?:/.test(blocked)
 }
 
 export async function runSmoke(hooks: SmokeHooks) {
+  let cfg: SmokeConfig
+  try {
+    cfg = await smokeConfig()
+  } catch (e) {
+    await smokeReport({ outcome: 'failed', error: `读自检参数失败：${describe(e)}`, steps: [] }).catch(() => {})
+    return
+  }
+  if (cfg.stage === 'page') {
+    await reportPage()
+    return
+  }
+
   const container = document.createElement('div')
   container.id = 'smoke'
   container.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:9999;font:12px monospace;background:#fff;padding:8px;border:1px solid #ddd'
@@ -1041,7 +1082,6 @@ export async function runSmoke(hooks: SmokeHooks) {
   }
 
   try {
-    const cfg = await smokeConfig()
     // 旧版壳没有 capabilities：视为都有。
     const caps = cfg.capabilities ?? { images: true, upload_queue: true, csp: true, nav_guard: false }
 
@@ -1163,7 +1203,6 @@ export async function runSmoke(hooks: SmokeHooks) {
     }
 
     await step('ui', async () => {
-      hooks.markReady()
       hooks.mountApp()
       await waitForSelector('[data-testid=side-nav]')
       return { path: window.location.pathname }
@@ -1262,10 +1301,11 @@ export async function runSmoke(hooks: SmokeHooks) {
       })
 
       await step('csp', async () => {
-        // direct_blocked 那一次是预期的违规，不算。
-        const unexpected = cspViolations().filter((v) => !v.blocked.startsWith(cfg.server_url))
+        // direct_blocked 那一次是预期的违规，不算；vite 开发服务器的热更新连接也不算。
+        const all = cspViolations()
+        const unexpected = all.filter((v) => !v.blocked.startsWith(cfg.server_url) && !ignorableViolation(v.blocked))
         if (unexpected.length > 0) throw new Error(`有 ${unexpected.length} 条 CSP 违规`)
-        return { violations: 0 }
+        return { violations: 0, ignored_dev_hmr: all.filter((v) => ignorableViolation(v.blocked)).length }
       })
     }
   } catch (e) {
@@ -1285,9 +1325,12 @@ export async function runSmoke(hooks: SmokeHooks) {
   status(`自检结束：${outcome}`)
   const report: Record<string, unknown> = { outcome, steps, csp_violations: cspViolations() }
   if (error) report.error = error
+  let next: string | undefined
   try {
-    await smokeReport(report)
+    next = (await smokeReport(report))?.next
   } catch (e) {
     console.error('提交自检结果失败', errorMessage(e))
   }
+  // 壳接着测换地址：像"关于"里的"修改服务器地址"一样去客户端的修改地址页。
+  if (next === 'edit_server') editServerAddress()
 }

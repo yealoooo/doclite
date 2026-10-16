@@ -1,191 +1,79 @@
-// 壳的启动状态：还没配置服务器、连不上、版本过低时整页显示对应的提示（ShellGate），不进入路由。
-// 浏览器访问时一开始就是 ready，这些页面都不会出现。
+// 壳（桌面客户端）的信息：版本、界面版本、服务器地址、能力。浏览器里 inShell 为 false，其余都是空的。
 //
-// 状态：
-// - checking：正在探测服务器；
-// - setup：还没有服务器地址，或用户要修改地址（"连接服务器"页）；
-// - unreachable：连不上已配置的服务器（"重试 / 修改地址"）；
-// - upgrade：壳的版本低于服务器要求的最低版本（启动探测发现，或任何请求返回 426）；
-// - ready：正常使用。路由守卫在这之前一直等待（whenReady）。
+// 连接服务器、连不上、需要升级几页是客户端自带的（client/internal/shellpages，约定见 client/BRIDGE.md）：启动时客户端
+// 先在它自己的关口页上探测好服务器才进界面，所以界面里没有这些页面，只在需要时跳过去（editServer、requireUpgrade）。
 
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
-import { isShell } from '@/lib/client'
+import { isShell, shellHas, type ShellCapability } from '@/lib/client'
 import {
-  checkServer,
-  setServer,
+  editServerAddress,
   shellErrorMessage,
   shellInfo,
-  type ProbeResult,
+  shellPagesAvailable,
+  showUpgradePage,
   type ShellInfo,
 } from '@/lib/shell'
 
-export type ShellPhase = 'checking' | 'setup' | 'unreachable' | 'upgrade' | 'ready'
-
-/** 升级提示显示的信息（426 的 details 或启动探测的结果，design §5）。 */
-export interface UpgradeInfo {
-  client_version: string
-  min_version: string | null
-  latest_version: string | null
-  download_url: string | null
-}
-
-function str(v: unknown): string | null {
-  return typeof v === 'string' && v !== '' ? v : null
-}
-
 export const useShellStore = defineStore('shell', () => {
   const inShell = isShell()
-  const phase = ref<ShellPhase>(inShell ? 'checking' : 'ready')
   const info = ref<ShellInfo | null>(null)
-  /** 最近一次探测的结果（连不上时显示原因）。 */
-  const probe = ref<ProbeResult | null>(null)
-  /** 壳内部出错（命令调用失败）时的说明。 */
+  /** 读壳的信息失败时的说明。 */
   const failure = ref('')
-  const upgrade = ref<UpgradeInfo | null>(null)
-  /** 是否已经进入过 ready（进入过之后再离开，回来时要整页重载，页面状态可能已经不对）。 */
-  let wasReady = false
-  let phaseBeforeEdit: ShellPhase = 'checking'
 
-  /** 界面的版本：壳里是壳的版本，浏览器里是构建时的版本（两者来自同一个 package.json）。 */
-  const version = computed(() => info.value?.version ?? __APP_VERSION__)
+  /** 界面（web）的版本：构建时的 package.json。客户端里就是客户端嵌入的那份 web 产物的版本。 */
+  const webVersion = __APP_VERSION__
+  /** 客户端的版本（壳里；浏览器里为 null）。 */
+  const clientVersion = computed(() => info.value?.version ?? null)
   const serverUrl = computed(() => info.value?.server_url ?? null)
 
-  let waiters: (() => void)[] = []
-  function setPhase(p: ShellPhase) {
-    phase.value = p
-    if (p === 'ready') {
-      wasReady = true
-      const list = waiters
-      waiters = []
-      list.forEach((resolve) => resolve())
-    }
-  }
-
-  /** 等到可以正常使用（路由守卫用）。 */
-  function whenReady(): Promise<void> {
-    if (phase.value === 'ready') return Promise.resolve()
-    return new Promise((resolve) => waiters.push(resolve))
-  }
-
-  /** 读取壳的信息；失败时返回 null（这时显示"连不上"页和原因）。 */
+  /** 读取壳的信息（启动时 main.ts 先读，之后页面按能力显示本机功能）；失败时返回 null。 */
   async function loadInfo(): Promise<ShellInfo | null> {
     if (!inShell) return null
     if (info.value) return info.value
     try {
       info.value = await shellInfo()
     } catch (e) {
-      failure.value = `壳内部出错：${shellErrorMessage(e)}`
-      setPhase('unreachable')
+      failure.value = `读客户端的信息失败：${shellErrorMessage(e)}`
     }
     return info.value
   }
 
-  /** 启动：没有服务器地址就进"连接服务器"页，否则探测服务器。 */
-  async function init() {
-    if (!inShell) return
-    const i = await loadInfo()
-    if (!i || i.smoke) return
-    if (!i.server_url) {
-      setPhase('setup')
-      return
-    }
-    await check()
+  /** 客户端有这项能力（浏览器里总是 false）。 */
+  function has(cap: ShellCapability): boolean {
+    return shellHas(cap)
   }
 
-  /** 探测已配置的服务器，决定进入 ready、unreachable 还是 upgrade。 */
-  async function check() {
-    setPhase('checking')
-    failure.value = ''
-    try {
-      probe.value = await checkServer()
-    } catch (e) {
-      probe.value = null
-      failure.value = shellErrorMessage(e)
-      setPhase('unreachable')
-      return
-    }
-    const p = probe.value
-    if (!p.reachable) {
-      setPhase('unreachable')
-    } else if (p.upgrade_required) {
-      upgrade.value = {
-        client_version: p.client_version,
-        min_version: p.min_version,
-        latest_version: p.latest_version,
-        download_url: p.download_url,
-      }
-      setPhase('upgrade')
-    } else {
-      setPhase('ready')
-    }
-  }
+  /** 能不能在网页里改服务器地址（客户端自带的修改地址页）。 */
+  const canEditServer = computed(() => inShell && info.value !== null && shellPagesAvailable())
 
-  /** 重试（连不上页、升级页）：已经用过一阵的页面整页重载，否则重新探测。 */
-  async function retry() {
-    if (wasReady) {
-      window.location.replace('/')
-      return
-    }
-    await check()
-  }
-
-  /** 任何请求返回 426 时调用（http.ts 的全局处理）。浏览器里不会出现。 */
-  function requireUpgrade(details: unknown) {
-    if (!inShell) return
-    const d = (typeof details === 'object' && details !== null ? details : {}) as Record<string, unknown>
-    upgrade.value = {
-      client_version: str(d.client_version) ?? version.value,
-      min_version: str(d.min_version),
-      latest_version: str(d.latest_version),
-      download_url: str(d.download_url),
-    }
-    setPhase('upgrade')
-  }
-
-  /** 进入"连接服务器"页修改地址（设置、登录页、连不上页、升级页）。 */
+  /** 去客户端自带的修改地址页（关于、登录页）。 */
   function editServer() {
-    if (!inShell) return
-    if (phase.value !== 'setup') phaseBeforeEdit = phase.value
-    setPhase('setup')
+    if (canEditServer.value) editServerAddress()
   }
 
-  /** 放弃修改地址，回到之前的状态。 */
-  function cancelEdit() {
-    setPhase(phaseBeforeEdit === 'setup' ? 'checking' : phaseBeforeEdit)
-    if (phaseBeforeEdit === 'setup' || phaseBeforeEdit === 'checking') void check()
-  }
-
-  /** 保存服务器地址后整页重载：地址变了会话已被清空，所有状态从头开始。 */
-  async function saveServer(url: string) {
-    await setServer(url)
-    window.location.replace('/')
-  }
-
-  /** 自检时直接进入 ready（探测由自检自己做）。 */
-  function markReady() {
-    setPhase('ready')
+  /**
+   * 任何请求返回 426（http.ts 的全局处理）：去客户端自带的升级页（它自己探测）。客户端没有这一页时返回 false，
+   * 调用方自己提示。浏览器里不会出现。
+   */
+  function requireUpgrade(): boolean {
+    if (!inShell || !shellPagesAvailable()) return false
+    showUpgradePage()
+    return true
   }
 
   return {
     inShell,
-    phase,
     info,
-    probe,
     failure,
-    upgrade,
-    version,
+    webVersion,
+    clientVersion,
     serverUrl,
-    whenReady,
+    canEditServer,
     loadInfo,
-    init,
-    check,
-    retry,
-    requireUpgrade,
+    has,
     editServer,
-    cancelEdit,
-    saveServer,
-    markReady,
+    requireUpgrade,
   }
 })

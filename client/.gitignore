@@ -1,4 +1,5 @@
 # 构建产物
 /bin/
-# 打包时从 web/dist 复制过来的界面
+# 打包前从 web 的产物包解出来的界面（cmd/webartifact）
 /frontend/dist/
+/frontend/manifest.json

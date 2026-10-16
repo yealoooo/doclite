@@ -58,7 +58,7 @@ import ImageViewer, { type ViewerStatus, type ViewerView } from '@/components/vi
 import ViewerToolbar from '@/components/viewer/ViewerToolbar.vue'
 import { useProjectStream } from '@/composables/useProjectStream'
 import { useSelection } from '@/composables/useSelection'
-import { isTauri } from '@/lib/client'
+import { isTauri, shellImages } from '@/lib/client'
 import { formatSpec } from '@/lib/files'
 import { prepareTiles } from '@/lib/image-cache'
 import { rejectReasonsText } from '@/lib/reject-reasons'
@@ -619,7 +619,7 @@ const lastPrepared = ref<string | null>(null)
 watch(
   () => [currentId.value, phase.value, step_.value, nextTarget.value, nextTarget.value ? images.get(nextTarget.value) : undefined] as const,
   ([cur, ph, st, next, nextInfo]) => {
-    if (!inShell || !cur || !next) return
+    if (!shellImages() || !cur || !next) return
     // 当前这张的分块描述取到了（开始画块，或已经画完）再给下一张切，不和当前这张抢切块名额。
     if (ph !== 'ready' && !(ph === 'loading' && st === 'render')) return
     if (!nextInfo) return

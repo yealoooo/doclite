@@ -1,17 +1,25 @@
-// 壳（Wails v3 桌面客户端，client/）提供的命令，只在 isShell() 时调用。Go 端见 client/internal/shell/bridge.go。
+// 壳（Wails v3 桌面客户端，client/）提供的命令，只在 isShell() 时调用。约定见 client/BRIDGE.md（网页和客户端之间
+// 唯一的约定）。
 //
+// - 界面随客户端打包（M7-6）：客户端嵌入某个版本的 web 产物，页面由壳的资产服务器给出；连接服务器、连不上、需要升级
+//   几页是客户端自带的（/shell/），界面只负责跳过去（editServerAddress、showUpgradePage）。
 // - 页面和 server 之间的请求由壳的 Go 端代理（requirements 第 6 节"会话"）：普通请求走 `api_fetch`，SSE 走
-//   `api_stream`（Wails 的流逐块推送）。只能访问已配置服务器上 /api/ 下的路径；X-Client-Type、X-Client-Version 和
+//   `api_stream`（Wails 的流逐块推送）。只能访问已配置地址上 /api/ 下的路径；X-Client-Type、X-Client-Version 和
 //   会话 Cookie 都由 Go 端加，页面拿不到会话令牌。
+// - shell_info 的 capabilities 说明客户端有哪些本机功能（lib/client.ts 的 shellHas）。同一份 web 代码在浏览器里、
+//   在不同版本的客户端里都要能跑，所以本机功能一律按能力判断。
 // - 命令失败时 reject 的值是 `{kind, message}`（ShellError）。
 // - 命令、事件、流的底层调用见 lib/wails.ts。
 
+import { setShellCapabilities, shellHas } from './client'
 import { invoke, openShellSocket } from './wails'
 
 export interface ShellInfo {
-  /** 壳的版本（和 web/package.json 的 version 相同）。 */
+  /** 客户端的版本（client/VERSION）。 */
   version: string
-  /** 已配置的服务器地址（origin，例如 `http://192.168.1.10:9080`）；还没配置时为 null。 */
+  /** 客户端嵌入的界面的版本（web 产物包的版本，client/WEB_VERSION）；旧版客户端、没嵌入界面时没有。 */
+  web_version?: string | null
+  /** 已配置的服务器地址（web 服务的入口，例如 `http://192.168.1.10:9080`）；还没配置时为 null。 */
   server_url: string | null
   /** 本机数据目录（设置、Cookie 罐、日志）。 */
   data_dir: string
@@ -19,6 +27,8 @@ export interface ShellInfo {
   platform: string
   /** 是否在跑 `--smoke` 自检。 */
   smoke: boolean
+  /** 客户端的能力（lib/client.ts 的 ShellCapability；不认识的忽略）。 */
+  capabilities?: string[]
 }
 
 /** 服务器探测结果（`GET /api/health` + `GET /api/shell/latest`）。 */
@@ -37,7 +47,7 @@ export interface ProbeResult {
   upgrade_required: boolean
 }
 
-/** unsupported：这个版本的客户端还没有这个功能（例如 M6-1 的壳还没有上传队列）。 */
+/** unsupported：这个版本的客户端没有这个功能（客户端比网页旧），提示升级客户端。 */
 export type ShellErrorKind = 'not_configured' | 'invalid_request' | 'network' | 'internal' | 'unsupported'
 
 export interface ShellError {
@@ -61,23 +71,31 @@ export function shellErrorMessage(e: unknown): string {
   return String(e)
 }
 
-export function shellInfo() {
-  return invoke<ShellInfo>('shell_info')
+/** 读客户端的信息，顺便记下它的能力。 */
+export async function shellInfo() {
+  const info = await invoke<ShellInfo>('shell_info')
+  setShellCapabilities(info.capabilities)
+  return info
 }
 
-/** 探测已配置的服务器。还没配置时 reject `not_configured`。 */
+/** 探测已配置的服务器（自检用）。还没配置时 reject `not_configured`。 */
 export function checkServer() {
   return invoke<ProbeResult>('check_server')
 }
 
-/** 探测一个还没保存的地址。格式不对时 reject `invalid_request`。 */
-export function probeServer(url: string) {
-  return invoke<ProbeResult>('probe_server', { url })
+/** 客户端自带的页面（连接服务器、需要升级）在不在：没有时网页里相应的入口隐藏。 */
+export function shellPagesAvailable(): boolean {
+  return shellHas('pages')
 }
 
-/** 保存服务器地址，返回规整后的地址。地址变了会清空本机保存的会话。 */
-export function setServer(url: string) {
-  return invoke<string>('set_server', { url })
+/** 去客户端自带的"修改服务器地址"页（取消回到网页首页）。 */
+export function editServerAddress() {
+  window.location.assign('/shell/?edit')
+}
+
+/** 去客户端自带的"需要升级"页（它自己探测服务器，只有探测确认要升级才显示，下载地址也只用探测到的）。 */
+export function showUpgradePage() {
+  window.location.replace('/shell/?upgrade')
 }
 
 /** 用系统浏览器打开 http(s) 地址。 */
@@ -167,6 +185,11 @@ export async function shellStreamCancel(id: number): Promise<void> {
 // ---- --smoke 自检 ----
 
 export interface SmokeConfig {
+  /**
+   * main：完整的自检；page：之后（换地址、刷新）进来的网页只报告看到的页面标记和会话（client/internal/shell/smoke.go）。
+   * 旧版壳没有这一项，视为 main。
+   */
+  stage?: 'main' | 'page'
   server_url: string
   username: string
   password: string
@@ -231,7 +254,7 @@ export function smokeConfig() {
   return invoke<SmokeConfig>('smoke_config')
 }
 
-/** 交回自检结果，壳随即输出并退出。 */
+/** 交回自检结果。完整的自检交回后壳回 `{next: 'edit_server'}`：网页接着去客户端的修改地址页（壳接着测换地址）。 */
 export function smokeReport(report: Record<string, unknown>) {
-  return invoke<void>('smoke_report', { report })
+  return invoke<{ next?: string } | null>('smoke_report', { report })
 }

@@ -124,7 +124,7 @@ type ZipEntry struct {
 	Size uint64 `json:"size"`
 }
 
-// registerSmokeFlowCommands 登记自检主流程的命令（不是自检时返回 invalid_request）。
+// registerSmokeFlowCommands 登记自检主流程的命令（只在自检进程里登记）。
 func (s *Shell) registerSmokeFlowCommands() {
 	handle(s, "smoke_flow_prepare", func(context.Context, noArgs) (any, error) {
 		if s.smoke == nil {

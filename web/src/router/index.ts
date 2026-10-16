@@ -14,7 +14,6 @@ import { createRouter, createWebHistory, type RouteLocationRaw } from 'vue-route
 import AppLayout from '@/layouts/AppLayout.vue'
 import { safeRedirect } from '@/lib/redirect'
 import { useSessionStore } from '@/stores/session'
-import { useShellStore } from '@/stores/shell'
 import ForbiddenView from '@/views/ForbiddenView.vue'
 import LoginView from '@/views/LoginView.vue'
 
@@ -136,8 +135,6 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to): Promise<boolean | RouteLocationRaw> => {
-  // 壳里先等服务器配置好、连得上、版本够（浏览器里立即通过）。
-  await useShellStore().whenReady()
   const session = useSessionStore()
   await session.ensureLoaded()
 

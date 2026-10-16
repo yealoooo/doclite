@@ -124,11 +124,16 @@ func (p *Proxy) newRequest(ctx context.Context, req *Request) (*http.Request, st
 }
 
 func (p *Proxy) addShellHeaders(hr *http.Request, server string) {
-	hr.Header.Set("X-Client-Type", "desktop")
-	hr.Header.Set("X-Client-Version", p.version)
+	p.SetClientHeaders(hr.Header)
 	if c := p.jar.Header(time.Now(), strings.HasPrefix(server, "https://")); c != "" {
 		hr.Header.Set("Cookie", c)
 	}
+}
+
+// SetClientHeaders 加壳的客户端头（X-Client-Type: desktop、X-Client-Version），不带 Cookie（探测用它）。
+func (p *Proxy) SetClientHeaders(h http.Header) {
+	h.Set("X-Client-Type", "desktop")
+	h.Set("X-Client-Version", p.version)
 }
 
 // afterResponse 记下 Set-Cookie；退出登录（不论结果）清空罐。

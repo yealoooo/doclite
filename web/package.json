@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "release": "npm run build && node scripts/release.mjs",
     "preview": "vite preview",
     "screenshots": "node scripts/screenshots.mjs",
     "seed:demo": "node scripts/seed-demo.mjs",
@@ -17,7 +18,6 @@
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/vue-virtual": "^3.13.39",
     "@vueuse/core": "^14.4.0",
-    "@wailsio/runtime": "3.0.0-beta.29",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "openseadragon": "^6.1.1",

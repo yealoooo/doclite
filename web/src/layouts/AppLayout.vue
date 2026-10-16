@@ -117,9 +117,9 @@ useTrayErrors()
         <SettingsIcon class="size-4" />系统管理
       </RouterLink>
 
-      <!-- M1-11：用户区的"本机图片缓存"（只在壳里出现；单独一行，不挤占用户名的位置）。 -->
+      <!-- M1-11：用户区的"本机图片缓存"（只在有这项能力的客户端里出现；单独一行，不挤占用户名的位置）。 -->
       <button
-        v-if="shell.inShell"
+        v-if="shell.has('images')"
         type="button"
         class="mb-1 flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
         data-testid="image-cache"
@@ -165,6 +165,6 @@ useTrayErrors()
       <RouterView />
     </main>
     <AboutDialog v-model:open="aboutOpen" />
-    <ImageCacheDialog v-if="shell.inShell" v-model:open="cacheOpen" />
+    <ImageCacheDialog v-if="shell.has('images')" v-model:open="cacheOpen" />
   </div>
 </template>

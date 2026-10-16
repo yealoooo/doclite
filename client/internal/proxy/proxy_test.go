@@ -1,7 +1,12 @@
 package proxy
 
 import (
+	"context"
 	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -161,5 +166,59 @@ func TestSplitUTF8(t *testing.T) {
 		if strings.ContainsRune(a, '�') || strings.ContainsRune(b, '�') {
 			t.Fatalf("切在 %d 出现乱码", cut)
 		}
+	}
+}
+
+// Probe：只要 /api/health 通就连得上（web 服务的入口和 server 本身都行，不要求 GET / 是网页）；要不要升级看
+// /api/shell/latest，没有这个接口时看不带会话的 /api/me 回不回 426。
+func TestProbe(t *testing.T) {
+	latest, minVersion := true, "0.3.0"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/health":
+			io.WriteString(w, `{"status":"ok","version":"9.9.9"}`)
+		case "/api/shell/latest":
+			if !latest {
+				w.WriteHeader(http.StatusNotFound)
+				io.WriteString(w, `{"code":"not_found"}`)
+				return
+			}
+			io.WriteString(w, `{"min_version":"`+minVersion+`","latest_version":"0.3.1","download_url":""}`)
+		case "/api/me":
+			if r.Header.Get("Cookie") != "" {
+				t.Error("探测不该带会话")
+			}
+			if r.Header.Get("X-Client-Version") == "0.2.0" && minVersion == "0.3.0" {
+				w.WriteHeader(http.StatusUpgradeRequired)
+				io.WriteString(w, `{"code":"client_upgrade_required","message":"x","details":{"client_version":"0.2.0",`+
+					`"min_version":"0.3.0","latest_version":"0.3.2","download_url":"http://dl.example/Doclite.exe"}}`)
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"code":"unauthorized"}`)
+		default:
+			// server 本身：/api 以外一律 404。
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"code":"not_found"}`)
+		}
+	}))
+	defer srv.Close()
+	p := New("0.2.0", OpenJar(filepath.Join(t.TempDir(), "cookies.json"), ""), slog.New(slog.DiscardHandler))
+
+	res := p.Probe(context.Background(), srv.URL)
+	if !res.Reachable || !res.UpgradeRequired || *res.MinVersion != "0.3.0" || *res.LatestVersion != "0.3.1" ||
+		res.DownloadURL == nil || *res.DownloadURL != "http://dl.example/Doclite.exe" {
+		t.Fatalf("要升级（latest 里没给的下载地址用 426 的）：%+v", res)
+	}
+	latest = false
+	res = p.Probe(context.Background(), srv.URL)
+	if !res.Reachable || !res.UpgradeRequired || *res.LatestVersion != "0.3.2" {
+		t.Fatalf("没有 /api/shell/latest 时靠 /api/me 的 426 发现要升级：%+v", res)
+	}
+	minVersion = "0.1.0"
+	res = p.Probe(context.Background(), srv.URL)
+	if !res.Reachable || res.UpgradeRequired || res.Error != nil {
+		t.Fatalf("版本够、GET / 不是网页也算连得上：%+v", res)
 	}
 }

@@ -38,10 +38,12 @@ const session = useSessionStore()
 const project = useProjectStore()
 const router = useRouter()
 const inShell = shell.inShell
+/** 客户端有上传队列和热文件夹（客户端比网页旧、没有这项能力时提示升级客户端）。 */
+const queueAvailable = inShell && shell.has('upload')
 
 // ---------- 壳里 ----------
 
-const q = inShell
+const q = queueAvailable
   ? useUploadQueue({
       onAuthRequired: () => toast.warning('登录已失效，上传已暂停。重新登录后自动继续。', { id: 'upload-auth' }),
     })
@@ -66,7 +68,7 @@ const upgrade = computed(() => {
   if (!d) return null
   const s = (v: unknown) => (typeof v === 'string' && v ? v : null)
   return {
-    client: s(d.client_version) ?? shell.version,
+    client: s(d.client_version) ?? shell.clientVersion ?? '—',
     min: s(d.min_version),
     latest: s(d.latest_version),
     url: s(d.download_url),
@@ -160,7 +162,7 @@ onMounted(() => {
       <h1 class="text-base font-semibold tracking-tight text-foreground">扫描上传</h1>
       <span v-if="inShell" class="rounded-full bg-info-soft px-2 py-0.5 text-xs text-info">桌面客户端</span>
       <div class="flex-1" />
-      <ImageCachePanel v-if="inShell" compact />
+      <ImageCachePanel v-if="shell.has('images')" compact />
     </header>
 
     <div class="flex min-h-0 flex-1">
@@ -194,6 +196,14 @@ onMounted(() => {
               <DownloadIcon />下载桌面客户端
             </Button>
           </div>
+        </div>
+      </section>
+
+      <!-- ===== 壳里，但客户端没有上传队列（比网页旧） ===== -->
+      <section v-else-if="!queueAvailable" class="flex min-w-0 flex-1 items-start justify-center p-6">
+        <div class="mt-10 w-full max-w-xl rounded-lg bg-warn-soft px-4 py-3 text-sm" role="alert" data-testid="scan-client-old">
+          <div class="font-medium text-warn">这个版本的客户端没有上传队列和热文件夹</div>
+          <div class="mt-1 text-foreground/80">请升级桌面客户端（当前版本 <span class="font-mono">{{ shell.clientVersion ?? '—' }}</span>）。</div>
         </div>
       </section>
 

@@ -3,14 +3,14 @@
 // 分配——再用接口还原 3 个文件的全过程，最后在浏览器和壳里各打开 G4 TIFF 和 200 MB TIFF，记下耗时和内存。
 //
 //   INIT_ADMIN_PASSWORD=admin123456 SHOTS_TMP=<临时目录> \
-//   M2_ACCEPT_SHELL=<打包的壳>/Doclite.app/Contents/MacOS/Doclite M2_ACCEPT_SERVER=http://127.0.0.1:<server 端口> \
+//   M2_ACCEPT_SHELL=<打包的壳>/Doclite.app/Contents/MacOS/Doclite M2_ACCEPT_SERVER=http://127.0.0.1:<网页入口的端口> \
 //   M2_ACCEPT_SHELL_MOCK=1 \
 //     npm run screenshots -- --spec scripts/shots/m2-accept.mjs --base http://127.0.0.1:<devshell 端口> [--out <目录>]
 //
 // --base 指向 devshell（client/cmd/devshell，壳模式的两步要用；不跑壳模式时也可以是 vite preview）。
 // 壳的几步（M2_ACCEPT_SHELL）用打包的壳跑 `--smoke`：数据目录用 SHOTS_TMP 下的隔离目录（DOCLITE_DATA_DIR，另设隔离的
-// HOME），不碰 ~/Library/Application Support/Doclite，后台模式不抢焦点；服务器地址是 M2_ACCEPT_SERVER（默认同 --base
-// 的 origin；--base 是 devshell 时要另给 server 本身的地址）。没给 M2_ACCEPT_SHELL 时，壳的重扫改用接口模拟（带 content_sha256，同壳的
+// HOME），不碰 ~/Library/Application Support/Doclite，后台模式不抢焦点；服务器地址是 M2_ACCEPT_SERVER（客户端填的是
+// 网页的入口；默认同 --base 的 origin，vite 和 devshell 都可以当入口）。没给 M2_ACCEPT_SHELL 时，壳的重扫改用接口模拟（带 content_sha256，同壳的
 // 字段），壳的大图一步跳过。壳的 viewer 一步要求窗口看得见：被别的窗口挡住时这一步失败，记下来，不算这张截图失败。
 //
 // 演示数据（只能走一遍；再跑要换一个新的文件夹）：DEMO-A 下「M2 验收演示 <日期>」（M2_ACCEPT_FOLDER 指定名字，默认取

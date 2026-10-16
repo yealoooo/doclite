@@ -17,7 +17,7 @@ import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { isTauri } from '@/lib/client'
+import { shellHas } from '@/lib/client'
 import { formatBytes } from '@/lib/files'
 import {
   cacheClear,
@@ -37,7 +37,8 @@ const props = defineProps<{
 
 const GB = 1024 ** 3
 
-const inShell = isTauri()
+/** 客户端有本机图片缓存（能力 images）；浏览器里、旧客户端里都没有。 */
+const inShell = shellHas('images')
 const stats = ref<CacheStats | null>(null)
 const loadError = ref('')
 const loading = ref(false)

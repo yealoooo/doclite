@@ -1,11 +1,14 @@
 # Doclite 客户端的构建任务（wails3 build、wails3 package 会调用这里的 build、package）。
 #
-#   wails3 build          构建前端（web/）并编译 bin/Doclite
+#   wails3 build          取界面（web 的产物包）并编译 bin/Doclite
 #   wails3 package        打包成 bin/Doclite.app（ad-hoc 签名）
-#   wails3 task build:dev 开发版（不带 production 标签，能用 Safari 的网页检查器）；界面热更新：
-#                         先 cd ../web && npm run dev，再 FRONTEND_DEVSERVER_URL=http://localhost:5173 bin/Doclite
+#   wails3 task build:dev 开发版（不带 production 标签，能用 Safari 的网页检查器；可以接 vite 开发服务器热更新界面：
+#                         FRONTEND_DEVSERVER_URL=http://127.0.0.1:5173 bin/Doclite，见 README"桌面客户端"）
 #
-# 版本号只有 web/package.json 一个来源：编译时写进 main.version（X-Client-Version），打包时写进 Info.plist。
+# 界面随客户端打包（M7-6）：不依赖 web 的源码，只要 web 的产物包。WEB_VERSION 记要用的 web 版本，frontend 任务
+# （cmd/webartifact）按 DOCLITE_WEB_ARTIFACT（产物包的路径）取，没给就找 ../web/release/doclite-web-<WEB_VERSION>.tar.gz
+# （在 web/ 下 npm run release 生成），核对包里的版本后解到 frontend/dist，再 embed。找不到或版本不对时构建失败。
+# 客户端的版本号来源是 VERSION：编译时写进 main.version（X-Client-Version），打包时写进 Info.plist。
 # Windows 的构建和安装包在 M8（打包交付）做。
 version: '3'
 
@@ -14,17 +17,18 @@ vars:
   BIN_DIR: bin
   GOOS: '{{.GOOS | default OS}}'
   VERSION:
-    sh: node -p "require('../web/package.json').version"
+    sh: tr -d ' \n' < VERSION
 
 tasks:
   frontend:
-    summary: 构建 web/ 并复制到 frontend/dist（embed 进可执行文件）
-    run: once
+    summary: 取 web 的产物包（WEB_VERSION 指定的版本），解到 frontend/ 等着 embed
     cmds:
-      - cmd: test -d ../web/node_modules || (cd ../web && npm ci)
-      - cmd: cd ../web && npm run build
-      - rm -rf frontend/dist
-      - cp -R ../web/dist frontend/dist
+      - go run ./cmd/webartifact
+
+  frontend:optional:
+    summary: 开发构建用：有产物包就取，没有就不嵌入界面（接 vite 开发服务器）
+    cmds:
+      - go run ./cmd/webartifact -optional
 
   build:
     summary: 编译客户端
@@ -43,7 +47,7 @@ tasks:
 
   build:dev:
     summary: 编译开发版（可以打开网页检查器）
-    deps: [frontend]
+    deps: ["frontend:optional"]
     cmds:
       - mkdir -p {{.BIN_DIR}}
       - go build -buildvcs=false -ldflags="-X main.version={{.VERSION}}" -o {{.BIN_DIR}}/{{.APP_NAME}} .

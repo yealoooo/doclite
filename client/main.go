@@ -1,5 +1,8 @@
-// Doclite 桌面客户端（壳）。界面是 web/ 的构建产物（打包时复制到 frontend/dist 再 embed 进来）；
-// 壳负责会话代理、托盘、单实例，以后还有上传队列、热文件夹、本机图片缓存和大图切块（requirements 第 6 节）。
+// Doclite 桌面客户端（壳）。界面随客户端打包（M7-6）：web 的产物包按 WEB_VERSION 指定的版本嵌进来（Taskfile 的
+// frontend 任务用 cmd/webartifact 解到 frontend/）；配置的"服务器地址"是 web 服务的入口（也可以是 server 本身），
+// 客户端只经它访问 /api。连接服务器、连不上、需要升级几页是客户端自带的（internal/shellpages）。
+// 壳负责会话代理、托盘、单实例、上传队列、热文件夹、本机图片缓存和大图切块（requirements 第 6 节）。
+// 页面和壳之间的约定见 BRIDGE.md。
 //
 // 用法：
 //
@@ -30,10 +33,13 @@ import (
 	"doclite/client/internal/shell"
 )
 
-// version 是客户端版本，构建时用 -ldflags "-X main.version=…" 写入（和 web/package.json 的 version 相同，
-// 见 Taskfile.yml）。请求头 X-Client-Version 就是它，server 拿它和 MIN_CLIENT_VERSION 比较。
+// version 是客户端版本，构建时用 -ldflags "-X main.version=…" 写入（来源是 client/VERSION，见 Taskfile.yml）。
+// 请求头 X-Client-Version 就是它，server 拿它和 MIN_CLIENT_VERSION 比较。
 var version = "0.0.0-dev"
 
+// frontend 是嵌入的界面：frontend/dist 是 web 产物包里的 dist，frontend/manifest.json 是产物包的清单（版本）。
+// 两者都由打包前的 frontend 任务（cmd/webartifact）放进来，不提交；没有时（直接 go build、go run）只有 .gitkeep。
+//
 //go:embed all:frontend
 var frontend embed.FS
 
@@ -95,13 +101,16 @@ func run() int {
 			Timeout:  timeout,
 			Pages:    os.Getenv("DOCLITE_SMOKE_PAGES") == "1",
 		}
-		// 自检每次从头登录：用自己的设置，清空自己的会话。
-		settings.ServerURL = server
+		// 自检每次从头来：没有配置服务器地址（先走客户端自带的连接页，见 internal/shell/smoke.go），清空自己的会话。
+		settings.ServerURL = ""
 		if err := appdata.SaveSettings(dataDir, settings); err != nil {
 			return fatal(true, "写自检的设置失败："+err.Error())
 		}
 		os.Remove(appdata.CookiesPath(dataDir))
 	}
+
+	ui, webVersion := embeddedUI(log)
+	log.Info("客户端", "version", version, "web_version", webVersion)
 
 	jar := proxy.OpenJar(appdata.CookiesPath(dataDir), settings.ServerURL)
 	px := proxy.New(version, jar, log)
@@ -111,7 +120,8 @@ func run() int {
 		DataDir:      dataDir,
 		Smoke:        smokeOpts,
 		Background:   os.Getenv("DOCLITE_BACKGROUND") == "1",
-		Assets:       assets(log),
+		Assets:       ui,
+		WebVersion:   webVersion,
 		AppIcon:      appIcon,
 		TrayIcon:     trayIcon,
 		TrayTemplate: trayTemplate,
@@ -129,17 +139,27 @@ func run() int {
 	return code
 }
 
-// assets 是打包进来的界面；没有构建产物时（直接 go run、忘了构建前端）给一页说明。
-func assets(log *slog.Logger) fs.FS {
+// embeddedUI 返回嵌入的界面和它的版本；没有嵌入时（直接 go build、go run，没跑 frontend 任务）给一页说明。
+func embeddedUI(log *slog.Logger) (fs.FS, string) {
+	webVersion := ""
+	if data, err := frontend.ReadFile("frontend/manifest.json"); err == nil {
+		var m struct {
+			Version string `json:"version"`
+		}
+		if json.Unmarshal(data, &m) == nil {
+			webVersion = m.Version
+		}
+	}
 	dist, err := fs.Sub(frontend, "frontend/dist")
 	if err == nil {
 		if _, err = fs.Stat(dist, "index.html"); err == nil {
-			return dist
+			return dist, webVersion
 		}
 	}
-	log.Error("界面没有打包进来：client/frontend/dist/index.html 不存在，先运行 wails3 build")
+	log.Error("界面没有嵌进来：client/frontend/dist/index.html 不存在，打包要用 wails3 build 或 wails3 package")
 	return fstest.MapFS{"index.html": {Data: []byte(`<!doctype html><meta charset="utf-8"><title>Doclite</title>` +
-		`<p style="font:14px sans-serif;margin:2em">界面没有打包进这个客户端（client/frontend/dist 是空的）。请用 wails3 build 重新构建。</p>`)}}
+		`<p style="font:14px sans-serif;margin:2em">这个客户端没有嵌入界面（client/frontend/dist 是空的）。` +
+		`请用 wails3 build 或 wails3 package 重新构建（要先有 web 的产物包，见 README"桌面客户端"）。</p>`)}}, ""
 }
 
 // newLoggers 返回壳的日志和给 Wails 用的日志（同一个文件；Wails 的默认只记警告以上，debug 时全记）。

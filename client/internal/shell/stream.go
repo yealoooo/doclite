@@ -43,7 +43,7 @@ func (s *Shell) handleAPIStream(c *application.StreamConn) {
 	if err := s.proxy.Stream(ctx, first.Req, emit); err != nil {
 		var pe *proxy.Error
 		if !errors.As(err, &pe) {
-			pe = proxy.Internal(err.Error())
+			pe = proxy.InternalDetail("流式请求出错", err)
 		}
 		_ = c.SendJSON(proxy.StreamEvent{"event": "error", "kind": pe.Kind, "message": pe.Message})
 		return

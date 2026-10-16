@@ -6,14 +6,15 @@ import { onBeforeUnmount, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 
-import { isTauri } from '@/lib/client'
+import { shellHas } from '@/lib/client'
 import { listenQueueEvents } from '@/lib/scan-queue'
 import { useSessionStore } from '@/stores/session'
 
 const SCAN_PATH = '/scan'
 
 export function useTrayErrors() {
-  if (!isTauri()) return
+  // 客户端没有托盘的能力（比网页旧）时不订阅。
+  if (!shellHas('tray')) return
   const router = useRouter()
   const session = useSessionStore()
   let stop: (() => void) | null = null

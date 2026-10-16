@@ -96,10 +96,13 @@ async function submit() {
       </form>
 
       <p class="mt-6 text-center text-xs text-muted-foreground">忘记密码请联系系统管理员重置</p>
-      <!-- 壳里：显示连的是哪台服务器，可以修改。 -->
+      <!-- 壳里：显示连的是哪台服务器，可以修改（去客户端自带的修改地址页）。 -->
       <p v-if="shell.inShell" class="mt-2 text-center text-xs text-muted-foreground" data-testid="login-server">
-        服务器 <span class="font-mono">{{ shell.serverUrl }}</span> ·
-        <button type="button" class="text-info hover:underline" @click="shell.editServer()">修改</button>
+        服务器 <span class="font-mono">{{ shell.serverUrl }}</span>
+        <template v-if="shell.canEditServer">
+          ·
+          <button type="button" class="text-info hover:underline" @click="shell.editServer()">修改</button>
+        </template>
       </p>
     </div>
   </div>

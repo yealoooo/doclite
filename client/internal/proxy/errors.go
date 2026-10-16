@@ -10,6 +10,8 @@ type Error struct {
 	// internal（壳内部出错）、unsupported（这个版本的壳还没有这个功能）。
 	Kind    string `json:"kind"`
 	Message string `json:"message"`
+	// Detail 是只写进日志的细节（原始错误，可能带本机路径），不给页面。
+	Detail string `json:"-"`
 }
 
 func (e *Error) Error() string { return e.Kind + ": " + e.Message }
@@ -36,3 +38,12 @@ func Network(msg string) *Error { return &Error{Kind: KindNetwork, Message: msg}
 
 // Internal 是壳内部出错。
 func Internal(msg string) *Error { return &Error{Kind: KindInternal, Message: msg} }
+
+// InternalDetail 是壳内部出错：页面只看到一句概括，原始错误（可能带本机路径）只写进日志（Bridge.Invoke 记）。
+func InternalDetail(summary string, err error) *Error {
+	e := &Error{Kind: KindInternal, Message: summary + "（详情见客户端日志）"}
+	if err != nil {
+		e.Detail = err.Error()
+	}
+	return e
+}

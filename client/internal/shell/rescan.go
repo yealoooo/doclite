@@ -82,7 +82,7 @@ func (s *Shell) registerRescanCommands() {
 				ShowHiddenFiles(false).ResolvesAliases(true).AddFilter("图片（JPEG、PNG、TIFF）", imageFilter).
 				PromptForSingleSelection()
 			if err != nil {
-				return nil, proxy.Internal("打不开系统对话框：" + err.Error())
+				return nil, proxy.InternalDetail("打不开系统对话框", err)
 			}
 			path = p
 		}

@@ -18,7 +18,7 @@ import { deleteFolder, updateFolder } from '@/api/folders'
 import type { FileEntry, FileImageItem, FolderItem, MyProject, SubfolderEntry } from '@/api/types'
 import type { PickedFolder } from '@/components/files/FolderPicker.vue'
 import type { Selection } from '@/composables/useSelection'
-import { isTauri } from '@/lib/client'
+import { CLIENT_TOO_OLD, isShell, shellHas } from '@/lib/client'
 import { openExternal, shellErrorMessage } from '@/lib/shell'
 import { pickAndEnqueueUpload, type PickMode } from '@/lib/shell-upload'
 import { useImageInfoStore } from '@/stores/image-info'
@@ -403,7 +403,12 @@ export function useFileActions(opts: Options) {
       toast.error('原图地址不是 http 或 https，不能打开')
       return
     }
-    if (isTauri()) {
+    if (isShell()) {
+      // 壳里只能交给系统浏览器（能力 external）；客户端没有这项能力时提示升级。
+      if (!shellHas('external')) {
+        toast.error(CLIENT_TOO_OLD)
+        return
+      }
       try {
         await openExternal(parsed.href)
         toast.success('已在系统浏览器里打开原图', { description: '另存时的文件名是 v1.jpg 这样的形式。' })
@@ -422,8 +427,10 @@ export function useFileActions(opts: Options) {
     const p = opts.project()
     const cur = opts.folder()
     if (!p || !cur) return
-    if (isTauri()) {
-      void shellUpload(cur, mode)
+    if (isShell()) {
+      // 壳里只能用壳的上传队列（能力 upload；页面在壳里传不了二进制）；客户端没有这项能力时提示升级。
+      if (shellHas('upload')) void shellUpload(cur, mode)
+      else toast.error(CLIENT_TOO_OLD)
       return
     }
     if (!pickedFiles?.length) return

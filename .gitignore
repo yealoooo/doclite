@@ -3,6 +3,7 @@ server/bin/
 server/tmp/
 web/node_modules/
 web/dist/
+web/release/
 client/build/
 *.log
 .DS_Store

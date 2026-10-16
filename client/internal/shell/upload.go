@@ -100,7 +100,7 @@ func (s *Shell) observeUploads(req *proxy.Request, status int, _ []byte) {
 // queue 返回调度器；队列打不开时返回给页面的错误。
 func (u *uploadState) queue() (*upload.Engine, error) {
 	if u.engine == nil {
-		return nil, proxy.Internal("上传队列不可用：" + u.openErr)
+		return nil, proxy.InternalDetail("上传队列不可用", errors.New(u.openErr))
 	}
 	return u.engine, nil
 }
@@ -118,7 +118,7 @@ func shellError(err error) error {
 	case errors.As(err, &pe):
 		return pe
 	}
-	return proxy.Internal(err.Error())
+	return proxy.InternalDetail("上传队列出错", err)
 }
 
 func (s *Shell) registerUploadCommands() {
@@ -191,7 +191,7 @@ func (s *Shell) registerUploadCommands() {
 			// 自检的主流程：用复制好的样本代替系统对话框（smokeflow.go）。
 			paths = p
 		} else if paths, err = s.pickForUpload(a.Mode); err != nil {
-			return nil, proxy.Internal("打不开系统对话框：" + err.Error())
+			return nil, proxy.InternalDetail("打不开系统对话框", err)
 		}
 		res := PickResult{Added: []int64{}, Skipped: []upload.Skipped{}}
 		if len(paths) == 0 {

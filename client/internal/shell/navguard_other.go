@@ -4,6 +4,9 @@ package shell
 
 import "log/slog"
 
+// navGuardRequired：这个平台还没有导航保护（Windows 在 M8 做），装不上不关界面。
+const navGuardRequired = false
+
 // installNavigationGuard：Windows 上的导航保护在 M8（打包交付）做（Wails 没有公开 WebView2 的 NavigationStarting，
 // 要另想办法），这里只记一条日志。
 func installNavigationGuard(log *slog.Logger) bool {

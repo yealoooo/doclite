@@ -2,7 +2,6 @@ package shell
 
 import (
 	"context"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,15 +9,12 @@ import (
 
 	"doclite/client/internal/imagecache"
 	"doclite/client/internal/proxy"
-	"doclite/client/internal/webcsp"
 )
 
 // 取图协议、本机图片缓存、大图切块（M6-3，实现在 internal/imagecache、internal/tiles）在壳里的接线：
-//   - 取图挂在资产服务器上（imagecache.Prefix，和页面同源），在 spaHandler 之前处理（spaHandler 会把没有扩展名的
-//     路径回退到 index.html）；
+//   - 取图挂在资产服务器上（imagecache.Prefix，和页面同源，见 assets.go）；
 //   - 会话代理的每个响应交给缓存记来源（batch、snapshots；登录、退出、换服务器清空）；
-//   - 命令 cache_stats、cache_clear、cache_set_limit、prepare_tiles；
-//   - 页面的 CSP（internal/webcsp，截图脚本的开发服务器 cmd/devshell 用同一份）。
+//   - 命令 cache_stats、cache_clear、cache_set_limit、prepare_tiles。
 
 // registerImageCommands 打开缓存、接上会话代理，登记缓存和切块的命令（registerCommands 最后调用）。
 func (s *Shell) registerImageCommands() {
@@ -67,21 +63,6 @@ func (s *Shell) registerImageCommands() {
 			return nil, proxy.InvalidRequest("这张图不在客户端的来源记录里（图片信息要先经 batch 或 snapshots 接口取得）")
 		}
 		return res, nil
-	})
-}
-
-// withImages 包住界面的资产处理器：取图地址交给缓存；其余的响应加上 CSP（开发时不加）。
-func (s *Shell) withImages(next http.Handler) http.Handler {
-	dev := os.Getenv("FRONTEND_DEVSERVER_URL") != ""
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, imagecache.Prefix) {
-			s.images.ServeHTTP(w, r)
-			return
-		}
-		if !dev {
-			w.Header().Set("Content-Security-Policy", webcsp.Policy)
-		}
-		next.ServeHTTP(w, r)
 	})
 }
 

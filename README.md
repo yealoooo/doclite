@@ -44,15 +44,16 @@
    ```
 
    浏览器打开 <http://127.0.0.1:4173>。server 不在 9080 时用 `DOCLITE_SERVER=http://127.0.0.1:<端口> npm run preview`；换端口 `npm run preview -- --port <端口>`；让局域网里别的电脑也能打开加 `-- --host`（监听所有地址；经局域网地址打开是非安全上下文）。改前端时用 `npm run dev`（<http://127.0.0.1:5173>，热更新，不用 build），代理一样。
-4. **桌面客户端**：
+4. **桌面客户端**（界面随客户端打包：先把 web 打成产物包，客户端打包时嵌进去）：
 
    ```sh
-   cd client
-   ~/go/bin/wails3 package     # 顺带重新构建 web/，产物 client/bin/Doclite.app
+   cd web && npm run release            # web/release/doclite-web-<版本>.tar.gz（先 build 再打包）
+   cd ../client
+   ~/go/bin/wails3 package              # 取 WEB_VERSION 指定版本的产物包嵌进去，产物 client/bin/Doclite.app
    open bin/Doclite.app
    ```
 
-   第一次启动填服务器地址 `http://127.0.0.1:9080`。关窗口只是缩到托盘（菜单栏图标），托盘里"退出"才真的退出；再次打开会回到已经开着的那个窗口。客户端的设置、上传队列、图片缓存在 `~/Library/Application Support/Doclite/`。
+   第一次启动填服务器地址：`http://127.0.0.1:4173`（上一步的网页地址，和浏览器用的同一个；直接填 server 的 `http://127.0.0.1:9080` 也行，客户端只经它访问 `/api`）。界面是打包时嵌进去的那一版：改了 web 要重新 `npm run release`、`wails3 package`。关窗口只是缩到托盘（菜单栏图标），托盘里"退出"才真的退出；再次打开会回到已经开着的那个窗口。客户端的设置、会话、上传队列、图片缓存在 `~/Library/Application Support/Doclite/`。
 
 **账号**：`admin` / `admin123456`（系统管理员，什么都能做）；演示账号的密码都是 `demo123456`，常用的有 `demo_scanner`（扫描上传、重扫）、`demo_manager`（审核分配、看板、导出）、`demo_reviewer`（审核）、`demo_cataloger`（归类），全部见[演示账号](#演示账号)。同一个人可以在浏览器和客户端各登录一次。
 
@@ -172,12 +173,13 @@ npm run seed:files -- --base http://127.0.0.1:9080 --user demo_scanner:demo12345
 - `m4-export`：server 要在执行导出（见[后台任务](#后台任务导出存储迁移)）。
 - `m7-storage-migrate`：server 要在执行后台任务（迁移在它里面执行）；要有第二个桶 `doclite-migrate-test`（`echo 's3.bucket.create -name doclite-migrate-test' | weed shell -master=127.0.0.1:9333`）。脚本自己起一个转发到 SeaweedFS 的慢速代理当"源"存储的 server 地址（让迁移持续几秒），每跑一次在 DEMO-A 的「M7-2 迁移演示」下传一批文件，迁到「M7-2 迁移演示·目标」，跑完"源"迁空并停用。
 - 壳的部分（`m1-shell`、`m1-scan`、`m1-cache` 和 `m1-organize`、`m2-rescan`、`m2-viewer`、`m2-review`、`m2-accept` 里名字带 `shell` 的几张）：`--base` 要指向 **devshell**（见下面）。这几张用 `http://wails.localhost:<端口>` 打开页面（`lib/client.ts` 的 `isShell()` 认 Windows 上 WebView2 的这个地址，Chrome 把 `*.localhost` 解析到本机），在页面脚本运行前注入 Wails 桥的模拟（`scripts/lib/wails-mock.mjs`：拦下 `/wails/runtime` 的命令调用、`_wails.dispatchWailsEvent` 推事件、`_wails.streamFactory` 给实时通道），正式前端代码不改。
-- `m2-accept`：`M2_ACCEPT_SHELL_MOCK=1` 时壳模式审核那两步用上面的模拟（否则改在浏览器里做）；`M2_ACCEPT_SHELL=client/bin/Doclite.app/Contents/MacOS/Doclite`、`M2_ACCEPT_SERVER=<server 本身的地址>` 时壳重扫、壳的大图两步跑打包的客户端 `--smoke`（隔离的数据目录、后台模式），不设时壳重扫改用接口模拟。`m3-accept` 的 `M3_ACCEPT_SHELL` 同理。
+- `m2-accept`：`M2_ACCEPT_SHELL_MOCK=1` 时壳模式审核那两步用上面的模拟（否则改在浏览器里做）；`M2_ACCEPT_SHELL=client/bin/Doclite.app/Contents/MacOS/Doclite`、`M2_ACCEPT_SERVER=<网页的入口>`（vite 的地址；不设时用 `--base`）时壳重扫、壳的大图两步跑打包的客户端 `--smoke`（隔离的数据目录、后台模式），不设时壳重扫改用接口模拟。`m3-accept` 的 `M3_ACCEPT_SHELL` 同理。
 
-**devshell**（`client/cmd/devshell`，截图脚本的开发服务器，不打包）：一个端口上托管 `web/dist`、把 `/api/` 转给 server、用客户端的 Go 代码（`internal/imagecache`、`internal/tiles`，和打包的客户端同一份）回答取图地址 `/shell/img/…`（下载、本机缓存、切块）；壳模式的地址和客户端一样加 CSP。浏览器的那些截图也可以照常经它跑。
+**devshell**（`client/cmd/devshell`，截图脚本的开发服务器，不打包）：一个端口上做打包的客户端的资产服务器做的事，只是界面从 `-web` 指定的 web 入口（vite dev 或 preview）现取（截图测的是 web 的源码，不是嵌入的产物包）——`/shell/` 是客户端自带的页面（`internal/shellpages`）、`/wails/runtime.js` 是 Wails 的运行时、`/api/` 转给 web 入口（它再转给 server）、取图地址 `/shell/img/…` 用客户端的 Go 代码（`internal/imagecache`、`internal/tiles`）现场下载、缓存、切块；壳模式的地址和客户端一样加 CSP。桥（命令、事件、流）由截图脚本在页面里模拟。浏览器的那些截图也可以照常经它跑。
 
 ```sh
-cd client && go run ./cmd/devshell -server http://127.0.0.1:9080 -listen 127.0.0.1:24173 -cache <临时目录>
+cd web && DOCLITE_SERVER=http://127.0.0.1:9080 npm run dev                 # 网页入口 5173（或 build + preview 4173）
+cd client && go run ./cmd/devshell -web http://127.0.0.1:5173 -listen 127.0.0.1:24173 -cache <临时目录>
 cd web && INIT_ADMIN_PASSWORD=<管理员密码> npm run screenshots -- --spec scripts/shots/m1-scan.mjs --base http://127.0.0.1:24173
 ```
 
@@ -185,23 +187,41 @@ cd web && INIT_ADMIN_PASSWORD=<管理员密码> npm run screenshots -- --spec sc
 
 Wails v3（命令行工具 `wails3`，`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.29`）。目前只有 Mac 的构建；Windows 的构建和安装包在 M8（打包交付）做。
 
+**界面随客户端打包，版本跟客户端走**（M7-6，参照 Element：网页版和桌面版共用界面，桌面版打包指定版本的网页产物）。客户端不依赖 web 的源码，只要 web 的产物包：
+
 ```sh
-cd client && wails3 package     # 构建 web/、编译、打包成 client/bin/Doclite.app（ad-hoc 签名）
-open client/bin/Doclite.app     # 首次启动填服务器地址
+cd web && npm run release        # 构建并打包：web/release/doclite-web-<package.json 的版本>.tar.gz（manifest.json + dist/）
+cd client && wails3 package      # 打包成 client/bin/Doclite.app（ad-hoc 签名）
 ```
 
-开发版（能开网页检查器）：`wails3 task build:dev`；界面热更新先 `cd web && npm run dev`，再 `FRONTEND_DEVSERVER_URL=http://localhost:5173 client/bin/Doclite`。
+- `client/WEB_VERSION` 记要嵌入的 web 版本。打包（`wails3 build`、`wails3 package`）前的 frontend 任务（`client/cmd/webartifact`）按 `DOCLITE_WEB_ARTIFACT`（产物包的路径）取，没给就找 `../web/release/doclite-web-<WEB_VERSION>.tar.gz`；核对包里清单的版本和 `WEB_VERSION` 一致后解到 `client/frontend/`（不提交），再 embed 进可执行文件。找不到产物包或版本不对时构建失败并说明怎么办。别处构建好的产物包：`DOCLITE_WEB_ARTIFACT=/path/doclite-web-0.1.0.tar.gz wails3 package`（不需要 `web/` 目录）。以后拆仓库，改成从发布地址下载这个包；
+- 升级界面：改 `web/package.json` 的版本、`npm run release`，改 `client/WEB_VERSION`，重新打包客户端。客户端的版本号在 `client/VERSION`（`X-Client-Version`，server 的 `MIN_CLIENT_VERSION` 和它比），"关于"里同时显示客户端版本和界面版本；
+- 客户端里的"服务器地址"是 **web 服务的入口**（和浏览器用的同一个地址：部署时是 web 的 nginx 容器，本机是 vite 的 4173 或 5173），直接填 server 本身的地址也行——客户端只经它访问 `/api`（探测只要 `GET /api/health` 通）。已经配置过地址、再改成别的地址时，客户端弹系统确认框；
+- 连接服务器、连不上、需要升级几页是客户端自带的（`client/internal/shellpages`）；
+- 界面和客户端之间的约定（桥的命令、事件、能力、白名单、地址、信任边界）只有一份：[`client/BRIDGE.md`](client/BRIDGE.md)。
+
+**开发时**：界面热更新用开发构建接 vite（只在开发构建里；正式构建只用嵌入的产物）：
+
+```sh
+cd web && DOCLITE_SERVER=http://127.0.0.1:9080 npm run dev          # http://127.0.0.1:5173
+cd client && wails3 task build:dev                                  # 开发版：有产物包就嵌入，没有也能编译
+FRONTEND_DEVSERVER_URL=http://127.0.0.1:5173 bin/Doclite            # 界面由 vite 给（热更新），Safari 能开网页检查器
+```
+
+客户端的服务器地址照样填（vite 的 5173 或 server 的 9080 都行）。不想动自己的设置时加 `DOCLITE_DATA_DIR=<临时目录>`。
 
 **自检 `--smoke`**（参数从环境变量读；结果是标准输出的一行 JSON；退出码 0 成功、1 失败、2 连不上、3 需要升级）：
 
 ```sh
-DOCLITE_SMOKE_SERVER=http://127.0.0.1:9080 DOCLITE_SMOKE_USERNAME=demo_scanner DOCLITE_SMOKE_PASSWORD=demo123456 \
+DOCLITE_SMOKE_SERVER=http://127.0.0.1:4173 DOCLITE_SMOKE_USERNAME=demo_scanner DOCLITE_SMOKE_PASSWORD=demo123456 \
 DOCLITE_BACKGROUND=1 client/bin/Doclite.app/Contents/MacOS/Doclite --smoke
 ```
 
+自检分三段：① 客户端自带的页面（壳操作 `/shell/`）：`shell_page` 还没配置地址时出现连接页、填连不上的地址提示连不上且不保存；`shell_unreachable` 配置成连不上的地址时出现"连不上"页、重试、改地址；`shell_connect` 填 `DOCLITE_SMOKE_SERVER` 进到嵌入的界面。② 界面里的各步（probe、login……csp，同以前）。③ 换地址：`shell_edit` 界面跳到客户端的修改地址页；`change_server` 换到壳另起的一个转发到 `DOCLITE_SMOKE_SERVER` 的地址，会话清空，接口请求走新地址（自检里不弹确认框）。
+
 | 变量 | 说明 |
 |---|---|
-| `DOCLITE_SMOKE_SERVER`、`DOCLITE_SMOKE_USERNAME`、`DOCLITE_SMOKE_PASSWORD` | 服务器和账号（账号至少能进一个项目） |
+| `DOCLITE_SMOKE_SERVER`、`DOCLITE_SMOKE_USERNAME`、`DOCLITE_SMOKE_PASSWORD` | 服务器地址（web 的入口或 server 本身）和账号（账号至少能进一个项目） |
 | `DOCLITE_SMOKE_TIMEOUT_SECS` | 整个自检的时限，默认 120（加上 pages 和主流程要 300 以上） |
 | `DOCLITE_SMOKE_PAGES=1` | 另外逐个打开菜单里的页面 |
 | `DOCLITE_SMOKE_RESCAN_PATH`、`_FILE_ID`、`_PROJECT`、`_EXPECT` | 设了 PATH 才跑 rescan 一步：用这个本机文件重扫（不设 FILE_ID 取待重扫列表第一个；EXPECT 是 `done` 或 `incomplete`）。重扫件的内容在项目里不能重复 |
