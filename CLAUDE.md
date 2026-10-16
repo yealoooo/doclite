@@ -27,7 +27,7 @@
   - 新加依赖要纯 Go（不要 cgo）、许可证宽松；在任务返回里列出来。
 - **数据库**：生产 PostgreSQL 18，开发用远程服务器上的 18.6（见"开发环境"），只用 16 也有的特性（主键由应用生成 UUIDv7）。
 - **存储**：只支持 S3 兼容存储，默认 SeaweedFS。
-- **web**：Vue 3 + Vite + TypeScript + Tailwind 4 + shadcn-vue（reka-ui）+ Pinia + vue-router，npm。**从上一版原样复制过来**（`web/`），接口不变所以基本不用改；只有和桌面客户端打交道的部分（原来调 Tauri）在做客户端时改成调 Wails。本机单独启动（vite dev 或 preview，把 `/api` 代理给 server），部署时是单独的 nginx 容器（M8）。
+- **web**：Vue 3 + Vite + TypeScript + Tailwind 4 + shadcn-vue（reka-ui）+ Pinia + vue-router，npm。**从上一版原样复制过来**（`web/`），接口不变所以基本不用改；只有和桌面客户端打交道的部分（原来调 Tauri）在做客户端时改成调 Wails。本机单独启动（vite dev 或 preview，把 `/api` 代理给 server），只在改界面、跑截图脚本时用；交付不提供网页服务，web 编成产物包嵌进客户端。
 - **client**：Wails v3。界面随客户端打包、版本跟客户端走（M7-6）：web 打出带版本号的产物包（`npm run release`），客户端按 `client/WEB_VERSION` 取产物包嵌进去，不依赖 web 源码；客户端的"服务器地址"是 server 的接口地址（本地 `http://127.0.0.1:9080`），客户端不依赖网页服务。连接服务器、连不上、需要升级几页是客户端自带的。上传队列、热文件夹、本机图片缓存、大图切块、托盘用 Go 写。
 - **交付**：只有客户端（Windows 安装包，界面在客户端里），**不提供网页服务和浏览器访问**（用户 2026-10-17）。服务器上用 Docker 跑 server、PostgreSQL、SeaweedFS（可选 portainer），客户是 Windows 服务器上的 WSL2 + Docker，内网离线。打包交付（M8）暂缓，现在只做编译、运行、验证功能；本地验证不用打包（`wails3 task build` 后直接运行）。开发机的 Docker 只用来跑本机 S3（`server/dev/compose.yml`），不做镜像构建。
 
