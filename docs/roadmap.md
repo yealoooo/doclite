@@ -281,6 +281,17 @@
 - **修了什么：** 前端、客户端、服务端没发现 bug；脚本：`m7-audit` 的迁移假数据改成实际格式、多个脚本另存截图改为跟 `--out` 走、`m2-accept` G4 默认名改为 `a4-g4-1bit.tif`；"Windows 在 M7"改为 M8；README 开头加"本机试用"、测试个数、后台任务一节改名"导出、存储迁移"。
 - **遗留：** doclite_dev 有三个「M2 验收演示 …」（不带后缀、M6-4、M7-4，各有一页驳回的「盒 04/IMG_0003」），「客户端自检」下多个自检文件夹；`doclite_test` 下 12 个没人连的 `doclite_test_<随机>` 克隆库可手工删；许可证页"当前在线"可能超过席位数（admin 不受限），可加一句说明；devshell 页面取消请求时记 WARN；seed:demo 不建 `demo_reviewer2`。M8：Windows 验证项、正式公钥写进构建脚本、`wails3` 不在 PATH（用 `~/go/bin/wails3`）。
 
+### [~] M7-5 去掉 shared，按模块归位
+**用户决定（2026-10-16）：** 不要 server 和 client 共用的 `shared/` 模块，代码按模块归位，为以后拆仓库做准备。
+- **范围：** `shared/archiveno` → 服务端归类模块；`shared/names` → 服务端 `platform/`；`shared/imagehdr` → 服务端、客户端各一份（上传拒收以服务端为准，客户端的检查只是提前提示）；删掉 `shared/`、`go.work`、`go.work.sum`，server 和 client 各自独立编译、能 `go mod tidy`；更新 CLAUDE.md、README。
+- **完成标志：** 三项检查和全部测试通过；`wails3 package`、`--smoke` 一遍。
+
+### [~] M7-6 客户端界面跟服务端走
+**用户决定（2026-10-16）：** 改掉 2026-09-27 的"界面打包进客户端"（requirements 第 1 节）。
+- **范围：** 客户端的资产服务器把页面请求同源转发给已配置的 server（server 托管的 web），本机缓存（带哈希的静态文件长期缓存，`index.html` 每次启动重新取、取不到用缓存）；打包进客户端的只剩首次连接、连不上、需要升级几页；桥按能力协商（页面用 `shell_info` 的能力决定显示哪些本机功能），客户端旧、页面新时不报错；CSP、导航保护、`/api/` 代理规则照旧。截图脚本、devshell、自检相应调整。
+- **完成标志：** 自检 cold、warm 全过（含首次连接、连不上、换服务器、server 升级网页后客户端不重装就看到新页面）；壳模式截图脚本全过；一轮独立审查（信任边界）。
+- **前置：** 和 M7-5 并行，后合并的 rebase。
+
 ## M8 打包交付（暂缓，等用户验证后再定）
 
 原上一版的 M5：Docker 镜像和 compose、install.ps1、backup.ps1（封面必须备份）、离线交付包、客户端自动更新、export-tree、SeaweedFS 4.45 复验、在用户的 Windows 上远程验收。requirements 第 11 节记了建议做法。
