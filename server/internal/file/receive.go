@@ -211,7 +211,8 @@ func (s *Service) Receive(r *http.Request) (*Upload, error) {
 		return nil, httpx.NewError(http.StatusBadRequest, CodeChecksumMismatch,
 			"收到的文件和 content_sha256 对不上（传输中损坏或文件在上传时被改动），请重传")
 	}
-	info, err := imagehdr.Parse(u.tmp, u.Size, s.opts.MaxImagePixels)
+	// ParseUpload：另外拒绝导出 PDF 做不了的罕见编码（算术编码的 JPEG、JPEG 2000 压缩的 TIFF……），扫描员当场知道。
+	info, err := imagehdr.ParseUpload(u.tmp, u.Size, s.opts.MaxImagePixels)
 	if err != nil {
 		return nil, imageError(err)
 	}
@@ -293,7 +294,7 @@ func imageError(err error) error {
 		return httpx.NewError(http.StatusUnsupportedMediaType, httpx.CodeUnsupportedMedia, err.Error()+"：只收 JPEG、PNG、TIFF")
 	case errors.Is(err, imagehdr.ErrMultiPage):
 		return httpx.NewError(http.StatusBadRequest, CodeInvalidImage, err.Error()+"：不收多页 TIFF，请先拆成单页再上传")
-	case errors.Is(err, imagehdr.ErrInvalid), errors.Is(err, imagehdr.ErrTooLarge):
+	case errors.Is(err, imagehdr.ErrInvalid), errors.Is(err, imagehdr.ErrTooLarge), errors.Is(err, imagehdr.ErrUnsupportedEncoding):
 		return httpx.NewError(http.StatusBadRequest, CodeInvalidImage, err.Error())
 	}
 	return err

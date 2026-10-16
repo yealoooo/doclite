@@ -1,7 +1,8 @@
 // Package imagehdr 读 JPEG、PNG、TIFF 的文件头，不解码像素（requirements 5.6"文件头"，硬性规则 11）。
 //
 // server 上传时用它读格式、宽高、DPI、颜色模式、方向，并拒绝多页 TIFF 和超过像素上限的图；桌面客户端生成封面前
-// 也用它读方向，所以两边对同一个文件得出的方向一定一致。
+// 也用它读方向，所以两边对同一个文件得出的方向一定一致。上传（server 和客户端上传前的检查）用 [ParseUpload]，另外
+// 拒绝导出 PDF 做不了的罕见编码（M7-3，encoding.go）。
 //
 // 规则：
 //   - 格式按文件开头的魔数识别（不看扩展名）：JPEG `FF D8 FF`，PNG 8 字节签名，经典 TIFF `II*\0` / `MM\0*`。
@@ -125,9 +126,12 @@ var (
 	ErrMultiPage = errors.New("多页 TIFF")
 	// ErrTooLarge：宽高超出 int32、像素总数超过上限（400 invalid_image）。
 	ErrTooLarge = errors.New("图片尺寸超过上限")
+	// ErrUnsupportedEncoding：格式认得，但编码方式导出 PDF 时既不能原样嵌入、也转换不了（算术编码的 JPEG、
+	// JPEG 2000 压缩的 TIFF……，见 encoding.go）。只有 [ParseUpload] 返回它（400 invalid_image，提示换个保存格式重扫）。
+	ErrUnsupportedEncoding = errors.New("不支持的图片编码")
 )
 
-// Error 是 [Parse] 返回的分类错误。Kind 是上面四个之一。
+// Error 是 [Parse]、[ParseUpload] 返回的分类错误。Kind 是上面的错误之一。
 type Error struct {
 	Kind error
 	Msg  string
@@ -156,13 +160,33 @@ func isHeaderErr(err error) bool {
 // 用 io.ReaderAt 是因为 TIFF 的 IFD 可以在文件任何位置（很多扫描软件写在文件末尾），按偏移读才能不读整个文件。
 // 上传时的临时文件（*os.File）、内存里的字节（bytes.Reader）都直接可用。
 func Parse(r io.ReaderAt, size int64, maxPixels int64) (Info, error) {
-	s, err := newSource(r, size)
+	info, _, err := parse(r, size, maxPixels)
+	return info, err
+}
+
+// ParseUpload 是上传时用的 [Parse]：另外拒绝导出 PDF 时做不了的罕见编码（[ErrUnsupportedEncoding]，规则见
+// encoding.go）。server 的上传、重扫和桌面客户端上传前的检查都用它，两边对同一个文件的结论一致。
+//
+// 已经入库的文件不受影响：看图、生成封面、导出仍用 [Parse]。
+func ParseUpload(r io.ReaderAt, size int64, maxPixels int64) (Info, error) {
+	info, h, err := parse(r, size, maxPixels)
 	if err != nil {
 		return Info{}, err
 	}
+	if err := checkEncoding(h); err != nil {
+		return Info{}, err
+	}
+	return info, nil
+}
+
+func parse(r io.ReaderAt, size int64, maxPixels int64) (Info, *header, error) {
+	s, err := newSource(r, size)
+	if err != nil {
+		return Info{}, nil, err
+	}
 	format, err := detect(s)
 	if err != nil {
-		return Info{}, err
+		return Info{}, nil, err
 	}
 	var h header
 	switch format {
@@ -176,12 +200,16 @@ func Parse(r io.ReaderAt, size int64, maxPixels int64) (Info, error) {
 	if err != nil {
 		var e *Error
 		if errors.As(err, &e) && e.Kind == ErrInvalid {
-			return Info{}, invalidf("%s 文件头读不出来：%s", format.label(), e.Msg)
+			return Info{}, nil, invalidf("%s 文件头读不出来：%s", format.label(), e.Msg)
 		}
-		return Info{}, err
+		return Info{}, nil, err
 	}
 	h.format = format
-	return judge(h, maxPixels)
+	info, err := judge(h, maxPixels)
+	if err != nil {
+		return Info{}, nil, err
+	}
+	return info, &h, nil
 }
 
 // header 是各格式读出的原始值，由 judge 按规则判定。
@@ -194,6 +222,12 @@ type header struct {
 	orientation   int  // 文件里写的方向；0 表示没写
 	dpi           int  // 已按格式的规则换算好；0 表示未知
 	multiPage     bool // TIFF 第一个 IFD 之后还有不是缩略图的 IFD
+
+	// 给 [ParseUpload] 查编码方式用的：JPEG 的 SOF 标记和分量数（不限于 1、3、4），TIFF 的结构和第一个 IFD。
+	sof   byte
+	comps int
+	tiff  *tiffBlock
+	ifd0  ifd
 }
 
 func judge(h header, maxPixels int64) (Info, error) {

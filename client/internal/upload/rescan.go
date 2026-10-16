@@ -15,7 +15,8 @@ import (
 // 一次，其余错误不重试（交给页面写成提示，web/src/lib/rescan.ts）。同时只做一个（由调用方保证）。
 //
 // 选的文件不合格时不发请求（重扫会把"已驳回"消耗掉，不能撤回），返回 [UserError]：扩展名不对、文件尾不完整、
-// 读不了、算 sha 前后大小或修改时间变了。提示文字和页面的一样（lib/rescan.ts 的 MSG_INCOMPLETE、MSG_EXTENSION）。
+// 编码方式导出不了（encoding.go，提示和 server 一样）、读不了、算 sha 前后大小或修改时间变了。提示文字和页面的一样
+// （lib/rescan.ts 的 MSG_INCOMPLETE、MSG_EXTENSION）。
 
 // 给页面的提示（和 web/src/lib/rescan.ts 一样）。
 const (
@@ -91,6 +92,9 @@ func (c *Client) Rescan(ctx context.Context, server, fileID, path string, progre
 	}
 	if !complete {
 		return nil, &UserError{MsgIncomplete}
+	}
+	if msg := UnsupportedEncoding(path, size); msg != "" {
+		return nil, &UserError{msg}
 	}
 	sha, err := hashFile(path, size)
 	if err != nil {

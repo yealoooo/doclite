@@ -346,6 +346,7 @@ func readTIFF(s *source) (header, error) {
 	if h.multiPage, err = t.hasMorePages(d); err != nil {
 		return header{}, err
 	}
+	h.tiff, h.ifd0 = t, d
 	return h, nil
 }
 

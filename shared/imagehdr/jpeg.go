@@ -95,6 +95,8 @@ func readJPEG(s *source) (header, error) {
 				height: uint32(be.Uint16(p[1:3])),
 				width:  uint32(be.Uint16(p[3:5])),
 				dpi:    jfifDPI,
+				sof:    marker,
+				comps:  int(p[5]),
 			}
 			// 分量数：1 灰度，3 YCbCr / RGB，4 CMYK / YCCK；其他少见的值颜色模式留空。
 			if c := int(p[5]); c == 1 || c == 3 || c == 4 {

@@ -1398,3 +1398,35 @@ export interface LicenseState {
   imported_at: string | null
   imported_by: string | null
 }
+
+// ---------- 审计日志（M7-3） ----------
+
+/** `GET /api/system/audit-logs` 的一条：操作人、项目是当前的名字；操作人为空表示系统写的（初始管理员、初始存储）。 */
+export interface AuditLog {
+  id: number
+  created_at: string
+  operator_id: string | null
+  operator_name: string | null
+  operator_username: string | null
+  project_id: string | null
+  project_code: string | null
+  project_name: string | null
+  /** user、role、project、storage_profile、folder、archive_category、archive_item、export_task……（以后还会加）。 */
+  target_type: string
+  target_id: string
+  action: string
+  /** 一般是 `{before, after}`（只放变了的字段），另有各动作自己的键。 */
+  detail: Record<string, unknown>
+}
+
+/** `GET /api/system/audit-logs`：按 id 倒序，`next_cursor` 原样传回取下一页，没有下一页时为 null。 */
+export interface AuditLogList {
+  items: AuditLog[]
+  next_cursor: string | null
+}
+
+/** `GET /api/system/audit-logs/filter-options`：全部用户（含停用的）、全部项目（含已删除的）。 */
+export interface AuditFilterOptions {
+  users: { id: string; username: string; display_name: string; status: 'active' | 'disabled' }[]
+  projects: { id: string; project_code: string; project_name: string; deleted: boolean }[]
+}

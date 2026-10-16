@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"doclite/server/internal/audit"
 	"doclite/server/internal/auth"
 	"doclite/server/internal/catalog"
 	"doclite/server/internal/config"
@@ -128,6 +129,7 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	review.NewHandler(reviewSvc).Routes(api, gate)
 	export.NewHandler(exportSvc).Routes(api, gate)
 	license.NewHandler(licenseSvc).Routes(api, gate)
+	audit.NewHandler(audit.NewService(pool)).Routes(api, gate)
 
 	// /api 的最外层是客户端版本检查（先于鉴权）；/api 以外是网页。
 	apiHandler := auth.ClientVersionCheck(opts.ClientVersions)(api)

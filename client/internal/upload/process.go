@@ -16,8 +16,9 @@ import (
 	"time"
 )
 
-// 每个文件（requirements 第 6 节"每个文件"）：核对大小和修改时间 → 算 sha → 取或建文件夹 → 预检 `files:check`
-// → 生成封面（生成不了就不带）→ 流式上传（file_name、content_sha256、cover?、file）。本地文件不改不删。
+// 每个文件（requirements 第 6 节"每个文件"）：核对大小和修改时间 → 查编码方式（encoding.go，导出不了的不发请求）
+// → 算 sha → 取或建文件夹 → 预检 `files:check` → 生成封面（生成不了就不带）→ 流式上传（file_name、content_sha256、
+// cover?、file）。本地文件不改不删。
 //
 // 失败的分类：400、403、413、415 永久失败；网络错误、5xx、408、429、别的 409 临时失败（自动重试，1 秒起翻倍，封顶
 // 5 分钟）；401、426 暂停整个队列（这一项放回排队，不算重试）；403 `license_expired`、`license_missing`（M7-1：许可证
@@ -183,6 +184,9 @@ func (e *Engine) run(ctx context.Context, it *Item) *result {
 		return &result{kind: resRequeue}
 	}
 	if r := e.verifyLocal(it); r != nil {
+		return r
+	}
+	if r := checkEncoding(it); r != nil {
 		return r
 	}
 	sha, err := hashFile(it.LocalPath, it.Size)
