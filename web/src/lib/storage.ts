@@ -2,7 +2,14 @@
 // 预判只是为了把按钮提前禁用并说明原因，后端仍会检查（违反时返回 409）。
 
 import { isApiError } from '@/api/http'
-import type { ConnectionTestResultCode, PublicEndpointCheck, StorageProfileItem, StorageStatus } from '@/api/types'
+import type {
+  ConnectionTestResultCode,
+  PublicEndpointCheck,
+  StorageMigration,
+  StorageMigrationFailureCode,
+  StorageProfileItem,
+  StorageStatus,
+} from '@/api/types'
 
 import { charCount } from './validate'
 
@@ -32,6 +39,7 @@ const CONFLICT_TITLE: Record<string, string> = {
   storage_not_active: '只有可读写（启用）的存储才能设为默认',
   storage_is_default: '默认存储不能这样操作',
   storage_in_use: '存储还在使用中',
+  invalid_state: '存储正在迁移中',
 }
 
 /** 状态规则的 409 错误的中文标题；不是这类错误时返回 null。 */
@@ -45,6 +53,7 @@ export function conflictTitle(err: unknown): string | null {
 /** 设为默认不能做的原因；可以做时为 null。 */
 export function setDefaultBlock(p: StorageProfileItem): string | null {
   if (p.status !== 'active') return '只有可读写（启用）的存储才能设为默认'
+  if (migrationActive(p.migration)) return '这个存储正在迁出，设为默认后新文件又会写回来；等迁移结束或先取消'
   return null
 }
 
@@ -52,15 +61,82 @@ export function setDefaultBlock(p: StorageProfileItem): string | null {
 export function statusBlock(p: StorageProfileItem, to: StorageStatus): string | null {
   if (p.status === to) return null
   if (p.is_default && to !== 'active') return '默认存储不能改为只读或停用，请先把别的存储设为默认'
-  if (to === 'disabled' && p.in_use) return '还有文件存在这个存储里，不能停用；可以改为只读'
+  if (to !== 'active' && p.incoming_migration) return '正在往这个存储迁移文件，不能改为只读或停用；等迁移结束或先取消'
+  if (to === 'disabled' && p.in_use) return '还有文件存在这个存储里，不能停用；可以改为只读，或者先迁到别的存储'
   return null
 }
 
 /** 删除不能做的原因；可以做时为 null。 */
 export function deleteBlock(p: StorageProfileItem): string | null {
   if (p.is_default) return '默认存储不能删除，请先把别的存储设为默认'
+  if (migrationActive(p.migration) || p.incoming_migration) return '这个存储正在迁移中，不能删除；等迁移结束或先取消'
   if (!p.deletable) return '这个存储还被文件快照或导出任务引用，不能删除；不再使用可以改为只读或停用'
   return null
+}
+
+// ---------- 存储迁移（M7-2） ----------
+
+/** 迁移排队中或执行中。 */
+export function migrationActive(m: StorageMigration | null | undefined): m is StorageMigration {
+  return !!m && (m.status === 'queued' || m.status === 'running')
+}
+
+/** 能迁入的存储：别的、可读写的、不是同一个位置、不在迁出的。 */
+export function migrationTargets(p: StorageProfileItem, all: StorageProfileItem[]): StorageProfileItem[] {
+  return all.filter(
+    (t) =>
+      t.id !== p.id &&
+      t.status === 'active' &&
+      !migrationActive(t.migration) &&
+      !(t.endpoint === p.endpoint && t.bucket === p.bucket && t.path_prefix === p.path_prefix),
+  )
+}
+
+/** "迁移到…"不能做的原因；可以做时为 null。整个系统同一时间只有一个迁移在排队或执行。 */
+export function migrateBlock(p: StorageProfileItem, all: StorageProfileItem[]): string | null {
+  if (migrationActive(p.migration)) return '这个存储正在迁出'
+  const running = all.find((x) => migrationActive(x.migration))
+  if (running) return `已有存储迁移在进行（「${running.profile_name}」迁到「${running.migration?.target_profile_name}」），请等它完成或取消`
+  if (!p.in_use) return '这个存储里没有文件，不用迁移'
+  if (p.is_default) return '这是默认存储，新上传的文件还会写进来；请先把别的存储（比如要迁去的那个）设为默认，再迁移'
+  if (!p.secret_readable) return '这个存储的 Secret Key 解不开，请先重新填写'
+  if (migrationTargets(p, all).length === 0) return '没有别的可读写的存储可以迁入，请先新增一个'
+  return null
+}
+
+/** 迁移状态的中文和配色。 */
+export function migrationStatusOf(m: StorageMigration): { label: string; badge: string } {
+  if (m.status === 'running' && m.cancel_requested) return { label: '正在取消', badge: 'bg-muted text-muted-foreground' }
+  if (m.status === 'queued' && m.attempts > 0) return { label: '等待重试', badge: 'bg-warn-soft text-warn' }
+  switch (m.status) {
+    case 'queued':
+      return { label: '排队中', badge: 'bg-muted text-muted-foreground' }
+    case 'running':
+      return { label: '迁移中', badge: 'bg-info-soft text-info' }
+    case 'done':
+      return m.failed > 0
+        ? { label: '完成（有失败）', badge: 'bg-warn-soft text-warn' }
+        : { label: '完成', badge: 'bg-ok-soft text-ok' }
+    case 'failed':
+      return { label: '失败', badge: 'bg-destructive-soft text-destructive' }
+    case 'canceled':
+      return { label: '已取消', badge: 'bg-muted text-muted-foreground' }
+  }
+}
+
+/** 进度百分比（已迁 + 失败）/ 总数。 */
+export function migrationPercent(m: StorageMigration): number {
+  if (m.total <= 0) return m.status === 'done' ? 100 : 0
+  return Math.min(100, Math.floor(((m.migrated + m.failed) * 100) / m.total))
+}
+
+export const MIGRATION_FAILURE_LABEL: Record<StorageMigrationFailureCode, string> = {
+  source_missing: '源对象缺失',
+  cover_missing: '封面缺失',
+  sha256_mismatch: 'sha256 不一致',
+  size_mismatch: '大小不一致',
+  verify_failed: '复制后核对不一致',
+  inconsistent: '快照记录不一致',
 }
 
 // ---------- 表单校验（只做预检，后端仍会校验） ----------

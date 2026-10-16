@@ -45,6 +45,8 @@ type exportOpts struct {
 	proxy        bool
 	retryBackoff time.Duration
 	partSize     int64
+	// app 是另外要改的 server 配置（存储迁移的测试调每批大小）。
+	app func(*app.Options)
 }
 
 func withProxy(o *exportOpts) { o.proxy = true }
@@ -65,6 +67,9 @@ func newExportEnv(t *testing.T, code string, opts ...func(*exportOpts)) *exportE
 			PollInterval: 100 * time.Millisecond}
 		a.ExportCleanupInterval = time.Hour
 		a.ExportPartSize = o.partSize
+		if o.app != nil {
+			o.app(a)
+		}
 	})
 	e := &exportEnv{}
 	endpoint := S3Env().Endpoint

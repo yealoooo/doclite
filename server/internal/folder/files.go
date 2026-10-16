@@ -222,6 +222,25 @@ func (s *Service) CopyEntry(ctx context.Context, userID, projectID, id uuid.UUID
 		if err := s.storage.LockForReuse(ctx, tx, src.StorageProfileID); err != nil {
 			return err
 		}
+		// 存储迁移（M7-2）改快照位置时拿同一把内容锁：锁内重读源快照，要么拿到迁移之后的位置，要么迁移等这次复制提交后
+		// 把新快照一起改掉，不会留下一个指向已经迁走的位置的新快照。重读到的存储变了（刚迁到可读写的目标存储）再查一次它
+		// 没有停用（FOR KEY SHARE，和插入快照时外键检查拿的锁一样，不挡别的事务）。
+		if err := file.LockContent(ctx, tx, projectID, src.ContentSHA256); err != nil {
+			return err
+		}
+		moved, err := file.Current(ctx, tx, e.FileID)
+		if err != nil {
+			return err
+		}
+		if moved == nil {
+			return errFileNotFound
+		}
+		if moved.StorageProfileID != src.StorageProfileID {
+			if err := s.storage.LockForReuse(ctx, tx, moved.StorageProfileID); err != nil {
+				return err
+			}
+		}
+		src = moved
 		srcFolder, err := getFolder(ctx, tx, e.FolderID)
 		if err != nil {
 			return err

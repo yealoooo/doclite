@@ -18,7 +18,8 @@
 //     可以再领）；之后才释放咨询锁；
 //   - 不做多实例用的租约、心跳超时回收。一次执行由 (job id, attempts) 标识，改 job 行时都核对它。
 //
-// job 行永久保留，重试复用同一行，payload 不改写。
+// job 行永久保留，重试复用同一行。导出的 payload 写后不改；存储迁移（storage_migrate）的断点、取消记在 payload 的 state、
+// cancel 里，由它自己的 Handler 和取消接口改。
 package jobs
 
 import (

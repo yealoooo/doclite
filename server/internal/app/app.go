@@ -56,6 +56,8 @@ type Options struct {
 	ExportPartSize int64
 	// License 是许可证（M7-1）：PublicKey 为空时不检查（开发构建）。Run 里用编进程序的公钥，测试注入测试公钥。
 	License license.Options
+	// StorageMigrate 是存储迁移（M7-2）执行的配置（每页取几个对象、几个并行），只给测试调；TmpDir 为空时用 Upload.TmpDir。
+	StorageMigrate storage.MigrateOptions
 }
 
 // App 是组装好的 server。
@@ -80,6 +82,8 @@ type App struct {
 	Jobs    *jobs.Executor
 	// License 是许可证（M7-1）；处理请求之前要调 InitLicense。
 	License *license.Service
+	// Migrations 是存储迁移（M7-2，后台任务 storage_migrate）。
+	Migrations *storage.Migrator
 
 	cleanupEvery time.Duration
 	stopCleanup  context.CancelFunc
@@ -114,6 +118,14 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	executor.OnStart(func() { export.SweepTmp(opts.Upload.TmpDir, log) })
 	licenseSvc := license.NewService(pool, authSvc, opts.License)
 	authSvc.SetLicense(licenseSvc)
+	// 存储迁移（M7-2）：后台任务 storage_migrate；迁移的临时目录同样只有拿到单实例锁的进程才能清。
+	migrateOpts := opts.StorageMigrate
+	if migrateOpts.TmpDir == "" {
+		migrateOpts.TmpDir = opts.Upload.TmpDir
+	}
+	migrator := storage.NewMigrator(storageSvc, executor, migrateOpts, log)
+	executor.Register(storage.MigrateJobType, migrator.JobHandler())
+	executor.OnStart(func() { storage.SweepMigrateTmp(migrateOpts.TmpDir, log) })
 
 	gate := auth.NewGate(authSvc)
 	api := httpx.NewRouter()
@@ -130,6 +142,7 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	export.NewHandler(exportSvc).Routes(api, gate)
 	license.NewHandler(licenseSvc).Routes(api, gate)
 	audit.NewHandler(audit.NewService(pool)).Routes(api, gate)
+	storage.NewMigrateHandler(migrator).Routes(api, gate)
 
 	// /api 的最外层是客户端版本检查（先于鉴权）；/api 以外是网页。
 	apiHandler := auth.ClientVersionCheck(opts.ClientVersions)(api)
@@ -161,6 +174,7 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 		Exports:      exportSvc,
 		Jobs:         executor,
 		License:      licenseSvc,
+		Migrations:   migrator,
 		cleanupEvery: cleanupEvery,
 	}, nil
 }

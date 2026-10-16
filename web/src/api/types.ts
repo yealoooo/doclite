@@ -108,6 +108,80 @@ export interface StorageProfileItem {
   deletable: boolean
   created_at: string
   updated_at: string
+  /** 这个存储最近一次迁出（M7-2，摘要：没有 remaining、failures）；没有迁过为 null。 */
+  migration: StorageMigration | null
+  /** 正在往这个存储迁入的迁移（排队中、执行中；摘要）；没有为 null。 */
+  incoming_migration: StorageMigration | null
+}
+
+// ---------- 存储迁移（M7-2） ----------
+
+/** 迁移的状态（后台任务的状态）：queued 排队中（attempts > 0 时是等待重试）、running、done、failed、canceled。 */
+export type StorageMigrationStatus = 'queued' | 'running' | 'done' | 'failed' | 'canceled'
+
+/** 核对不一致、没有迁的原因。 */
+export type StorageMigrationFailureCode =
+  | 'source_missing'
+  | 'cover_missing'
+  | 'sha256_mismatch'
+  | 'size_mismatch'
+  | 'verify_failed'
+  | 'inconsistent'
+
+/** 失败清单里的一个快照（名字、位置是失败时的）。 */
+export interface StorageMigrationFailedSnapshot {
+  snapshot_id: string
+  file_id: string
+  version_no: number
+  project_code: string | null
+  file_name: string | null
+  /** 从项目的根文件夹起，`/` 连接。 */
+  folder_path: string | null
+  file_deleted: boolean
+}
+
+/** 核对不一致、没有迁的一个对象和引用它的快照。 */
+export interface StorageMigrationFailure {
+  /** 源存储里的原图 key。 */
+  storage_key: string
+  reason_code: StorageMigrationFailureCode
+  reason: string
+  /** 引用这个对象的快照（最多列 20 个）；snapshot_count 是总数。 */
+  snapshots: StorageMigrationFailedSnapshot[]
+  snapshot_count: number
+  failed_at: string
+}
+
+/** `…/{id}/migrate` 的一次迁移。数量都按快照算（几个快照共用一个对象时对象只复制一次）。 */
+export interface StorageMigration {
+  id: string
+  source_profile_id: string
+  source_profile_name: string
+  target_profile_id: string
+  target_profile_name: string
+  status: StorageMigrationStatus
+  /** 执行中已经要求取消（正在停下，之后变成 canceled）。 */
+  cancel_requested: boolean
+  /** 要迁的快照数（迁移期间复制出来一起迁的会让它变大）；完成时 = migrated + failed。 */
+  total: number
+  migrated: number
+  /** 核对不一致、没有改位置的快照数；failed_objects 是它们用到的对象数。 */
+  failed: number
+  failed_objects: number
+  attempts: number
+  max_attempts: number
+  error_message: string | null
+  created_by: string
+  created_by_name: string | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+  /** 源存储里现在还有的快照数（只在详情 `GET …/migrate` 里；为 0 时可以停用源存储）。 */
+  remaining?: number
+  /** 失败清单（只在详情里，按对象，最多 200 个）。 */
+  failures?: StorageMigrationFailure[]
+  /** 失败清单没列全（只在详情里有意义；列表里的摘要总是 false）。 */
+  failures_truncated: boolean
 }
 
 /** 连接测试的结论。 */

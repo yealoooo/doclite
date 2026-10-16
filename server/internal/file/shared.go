@@ -3,13 +3,13 @@ package file
 import (
 	"context"
 	"encoding/json"
-	"hash/fnv"
 	"slices"
 	"time"
 
 	"github.com/google/uuid"
 
 	"doclite/server/internal/platform/db"
+	"doclite/server/internal/project"
 )
 
 // 给其他模块在自己的事务里调用的函数（文件夹的整理、以后的审核、归类、导出）。
@@ -98,18 +98,15 @@ func LockFiles(ctx context.Context, q db.Querier, ids []uuid.UUID) error {
 	return rows.Err()
 }
 
-// lockClassContent 是内容锁的咨询锁类别（6001、6002 是项目的两把树锁，6000 给迁移和测试）。
-const lockClassContent = 6003
-
 // LockContent 在调用方的事务里拿 (项目, sha256) 的内容锁（事务级咨询锁，提交或回滚时释放），拿到之后在锁内再查一次重：
 // 同内容同时传进同一项目的不同文件夹时，只有一个能入库（requirements 3.6）。它是事务里最后拿的锁（在存储配置行之后），
-// 之后只有插入。不同的 (项目, sha) 撞到同一个键只是多排一会儿队。
+// 之后只有插入。唯一的例外：复制（folder.CopyEntry）在内容锁里重读源快照，发现
+// 它刚被存储迁移改到了别的存储时，在内容锁之后再对那个存储配置行拿 FOR KEY SHARE（和插入快照时外键检查拿的锁一样）。
+// 不会成环：对存储配置行拿冲突锁（FOR UPDATE）的只有设默认、停用、删除三处，它们都不拿、也不等内容锁、树锁、files 行、
+// folders 行；其余拿存储配置行的都是 FOR KEY SHARE / FOR NO KEY UPDATE，和 FOR KEY SHARE 不冲突。
+// 实现在 project.LockContent（存储迁移改快照位置时也拿这把锁，storage 不能 import 这个包）。
 func LockContent(ctx context.Context, q db.Querier, projectID uuid.UUID, sha []byte) error {
-	h := fnv.New32a()
-	h.Write(projectID[:])
-	h.Write(sha)
-	_, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1::int4, $2::int4)`, lockClassContent, int32(h.Sum32()))
-	return err
+	return project.LockContent(ctx, q, projectID, sha)
 }
 
 // Snapshot 是 file_snapshots 的一行。

@@ -1,8 +1,8 @@
 // 审计日志页（M7-3）的显示文字：对象类型、操作的中文名，对象名、一句话说明，展开后的前后差异。
 //
-// 现在 server 会写的审计（server/internal 里各模块调 audit.Write 的地方）都在 AUDIT_ACTIONS 里；不认识的类型、动作、
-// 字段原样显示（以后新加的审计不用先改这里也能看）。detail 一般是 `{before, after}`（只放变了的字段），另有各动作
-// 自己的键（source、batch、cause、moved……）。
+// 现在 server 会写的审计（server/internal 里各模块调 audit.Write 的地方，和存储迁移逐个快照写的 storage_migrate）都在
+// AUDIT_ACTIONS 里；不认识的类型、动作、字段原样显示（以后新加的审计不用先改这里也能看）。detail 一般是
+// `{before, after}`（只放变了的字段），另有各动作自己的键（source、batch、cause、moved……）。
 
 import type { AuditLog } from '@/api/types'
 
@@ -25,7 +25,7 @@ export const AUDIT_ACTIONS: Record<string, string[]> = {
   user: ['create', 'update', 'disable', 'enable', 'reset_password', 'set_roles'],
   role: ['create', 'update', 'delete', 'set_menus'],
   project: ['create', 'update', 'delete', 'set_access'],
-  storage_profile: ['create', 'update', 'delete', 'set_default', 'unset_default'],
+  storage_profile: ['create', 'update', 'delete', 'set_default', 'unset_default', 'migrate_start', 'migrate_cancel', 'migrate_end'],
   folder: ['create', 'update', 'move', 'delete'],
   archive_category: ['create', 'update', 'move', 'delete', 'renumber'],
   archive_item: ['create', 'update', 'move', 'delete', 'mark_done', 'back_to_draft', 'lock', 'unlock', 'renumber', 'reorder'],
@@ -56,6 +56,9 @@ const ACTION_LABELS: Record<string, string> = {
   cancel: '取消',
   download: '下载',
   storage_migrate: '存储迁移',
+  migrate_start: '开始迁移',
+  migrate_cancel: '取消迁移',
+  migrate_end: '迁移结束',
   import: '导入',
   replace: '替换',
 }
@@ -158,6 +161,13 @@ export function objectName(log: AuditLog, known?: Map<string, string>): { name: 
     case 'export_task':
       name = get('file_name')
       break
+    case 'file_snapshot': {
+      const file = get('file_name')
+      const v = get('version_no')
+      name = file ? (v ? `${file} v${v}` : file) : null
+      title = get('file_id') ? `file_id ${get('file_id')}` : null
+      break
+    }
     case 'license':
       name = get('company')
       title = get('license_id')
@@ -245,6 +255,18 @@ export const FIELD_LABELS: Record<string, string> = {
   output_key: '对象 key',
   url_expires_at: '链接到期',
   storage_profile_id: '存储 id',
+  storage_profile_name: '存储',
+  file_id: 'file_id',
+  version_no: '版本号',
+  target_profile_id: '目标存储 id',
+  target_profile_name: '目标存储',
+  total: '要迁的快照',
+  migrated: '已迁的快照',
+  failed: '核对不一致的快照',
+  failed_objects: '核对不一致的对象',
+  remaining: '源存储里还剩的快照',
+  result: '结果',
+  error_message: '原因',
   storage_key: '对象 key',
   cover_key: '封面 key',
   source: '来源',
@@ -293,7 +315,7 @@ export function formatValue(key: string, v: unknown): string {
   if (v === null || v === undefined || v === '') return '（空）'
   if (typeof v === 'boolean') return v ? '是' : '否'
   if (typeof v === 'string') {
-    if (key === 'status') return STATUS_LABELS[v] ?? v
+    if (key === 'status' || key === 'result') return STATUS_LABELS[v] ?? v
     if (key === 'source') return SOURCE_LABELS[v] ?? v
     if (key === 'category_type' || key === 'scope_type') return CATEGORY_TYPES[v] ?? v
     if (key === 'edition') return EDITION_LABELS[v] ?? v
@@ -413,6 +435,21 @@ export function describe(log: AuditLog): string {
     }
     case 'export_task/download':
       return str(d.file_name) ?? ''
+    case 'file_snapshot/storage_migrate':
+      return `「${str(b.storage_profile_name) ?? '—'}」→「${str(a.storage_profile_name) ?? '—'}」`
+    case 'storage_profile/migrate_start':
+      return `迁到「${str(d.target_profile_name) ?? '—'}」，共 ${Number(d.total ?? 0)} 个快照`
+    case 'storage_profile/migrate_cancel':
+      return `迁到「${str(d.target_profile_name) ?? '—'}」的迁移`
+    case 'storage_profile/migrate_end': {
+      const parts = [
+        `${formatValue('result', d.result)}：迁到「${str(d.target_profile_name) ?? '—'}」${Number(d.migrated ?? 0)} 个快照`,
+        Number(d.failed ?? 0) > 0 ? `核对不一致 ${Number(d.failed)} 个` : null,
+        `源存储里还剩 ${Number(d.remaining ?? 0)} 个`,
+        str(d.error_message),
+      ]
+      return parts.filter(Boolean).join('，')
+    }
     case 'license/import':
     case 'license/replace': {
       const exp = str(a.expires_at)

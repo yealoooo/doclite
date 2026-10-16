@@ -32,6 +32,9 @@ const (
 	TargetExportTask = "export_task"
 	// M7-1：许可证（import、replace；target_id 是许可证的 license_id）。
 	TargetLicense = "license"
+	// M7-2：存储迁移改了位置的快照（action storage_migrate，每个快照一条）；迁移的开始、取消、结束记在源存储上
+	// （target_type storage_profile，action migrate_start、migrate_cancel、migrate_end）。
+	TargetFileSnapshot = "file_snapshot"
 )
 
 // Entry 是一条审计记录。

@@ -178,6 +178,31 @@ func (c *Client) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	return out.Body, nil
 }
 
+// ObjectInfo 是读对象时一起拿到的属性。
+type ObjectInfo struct {
+	// Size 是对象的大小（响应的 Content-Length；不知道时为 -1）。
+	Size         int64
+	ContentType  string
+	CacheControl string
+	// Metadata 是自定义元数据（x-amz-meta-*，键是小写的）。
+	Metadata map[string]string
+}
+
+// GetWithInfo 读一个对象，同时返回它的属性（复制对象时原样带上元数据）；调用方负责关闭。不存在时返回的错误满足
+// errors.Is(err, ErrNotFound)。
+func (c *Client) GetWithInfo(ctx context.Context, key string) (io.ReadCloser, ObjectInfo, error) {
+	out, err := c.api.GetObject(ctx, &awss3.GetObjectInput{Bucket: aws.String(c.cfg.Bucket), Key: aws.String(key)})
+	if err != nil {
+		return nil, ObjectInfo{}, wrap("读取", key, err)
+	}
+	info := ObjectInfo{Size: aws.ToInt64(out.ContentLength), ContentType: aws.ToString(out.ContentType),
+		CacheControl: aws.ToString(out.CacheControl), Metadata: out.Metadata}
+	if out.ContentLength == nil {
+		info.Size = -1
+	}
+	return out.Body, info, nil
+}
+
 // Delete 删一个对象（不存在也算成功）。
 func (c *Client) Delete(ctx context.Context, key string) error {
 	_, err := c.api.DeleteObject(ctx, &awss3.DeleteObjectInput{Bucket: aws.String(c.cfg.Bucket), Key: aws.String(key)})

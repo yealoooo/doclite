@@ -45,7 +45,7 @@ server/                 Go 模块 doclite/server
       httpx/                路由辅助、中间件、统一错误体、JSON 读写
       s3/                   对象读写、分片上传、预签名
       events/               项目实时通道（SSE）
-      jobs/                 后台任务执行器（v1 只有导出）
+      jobs/                 后台任务执行器（导出、存储迁移）
     auth/                 登录、会话、菜单权限、项目授权检查
     user/ role/ project/ storage/
     folder/ file/         文件目录、上传、重扫、快照、图片信息、日志
@@ -115,7 +115,7 @@ docs/
 10. **权限只到菜单级。** 每个接口声明自己需要的菜单码，中间件统一校验，无权 403；能进哪些项目由项目授权决定，admin 能进所有项目。
 11. **server 不做图像处理。** 只读文件头，不解码、不修改；封面由客户端生成，server 只校验。**唯一例外**（用户决定 2026-10-15）：导出 PDF 时放不进 PDF 的图片由 server 无损转换，只在 `internal/export` 里做。
 12. **server 不缓存图片。** 工作站用预签名 URL 直连 S3，签名时间按天取整（UTC+8）；本机缓存由客户端负责。
-13. **后台任务在 server 进程内运行**，`background_jobs` + `FOR UPDATE SKIP LOCKED` 领取，v1 只有导出。
+13. **后台任务在 server 进程内运行**，`background_jobs` + `FOR UPDATE SKIP LOCKED` 领取，v1 只有导出和存储迁移（M7-2）。
 14. **大文件流式处理。** 上传边写临时文件边算 sha256，不把请求体读进内存；导出边生成边上传。
 15. **命名**：表名英文复数；主键 `id`（UUIDv7）、外键 `单数表名_id`；名称带前缀（`folder_name`）；`status`、`xxx_type`、`xxx_no`、`xxx_at`。
 16. **部署按单台服务器、单个 server 进程**（用户决定 2026-10-15）：不为多实例设计；需要互斥的地方可以用进程内的锁，但数据库层面的约束（唯一、外键、行锁顺序）照样要对。

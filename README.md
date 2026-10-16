@@ -65,7 +65,7 @@ cd client && go test ./...                                 # 客户端的纯逻�
 cd web && npm run build                                    # vue-tsc 类型检查 + 构建
 ```
 
-- **API 测试**（`server/apitest/`）连真实的 PostgreSQL 和 SeaweedFS。第一次运行时建模板库 `doclite_test_tpl_<迁移哈希>`，每个测试从它克隆一个库、用自己的 S3 前缀，结束时删掉（强杀可能留下 `doclite_test_<随机>` 库，可以手工删）。连接参数：`TEST_DATABASE_URL`（默认 `postgres://doclite@127.0.0.1:5432/doclite_test`）、`TEST_S3_ENDPOINT`、`TEST_S3_ACCESS_KEY`、`TEST_S3_SECRET_KEY`、`TEST_S3_BUCKET`（默认同上面的 `weed mini`）。SeaweedFS 没启动时测试直接报错。`TEST_LOG=1` 打出 server 日志。
+- **API 测试**（`server/apitest/`）连真实的 PostgreSQL 和 SeaweedFS。第一次运行时建模板库 `doclite_test_tpl_<迁移哈希>`，每个测试从它克隆一个库、用自己的 S3 前缀，结束时删掉（强杀可能留下 `doclite_test_<随机>` 库，可以手工删）。连接参数：`TEST_DATABASE_URL`（默认 `postgres://doclite@127.0.0.1:5432/doclite_test`）、`TEST_S3_ENDPOINT`、`TEST_S3_ACCESS_KEY`、`TEST_S3_SECRET_KEY`、`TEST_S3_BUCKET`（默认同上面的 `weed mini`）。SeaweedFS 没启动时测试直接报错。存储迁移的测试另用第二个桶 `TEST_S3_BUCKET2`（默认 `doclite-migrate-test`，不存在时测试自己建）。`TEST_LOG=1` 打出 server 日志。
 - **客户端上传的集成测试**（要一个在跑的 server）：`cd client && DOCLITE_IT_SERVER=http://127.0.0.1:9080 DOCLITE_IT_USERNAME=… DOCLITE_IT_PASSWORD=… DOCLITE_IT_PROJECT=DEMO-A go test ./internal/upload/ -run Integration`。
 - **性能抽测**（默认不跑，`//go:build perf`）：用 SQL 造 10 万文件（6 万页挂在 2400 件里），测审核读接口、看板、`catalog-placements`、2000 件 / 5 万页的导出预检、建任务、交付后变更，打印每个接口的中位数和最慢，超过 requirements 1.4 的目标就失败：
 
@@ -105,6 +105,7 @@ npm run seed:files -- --base http://127.0.0.1:9080 --user demo_scanner:demo12345
 - `m2-accept`：要先建「M2 验收演示 <日期>」（脚本开头有命令）；只能走一遍，再跑换一个文件夹（`M2_ACCEPT_FOLDER`）。
 - `m3-accept`：自己建「M3 验收演示 <日期>」和全宗 Z308，只能走一遍；再跑换 `M3_ACCEPT_FOLDER`、`M3_ACCEPT_FONDS`，或者 `M3_ACCEPT_TRIAL=1` 试跑（最后删掉自己建的数据）。
 - `m4-export`：server 要在执行导出（见下一节）。
+- `m7-storage-migrate`：server 要在执行后台任务（迁移在它里面执行）；要有第二个桶 `doclite-migrate-test`（`echo 's3.bucket.create -name doclite-migrate-test' | weed shell -master=127.0.0.1:9333`）。脚本自己起一个转发到 SeaweedFS 的慢速代理当"源"存储的 server 地址（让迁移持续几秒），每跑一次在 DEMO-A 的「M7-2 迁移演示」下传一批文件，迁到「M7-2 迁移演示·目标」，跑完"源"迁空并停用。
 - 壳的部分（`m1-shell`、`m1-scan`、`m1-cache` 和 `m1-organize`、`m2-rescan`、`m2-viewer`、`m2-review`、`m2-accept` 里名字带 `shell` 的几张）：`--base` 要指向 **devshell**（见下面）。这几张用 `http://wails.localhost:<端口>` 打开页面（`lib/client.ts` 的 `isShell()` 认 Windows 上 WebView2 的这个地址，Chrome 把 `*.localhost` 解析到本机），在页面脚本运行前注入 Wails 桥的模拟（`scripts/lib/wails-mock.mjs`：拦下 `/wails/runtime` 的命令调用、`_wails.dispatchWailsEvent` 推事件、`_wails.streamFactory` 给实时通道），正式前端代码不改。
 - `m2-accept`：`M2_ACCEPT_SHELL_MOCK=1` 时壳模式审核那两步用上面的模拟（否则改在浏览器里做）；`M2_ACCEPT_SHELL=client/bin/Doclite.app/Contents/MacOS/Doclite`、`M2_ACCEPT_SERVER=<server 本身的地址>` 时壳重扫、壳的大图两步跑打包的客户端 `--smoke`（隔离的数据目录、后台模式），不设时壳重扫改用接口模拟。`m3-accept` 的 `M3_ACCEPT_SHELL` 同理。
 
@@ -160,6 +161,10 @@ DOCLITE_BACKGROUND=1 client/bin/Doclite.app/Contents/MacOS/Doclite --smoke
 | `TMP_DIR` | 系统临时目录下的 `doclite` | 导出在 `TMP_DIR/exports/` 下生成 PDF，要放得下最大一件原图 × 1.2 |
 
 **同一个库只有一个 server 进程执行后台任务**：执行器启动时拿数据库咨询锁 `(6006, 0)`，拿到的那个执行导出、做到期清理、管导出的临时目录；后启动的拿不到锁，只提供 HTTP（日志里一条警告），它那边建的导出由先启动的进程执行。所以本机多个 server 共用 `doclite_dev` 时，谁先启动谁执行；想让某个进程一定执行，就先停掉别的（或者给别的设 `JOB_CONCURRENCY=0`）。部署时只有一个 server 进程。
+
+**存储迁移**（M7-2，系统管理 → 存储配置 →"迁移到…"）也是后台任务（`job_type = storage_migrate`），和导出共用上面的执行器、并发数和重试（迁移最多执行 5 次，排队时导出先领）。**整个系统同一时间只有一个迁移在排队或执行**；它执行期间占一个执行槽，导出的并发从 2 降到 1（`JOB_CONCURRENCY=1` 时迁移期间导出要等它完成）。一个对象读写存储暂时失败时就地重试 3 次（1、4、16 秒），还不行才停下这次执行、交给执行器重试（从断点接着做）。复制原图时用 `TMP_DIR/migrate/` 放临时文件（每个在复制的对象一个，同时最多 4 个）。迁移不删源存储里的对象；`JOB_CONCURRENCY=0` 或者拿不到执行器锁的进程上建的迁移，由拿着锁的进程执行（它的版本要有迁移，否则一直排队）。
+
+迁完之后运维的顺序：先把原存储**改为只读**（不再写入，旧的导出物照常能下载）；导出物到期被自动清理（保留天数 + 链接有效期 + 24 小时；清理照常处理只读存储里的导出物，只跳过已停用存储里的）之后再**停用**。导出过的存储一直被导出任务记着（`export_tasks.storage_profile_id`，完成的任务清理后也保留"当时存在哪"），所以只能停用、不能删除；没导出过的、迁空了的可以删除。存储里的对象（迁走的原图和封面、清理前的导出物）要不要删由运维决定。
 
 ## 演示账号
 

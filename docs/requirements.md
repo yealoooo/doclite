@@ -54,7 +54,7 @@
 11. **server 不做图像处理。** 只读文件头，不解码、不修改、不 OCR、不分析；封面由客户端生成（长边 400 的 JPEG），server 只校验。只约束 server，壳可以解码。
     - **唯一例外**【用户 2026-10-15】：导出 PDF 时，能原样嵌入的页原样嵌入；放不进的（带透明的 PNG、隔行 PNG、TIFF 分平面、少见压缩）由 server 无损转换，像素不变。只在导出模块。
 12. **server 不缓存图片。** 工作站用预签名 URL 直连 S3，签名时间按天取整；本机缓存由壳按 file_id + snapshot_id 存。
-13. **后台任务在 server 进程内**，background_jobs + `FOR UPDATE SKIP LOCKED` 领取；v1 只有导出。
+13. **后台任务在 server 进程内**，background_jobs + `FOR UPDATE SKIP LOCKED` 领取；v1 只有导出和存储迁移（M7-2，用户 2026-10-16）。
 14. **大文件流式。** 上传边写临时文件边算 sha256，不把请求体读进内存。
 15. **命名**：表名英文复数、关联表两实体拼接；主键 id、外键 `单数表名_id`；名称带前缀（folder_name）；`status`、`xxx_type`、`xxx_no`、`xxx_at`。
 16. **改设计先问用户**（改表、改接口约定、冲突本节规则、装软件）。改表只新增迁移 `000N_xxx.sql`。
@@ -124,7 +124,7 @@
 
 - **项目文件树锁**（每项目一把）：共享 = 建或改名文件夹、上传、复制、移动文件、重扫、删单个文件、审核写、改项目；排他 = 移动文件夹、删子树、删项目。
 - **项目归类树锁**（每项目一把）：共享 = 建或改名节点、条目增改移删和状态、挂接、项目改名；排他 = 移动或删节点子树、改 category_code/type、批量重算档号。
-- **顺序**：归类树锁 → 节点行 → 条目行（id 升序）→ 文件树锁 → 项目行 → files 行（id 升序）→ folders 行 → 存储配置行 → 内容锁。
+- **顺序**：归类树锁 → 节点行 → 条目行（id 升序）→ 文件树锁 → 项目行 → files 行（id 升序）→ folders 行 → 存储配置行 → 内容锁。**例外**（M7-2）：复制在内容锁里重读源快照，发现它刚被存储迁移改到别的存储时，在内容锁之后再对那个存储配置行拿 FOR KEY SHARE（和插入快照时外键检查拿的锁一样）；不会成环，因为对存储配置行拿 FOR UPDATE 的只有设默认、停用、删除，它们不拿也不等内容锁、树锁、files 行、folders 行。存储迁移改快照位置的事务：job 行 → 存储配置行（FOR KEY SHARE）→ 内容锁 → 快照行。
 - **审核不等归类**：审核不拿归类锁、不锁条目；拿着文件树锁的事务不等归类的锁和行；挂接、项目改名这类两棵树都要的操作，先拿归类锁和归类行，最后拿文件树锁【总控】。
 - **files 行是每个文件的写锁**：分配、改派、审核、撤回、重扫、删除、挂接、移出都先锁它，锁后重读 folder_files；所以挂接和删除已归类文件互斥。
 - 行锁用不挡外键检查的 `FOR NO KEY UPDATE`，例外只有任务领取的 `SKIP LOCKED`。
@@ -185,6 +185,7 @@
 - 测试连接：List(1) → 故意签错，确认对端是 S3 且校验签名 → public_endpoint 不同时预签名访问不存在的 key，应得 404 NoSuchKey。结果 ok / unreachable / auth_failed / bucket_not_found / secret_unreadable / other；不跟重定向，只回摘要；可测未保存的配置。
 - 校验：endpoint 只能根路径；path_prefix 空或以 `/` 结尾、不以 `/` 开头、无 `//`、每段 `[A-Za-z0-9._-]`；bucket 按 S3 规则。
 - 换存储：新的设默认后新快照写新存储，旧快照按自己的 storage_profile_id 读。写快照时存储须仍 active 且默认，否则 409 `storage_changed`。
+- **存储迁移**（M7-2，规则见第 11 节）：`POST {id}/migrate {target_profile_id}`。源是默认存储 409 `storage_is_default`（先把别的设默认），目标不是 active 409 `storage_not_active`，目标和源同一个位置（地址、桶、前缀都相同）400，没有快照 409 `invalid_state`；**整个系统同一时间只有一个迁移在排队或执行**，有了再建 409 `invalid_state`（迁移执行时占执行器一个槽）。迁移进行中：源不能设默认、不能删，目标不能改只读或停用、不能删（409 `invalid_state`）；源可以改只读。目标里的 key = 目标的 path_prefix + `<project_code>/<file_id>/v<no>.<ext>`。迁移不删源存储的对象。迁完的源存储建议先改只读（旧导出物仍能下载，到期清理照常删只读存储里的导出物），清理完再停用；导出过的存储一直被导出任务记着，只能停用、不能删除。
 
 ### 5.5 文件目录（M1）
 
@@ -372,7 +373,7 @@
 | system/users（GET/POST）· {id}（GET/PATCH）· {id}/disable·enable·reset-password（POST）· {id}/roles（PUT） | system.users | 用户 |
 | GET system/roles | roles 或 users | 角色列表 |
 | system/roles（POST）· {id}（GET/PATCH/DELETE）· {id}/menus（PUT）· GET system/menus | system.roles | 角色、菜单 |
-| system/storage-profiles（GET/POST）· {id}（GET/PATCH/DELETE）· test · {id}/test · {id}/set-default · {id}/migrate（M5） | system.storage | 存储 |
+| system/storage-profiles（GET/POST）· {id}（GET/PATCH/DELETE）· test · {id}/test · {id}/set-default · {id}/migrate（POST 建、GET 最近一次的进度和失败清单）· {id}/migrate/cancel（M7-2） | system.storage | 存储 |
 | system/projects（GET/POST）· {id}（GET/PATCH/DELETE）· access-candidates · projects/{pid}/access（GET/PUT） | system.projects | 项目、授权 |
 | system/license（GET、PUT `{"license": "<.lic 全文>"}`）（M7-1） | system.license | 许可证状态、导入 |
 | GET system/audit-logs（from、to、operator_id、project_id、target_type、action、limit、cursor → `{items, next_cursor}`）· GET system/audit-logs/filter-options（M7-3） | system.audit | 审计日志 |

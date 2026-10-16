@@ -9,7 +9,9 @@
 //     删除（409 `storage_is_default`）；有文件（快照、OCR 结果）的不能停用（409 `storage_in_use`，可以改只读）；
 //     只有非默认、没被任何数据引用的能删；设默认的不是 active 409 `storage_not_active`；
 //   - 写操作在进程内排队（mu，requirements 3.6 的可简化：存储配置表锁用进程内互斥），再锁要改的行；
-//   - 新建、修改、删除、设默认都写审计（target_type storage_profile）；没有实际变化不写库、不审计。
+//   - 新建、修改、删除、设默认都写审计（target_type storage_profile）；没有实际变化不写库、不审计；
+//   - 存储迁移（M7-2，migrate.go）：迁移进行中源存储不能设为默认、不能删除，目标存储不能改为只读或停用、不能删除
+//     （409 invalid_state）；设默认时旧的默认存储行用 FOR UPDATE，等正在写快照的上传、重扫提交。
 package storage
 
 import (
@@ -90,6 +92,10 @@ type Profile struct {
 	Deletable      bool      `json:"deletable"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
+	// Migration 是这个存储最近一次迁出（M7-2，摘要：不带 remaining、failures）；没有迁过为 null。
+	Migration *Migration `json:"migration"`
+	// IncomingMigration 是正在往这个存储迁入的迁移（排队中、执行中；摘要）；没有为 null。
+	IncomingMigration *Migration `json:"incoming_migration"`
 }
 
 func (s *Service) profileOf(r *row, u usage) Profile {
@@ -110,9 +116,15 @@ func (s *Service) List(ctx context.Context) ([]Profile, error) {
 	if err != nil {
 		return nil, err
 	}
+	latest, incoming, err := migrationSummaries(ctx, s.pool)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]Profile, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, s.profileOf(r.row, r.usage))
+		p := s.profileOf(r.row, r.usage)
+		p.Migration, p.IncomingMigration = latest[p.ID], incoming[p.ID]
+		out = append(out, p)
 	}
 	return out, nil
 }
@@ -127,6 +139,11 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Profile, error) {
 		return nil, errNotFound
 	}
 	p := s.profileOf(r, u)
+	latest, incoming, err := migrationSummaries(ctx, s.pool)
+	if err != nil {
+		return nil, err
+	}
+	p.Migration, p.IncomingMigration = latest[id], incoming[id]
 	return &p, nil
 }
 
@@ -459,6 +476,13 @@ func (s *Service) Update(ctx context.Context, operatorID, id uuid.UUID, in Updat
 			if err := s.checkStatusChange(ctx, tx, before, after.Status); err != nil {
 				return err
 			}
+			if after.Status != StatusActive {
+				if _, asTarget, err := migrationGuard(ctx, tx, id); err != nil {
+					return err
+				} else if asTarget {
+					return errMigrateState("正在往这个存储迁移文件，不能改为只读或停用；等迁移结束或先取消")
+				}
+			}
 		}
 		b, a := diffFields(auditFields(before), auditFields(after))
 		if len(a) == 0 && !secretChanged {
@@ -511,6 +535,11 @@ func (s *Service) Delete(ctx context.Context, operatorID, id uuid.UUID) error {
 		if r.IsDefault {
 			return httpx.Conflict(CodeStorageIsDefault, "默认存储不能删除，请先把别的存储设为默认")
 		}
+		if asSource, asTarget, err := migrationGuard(ctx, tx, id); err != nil {
+			return err
+		} else if asSource || asTarget {
+			return errMigrateState("这个存储正在迁移中，不能删除；等迁移结束或先取消")
+		}
 		u, err := usageOf(ctx, tx, id)
 		if err != nil {
 			return err
@@ -544,12 +573,19 @@ func (s *Service) SetDefault(ctx context.Context, operatorID, id uuid.UUID) (*Pr
 		if r.IsDefault {
 			return nil
 		}
+		if asSource, _, err := migrationGuard(ctx, tx, id); err != nil {
+			return err
+		} else if asSource {
+			return errMigrateState("这个存储正在迁出，设为默认后新文件又会写回来；等迁移结束或先取消")
+		}
 		old, err := getDefaultRow(ctx, tx)
 		if err != nil {
 			return err
 		}
 		if old != nil {
-			if _, err := lockRow(ctx, tx, old.ID, false); err != nil {
+			// FOR UPDATE（和写快照的 FOR KEY SHARE 冲突）：等正在往旧的默认存储写快照的上传、重扫提交；之后的写入在锁内
+			// 看到它已经不是默认（409 storage_changed，客户端重试）。存储迁移靠这一点：源存储不是默认之后不会再有快照写进去。
+			if _, err := lockRow(ctx, tx, old.ID, true); err != nil {
 				return err
 			}
 			if err := setDefaultFlag(ctx, tx, old.ID, false); err != nil {

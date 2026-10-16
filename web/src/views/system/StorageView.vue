@@ -7,12 +7,25 @@
 // - 右侧表单有未保存的修改时，切换编辑对象、改为新增都先确认"放弃修改"（同角色与权限页）。
 // - 卡片上的测试结论只对测试时的那版配置有效：列表刷新后这条配置的 updated_at 变了（保存、改状态、设默认），
 //   或者被删掉了，就清掉它的测试结论；测试期间配置变了，回来的结果直接丢弃。
-import { HardDriveIcon, KeyRoundIcon, PencilIcon, PlugZapIcon, PlusIcon, StarIcon, TriangleAlertIcon } from '@lucide/vue'
-import { computed, onMounted, reactive, ref, useTemplateRef, watch } from 'vue'
+// - 存储迁移（M7-2）：有文件的存储可以"迁移到…"别的可读写存储（MigrateDialog）；源存储卡片上显示最近一次迁移的进度和
+//   结果（MigrationPanel，可以取消、看失败清单 MigrationDetailDialog），目标存储卡片上显示"正在迁入"。有进行中的迁移时
+//   每 2 秒重取一次列表（列表里带迁移的摘要），都结束了就停。
+import {
+  ArrowRightLeftIcon,
+  HardDriveIcon,
+  KeyRoundIcon,
+  PencilIcon,
+  PlugZapIcon,
+  PlusIcon,
+  StarIcon,
+  TriangleAlertIcon,
+} from '@lucide/vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, useTemplateRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
 
 import { errorMessage } from '@/api/http'
 import {
+  cancelStorageMigration,
   deleteStorageProfile,
   listStorageProfiles,
   setDefaultStorage,
@@ -20,13 +33,25 @@ import {
   testStorageProfile,
   updateStorageProfile,
 } from '@/api/storage'
-import type { ConnectionTestResult, StorageProfileItem, StorageStatus } from '@/api/types'
+import type { ConnectionTestResult, StorageMigration, StorageProfileItem, StorageStatus } from '@/api/types'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import GuardedButton from '@/components/app/GuardedButton.vue'
 import PageHeader from '@/components/app/PageHeader.vue'
 import { Button } from '@/components/ui/button'
-import { conflictTitle, deleteBlock, setDefaultBlock, STATUS_LABEL, statusBlock } from '@/lib/storage'
+import {
+  conflictTitle,
+  deleteBlock,
+  migrateBlock,
+  migrationActive,
+  migrationPercent,
+  setDefaultBlock,
+  STATUS_LABEL,
+  statusBlock,
+} from '@/lib/storage'
 
+import MigrateDialog from './storage/MigrateDialog.vue'
+import MigrationDetailDialog from './storage/MigrationDetailDialog.vue'
+import MigrationPanel from './storage/MigrationPanel.vue'
 import StorageForm from './storage/StorageForm.vue'
 import TestResultPanel from './storage/TestResultPanel.vue'
 
@@ -227,6 +252,68 @@ async function onSaved(p: StorageProfileItem, created: boolean) {
   if (created && editingId.value === null) editingId.value = p.id
 }
 
+// ---------- 存储迁移（M7-2） ----------
+
+const migrateSource = ref<StorageProfileItem | null>(null)
+const migrateOpen = ref(false)
+const detailSource = ref<StorageProfileItem | null>(null)
+const detailOpen = ref(false)
+const cancelSource = ref<StorageProfileItem | null>(null)
+const cancelOpen = ref(false)
+const canceling = ref(false)
+
+function openMigrate(p: StorageProfileItem) {
+  migrateSource.value = p
+  migrateOpen.value = true
+}
+
+async function onMigrationStarted(m: StorageMigration) {
+  toast.success(`已开始把「${m.source_profile_name}」里的文件迁到「${m.target_profile_name}」`, {
+    description: `共 ${m.total.toLocaleString()} 个快照，在后台进行，可以离开这个页面。`,
+  })
+  await load()
+}
+
+function openDetail(p: StorageProfileItem) {
+  detailSource.value = p
+  detailOpen.value = true
+}
+
+function openCancel(p: StorageProfileItem) {
+  cancelSource.value = p
+  cancelOpen.value = true
+}
+
+async function confirmCancel() {
+  const p = cancelSource.value
+  if (!p) return
+  canceling.value = true
+  try {
+    await cancelStorageMigration(p.id, STORAGE_CONFLICT_CODES)
+    toast.success(`已取消「${p.profile_name}」的迁移`, { description: '已经迁过去的不退回；之后可以再迁剩下的。' })
+    cancelOpen.value = false
+  } catch (err) {
+    showConflict(err)
+  } finally {
+    canceling.value = false
+    await load()
+  }
+}
+
+/** 有进行中的迁移（迁出或迁入）时每 2 秒重取一次列表。 */
+const anyMigrationActive = computed(() =>
+  profiles.value.some((p) => migrationActive(p.migration) || migrationActive(p.incoming_migration)),
+)
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+watch(profiles, () => {
+  if (pollTimer) clearTimeout(pollTimer)
+  pollTimer = null
+  if (anyMigrationActive.value) pollTimer = setTimeout(() => void load(), 2000)
+})
+onBeforeUnmount(() => {
+  if (pollTimer) clearTimeout(pollTimer)
+})
+
 function statusClass(s: StorageStatus): string {
   if (s === 'active') return 'bg-ok-soft text-ok'
   if (s === 'readonly') return 'bg-warn-soft text-warn'
@@ -318,6 +405,27 @@ function statusClass(s: StorageStatus): string {
           点"编辑"重新填写 Secret Key 后保存（或恢复原来的 MASTER_KEY）。
         </p>
 
+        <MigrationPanel
+          v-if="p.migration"
+          :migration="p.migration"
+          :source-in-use="p.in_use"
+          :canceling="canceling && cancelSource?.id === p.id"
+          @cancel="openCancel(p)"
+          @details="openDetail(p)"
+        />
+        <p
+          v-if="p.incoming_migration"
+          class="flex items-center gap-2 rounded-md bg-info-soft px-3 py-2 text-xs text-foreground"
+          data-testid="storage-incoming-migration"
+          :data-source="p.incoming_migration.source_profile_name"
+        >
+          <ArrowRightLeftIcon class="size-3.5 shrink-0 text-info" />
+          正在从「{{ p.incoming_migration.source_profile_name }}」迁入：已迁
+          {{ p.incoming_migration.migrated.toLocaleString() }} / {{ p.incoming_migration.total.toLocaleString() }} 个快照（{{
+            migrationPercent(p.incoming_migration)
+          }}%）。迁移期间不能改为只读、停用或删除。
+        </p>
+
         <TestResultPanel
           v-if="cardTests[p.id]"
           :result="cardTests[p.id]?.result ?? null"
@@ -344,6 +452,15 @@ function statusClass(s: StorageStatus): string {
             data-testid="storage-set-default"
             @click="makeDefault(p)"
           >设为默认</GuardedButton>
+          <GuardedButton
+            v-if="p.in_use || p.migration"
+            size="xs"
+            variant="ghost"
+            :reason="migrateBlock(p, profiles)"
+            :disabled="busyId === p.id"
+            data-testid="storage-migrate"
+            @click="openMigrate(p)"
+          ><ArrowRightLeftIcon />迁移到…</GuardedButton>
           <div class="flex-1" />
           <GuardedButton
             v-if="p.status !== 'active'"
@@ -389,6 +506,8 @@ function statusClass(s: StorageStatus): string {
 
       <div class="rounded-lg bg-info-soft px-4 py-3 text-xs leading-relaxed text-foreground">
         设为默认只影响<strong>新写入</strong>的文件；已有的快照照样按自己记录的存储读取。
+        要把旧存储里的文件搬到新存储，用"迁移到…"：后台复制原图和封面、按 sha256 核对一致后才改快照的位置，迁完的旧存储可以停用
+        （迁移不删除旧存储里的对象）。
         工作站看图直接访问 S3：server 先检查权限，再用"工作站访问地址"签发预签名 URL，S3 的密钥不会下发到工作站。
         Secret Key 用 MASTER_KEY 加密后保存，页面上不会显示。
       </div>
@@ -416,6 +535,17 @@ function statusClass(s: StorageStatus): string {
     destructive
     :loading="busyId !== null"
     @confirm="confirmDisable"
+  />
+  <MigrateDialog v-model:open="migrateOpen" :source="migrateSource" :profiles="profiles" @started="onMigrationStarted" />
+  <MigrationDetailDialog v-model:open="detailOpen" :source="detailSource" />
+  <ConfirmDialog
+    v-model:open="cancelOpen"
+    title="取消迁移"
+    :description="`停下「${cancelSource?.profile_name}」的迁移。已经迁过去的不退回（它们已经在新存储里，照常能用）；之后可以再发起迁移，接着迁剩下的。`"
+    confirm-text="取消迁移"
+    destructive
+    :loading="canceling"
+    @confirm="confirmCancel"
   />
   <ConfirmDialog
     v-model:open="deleteOpen"
