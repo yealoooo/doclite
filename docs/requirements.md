@@ -133,7 +133,7 @@
 
 ## 4. 权限和角色
 
-菜单码：dashboard 项目看板、files 文件目录、scan 扫描上传、review 我的审核、review_assign 审核分配、catalog 归类、export 导出；system 组下 system.users 用户、system.roles 角色与权限、system.projects 项目、system.storage 存储配置、system.plugins 插件能力、system.license 许可证、system.audit 审计日志（后三个目前是占位页）。路由 `/dashboard`、`/files`、`/scan`、`/review`、`/review-assign`、`/catalog`、`/export`、`/system/*`。
+菜单码：dashboard 项目看板、files 文件目录、scan 扫描上传、review 我的审核、review_assign 审核分配、catalog 归类、export 导出；system 组下 system.users 用户、system.roles 角色与权限、system.projects 项目、system.storage 存储配置、system.plugins 插件能力、system.license 许可证、system.audit 审计日志（插件能力目前是占位页）。路由 `/dashboard`、`/files`、`/scan`、`/review`、`/review-assign`、`/catalog`、`/export`、`/system/*`。
 
 | 内置角色 | 菜单 | 职责 |
 |---|---|---|
@@ -374,6 +374,8 @@
 | system/roles（POST）· {id}（GET/PATCH/DELETE）· {id}/menus（PUT）· GET system/menus | system.roles | 角色、菜单 |
 | system/storage-profiles（GET/POST）· {id}（GET/PATCH/DELETE）· test · {id}/test · {id}/set-default · {id}/migrate（M5） | system.storage | 存储 |
 | system/projects（GET/POST）· {id}（GET/PATCH/DELETE）· access-candidates · projects/{pid}/access（GET/PUT） | system.projects | 项目、授权 |
+| system/license（GET、PUT `{"license": "<.lic 全文>"}`）（M7-1） | system.license | 许可证状态、导入 |
+| GET system/audit-logs（from、to、operator_id、project_id、target_type、action、limit、cursor → `{items, next_cursor}`）· GET system/audit-logs/filter-options（M7-3） | system.audit | 审计日志 |
 | folders/{id}（GET）· folders/{id}/children · POST folders | scan 或 files | 文件夹 |
 | folders/{id}（PATCH/DELETE）· folder-files/{id}（PATCH/DELETE）· {id}/copy · folder-files:move · :delete | files | 整理 |
 | POST folders/{id}/files · files:check · files/{fid}/rescan · GET projects/{pid}/rescans | scan 或 files | 上传、预检、重扫、待重扫 |
@@ -389,7 +391,7 @@
 | GET projects/{pid}/catalog-summary | dashboard | 看板 |
 | POST projects/{pid}/export-tasks:precheck · export-tasks（POST/GET）· export-tasks/{id} · /files · /changes · /download · /cancel | export | 导出 |
 
-**错误码**：400 `invalid_input`（参数、名称、格式、著录 `details.fields`、批量跨项目、空列表或 > 500）、`invalid_client_version`、`checksum_mismatch`、`invalid_image`、`invalid_cover`；401 `unauthorized`、`invalid_credentials`；403 `forbidden`、`admin_required`、`user_disabled`、`not_assignee`；404 `not_found`（批量 details.ids：文件目录批量是 folder_files id，审核和挂接是 file_id，批量定稿是条目 id，导出是节点或条目 id）；405 `method_not_allowed`；409 `conflict`（唯一冲突、版本过期、件号占用、显式改件号撞号、审的不是当前快照）、`invalid_state`（状态不允许、定稿前置、导出不就绪）、`tree_cycle`、`tree_full`、`root_folder_locked`、`file_cataloged`、`duplicate_content`、`storage_changed`、`storage_unavailable`、`storage_not_active`、`storage_is_default`、`storage_in_use`、`project_not_empty`、`item_locked`、`category_not_empty`、`last_admin`、`cannot_disable_self`、`builtin_role`、`admin_menus_locked`；413 `payload_too_large`；415 `unsupported_media_type`；426 `client_upgrade_required`；500 `internal`、`secret_unreadable`；503 `busy`。
+**错误码**：400 `invalid_license`、`license_mismatch`、`license_file_expired`（M7-1 导入）；400 `invalid_input`（参数、名称、格式、著录 `details.fields`、批量跨项目、空列表或 > 500）、`invalid_client_version`、`checksum_mismatch`、`invalid_image`、`invalid_cover`；401 `unauthorized`、`invalid_credentials`；403 `forbidden`、`admin_required`、`user_disabled`、`not_assignee`、`license_missing`、`license_expired`、`license_seats_full`（M7-1）；404 `not_found`（批量 details.ids：文件目录批量是 folder_files id，审核和挂接是 file_id，批量定稿是条目 id，导出是节点或条目 id）；405 `method_not_allowed`；409 `conflict`（唯一冲突、版本过期、件号占用、显式改件号撞号、审的不是当前快照）、`invalid_state`（状态不允许、定稿前置、导出不就绪）、`tree_cycle`、`tree_full`、`root_folder_locked`、`file_cataloged`、`duplicate_content`、`storage_changed`、`storage_unavailable`、`storage_not_active`、`storage_is_default`、`storage_in_use`、`project_not_empty`、`item_locked`、`category_not_empty`、`last_admin`、`cannot_disable_self`、`builtin_role`、`admin_menus_locked`；413 `payload_too_large`；415 `unsupported_media_type`；426 `client_upgrade_required`；500 `internal`、`secret_unreadable`；503 `busy`。
 
 ## 9. 用户决定汇总（按时间）
 

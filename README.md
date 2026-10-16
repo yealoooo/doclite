@@ -59,7 +59,7 @@ cd ../server && WEB_DIR=../web/dist go run ./cmd/server
 提交前：每个 Go 模块 `gofmt -l .` 没有输出、`go vet ./...`、`go test ./...` 通过；改了 `web/` 时 `npm run build` 通过。
 
 ```sh
-cd server && gofmt -l . && go vet ./... && go test ./...   # API 测试（65 个）+ 单元测试，本机约 15 秒
+cd server && gofmt -l . && go vet ./... && go test ./...   # API 测试（76 个）+ 单元测试，本机约 15 秒
 cd shared && go test ./...                                 # 文件头、名称规则、档号模板
 cd client && go test ./...                                 # 客户端的纯逻辑（Mac 上要 cgo，Wails 需要）
 cd web && npm run build                                    # vue-tsc 类型检查 + 构建
@@ -86,7 +86,7 @@ INIT_ADMIN_PASSWORD=<管理员密码> npm run screenshots -- --spec scripts/shot
 
 - `--base` 指向托管了 `web/dist` 的 server（或 vite preview、devshell，`/api` 由它们代理；有壳模式截图的脚本要用 devshell，见下面）。脚本在页面之外调接口也走这个地址。
 - `INIT_ADMIN_PASSWORD`（`INIT_ADMIN_USERNAME`）是管理员的密码，和启动 server 用同一组变量；演示账号的密码 `demo123456`（`DEMO_PASSWORD` 可改）。`SHOTS_TMP` 是脚本的临时目录（默认系统临时目录）。
-- 审计没有读接口，几个脚本直接 `psql` 读库：要 `psql` 在 PATH 里，`DATABASE_URL` 指向同一个库（默认本机 `doclite_dev`）。
+- 几个较早的脚本直接 `psql` 读审计（M7-3 之后有 `GET /api/system/audit-logs`，新脚本用接口）：要 `psql` 在 PATH 里，`DATABASE_URL` 指向同一个库（默认本机 `doclite_dev`）。
 
 **准备数据**（新库；已有的会跳过）：
 
