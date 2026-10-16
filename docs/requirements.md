@@ -431,19 +431,17 @@
 | 条带 > 1024 的 TIFF 页转换 | 对象太多阅读器打不开（可简化） |
 | 交付后变更刷新节流 | 原来 24 秒请求 77 次 |
 
-## 11. M5 还没做的
+## 11. M7 还没做的
 
-- **存储迁移**：对接客户对象存储；`storage-profiles/{id}/migrate` 由后台任务（`storage_migrate`）复制对象 → 校验 sha256 → 切换引用，迁完原存储可停用；完成标志是新旧文件都能读。**（待确认）** plan 写"更新快照行"，和"快照只追加"冲突，要问是否允许迁移改快照的存储和 key；迁移范围、导出物迁不迁、迁移中能否写入、失败续传也未定。
-- **许可证**：绑定首次启动生成的 install_id，限制在线会话数和到期日，Ed25519 离线签名（签发是厂商侧工程），存 system_settings。**（待确认）** 席位怎么算（浏览器和客户端、同人多处登录）、超出和到期行为、导入方式。
-- **install.ps1**：查虚拟化 → WSL2 → Docker → 导入镜像 → 生成密钥写 .env → compose up → 防火墙开 9080、8333 → 开机自启 → 建管理员、登记默认存储 → Portainer（仅本机）。**（待确认）** 细节。
-- **backup.ps1**：pg_dump + rclone 增量同步桶；**封面必须备份**【用户 2026-09-28】。**（待确认）** 频率、保留、恢复流程。
-- **export-tree** 运维命令：按目录结构导出文件和清单（容灾、交接），不跳过封面。
-- **镜像、compose、CI**（原 M0-7）。**（待确认）** 是否建远端仓库、CI 放哪。
-- **离线交付包**：镜像 tar、compose、脚本、客户端安装包。
-- **自动更新**：从内网 server 下载安装包（`shell/download/{version}`），校验签名后安装。**（待确认）** 签名证书、Wails 下的更新方式。
-- **SeaweedFS 4.45 复验**：预签名、CORS、带 content-disposition 的下载、取消上传残留。
-- **Windows 验收**【用户 2026-10-04】：远程 Windows 离线安装，按 `/Users/yanlong/project/doclite-project/bak/doclite-v3/docs/acceptance/m1-windows.md` 逐项查（自定义协议、热文件夹文件锁和目录通知、中文长路径、安装包、单实例、托盘幽灵图标、后台节流、页面拖放、下载）。
-- 其他：/system/audit 审计日志页**没有接口设计**（待确认 v1 是否做）；M4-6 验收未完成。
+**用户决定（2026-10-16，服务端报告 `doclite-project/server-report.html`）：**
+
+- **存储迁移**【用户 2026-10-16】：允许迁移**只改快照的存放位置**（`file_snapshots.storage_profile_id`、`storage_key`、`cover_key`），这是"快照只追加"的唯一例外。先复制、按 sha256 核对一致才改；迁原图和封面，导出物不迁（7 天自动删）；迁移时照常上传审核（新上传进默认存储）；中断后从断点继续；每个改了位置的快照写一条审计（`target_type=file_snapshot`、`action=storage_migrate`），任务开始、结束、取消也写审计。`storage-profiles/{id}/migrate` 由后台任务（`job_type=storage_migrate`）执行；多个快照共用一个对象（恢复、复制）时只复制一次。迁完原存储可停用。
+- **许可证**【用户 2026-10-16】：**按登录会话数算**（同一个人在两处登录算 2）。【总控】在线会话 = 未撤销、未到期、30 分钟内有活动（`last_seen_at`；打开的实时通道算活动）；满了新登录被拒（403 `license_seats_full`）；持有内置 admin 角色的人总能登录（会话照样计数）；到期后非 admin 不能登录、已登录的下一次请求被拒（`license_expired`），数据不动，导入新许可证立即恢复；到期前 30 天在页面顶部提醒 admin；还没导入许可证时只有 admin 能登录（`license_missing`）。许可证绑定服务端首次启动生成的 `install_id`（存 `system_settings`），"系统 → 许可证"页显示 install_id、导入（粘贴或选 .lic 文件）、显示公司、版本、人数、到期、当前在线数。签发用上一版的工具 `../bak/doclite-license`（Ed25519，`hardware_id` 填 install_id），服务端只验签，公钥编进程序。
+- **审计日志页**【用户 2026-10-16】：做简单版——只读分页列表，按时间、操作人、操作类型（target_type、action）、项目筛选，有 `system.audit` 菜单的人能看；新加一个查询接口。
+- **上传时拒绝导出不了的罕见格式**【总控建议，用户未反对 2026-10-16】：算术编码、无损、12 位的 JPEG，JPEG2000、JBIG 等压缩的 TIFF，上传时按文件头拒绝（`invalid_image`，提示换格式重扫）。
+- **新建导出任务**【总控建议，用户未反对 2026-10-16】：5 万页约 0.8–1 秒，先接受，正式硬件上重测。
+- **打包和交付**【用户 2026-10-16】：**先不走打包流程**——用户先在自己电脑上开发验证，没问题后再一起定打包流程。以下暂缓：镜像、compose、CI；install.ps1；backup.ps1（建议：每天 2 点、数据库保留 7 天 + 4 个周日、图片增量同步、删掉的多留 30 天、附 restore.ps1；**封面必须备份**【用户 2026-09-28】）；离线交付包；自动更新（建议：先只用自己的 Ed25519 更新签名，不买 Windows 代码签名证书）；SeaweedFS 4.45 复验；Windows 远程验收（按 `/Users/yanlong/project/doclite-project/bak/doclite-v3/docs/acceptance/m1-windows.md`）。
+- **export-tree** 运维命令：按目录结构导出文件和清单（容灾、交接），不跳过封面。随打包一起做。
 
 ## 12. v1 不做
 

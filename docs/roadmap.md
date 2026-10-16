@@ -176,11 +176,14 @@
 - **遗留：** Windows 验证项（zip64、导航保护、托盘、证书、CSP、混合内容、热文件夹文件锁、中文长路径、安装包等）和 SeaweedFS 4.45 复验、生产硬件（WSL2 + Docker、PG 18）重测性能 → M7。客户端断开的请求被记成 ERROR / 500（`httpx/errors.go`）→ M5-4。以后再做：S3 客户端无缓存、原图上传不分片、孤儿对象只记日志、children 不分页、删含已归类文件的文件夹 409 不带 details.ids、`is_current` 边角、导出单件 PDF > 9.3 GB 报错、透明 PNG 转换慢、看板暂不加索引、kqueue 每文件一个句柄、图标是占位的。
 - **须知：** 各 worktree 的 `.env` 共用 `TMP_DIR=/tmp/doclite`，server 启动时清空 `uploads/` → 子任务起 server 一律设自己的 `TMP_DIR`（已写进 CLAUDE.md）。doclite_dev 的 DEMO-A 留有「M1 / M2 / M3 验收演示 2026-10-16」、全宗 Z308、8 个导出任务；`doclite_test` 下有 7 个没连接的 `doclite_test_<随机>` 克隆库（测试中断留下的）。
 
-### [~] M5-4 服务端小修：客户端断开不算错误
+### [x] M5-4 服务端小修：客户端断开不算错误（commit 41f0e49）
 - **范围：** 客户端中途断开（翻页、关页面）导致的 `context canceled` 现在记成 `level=ERROR status=500`；改成 info 级别、状态 499（只记日志，不写响应），SSE 正常断开也不报错。
 - **完成标志：** API 测试：请求进行中取消上下文，日志里不出现 ERROR；三项检查通过。
 
 ---
+- **结果：** 三项检查通过；`TestClientDisconnect`（看板请求卡在等锁时取消 → 访问日志 499、INFO；SSE 连上后断开 → 200、INFO；全程无 ERROR）加 `-race -count=30` 稳定；撤掉修复时测试失败、日志正是事故那两行。
+- **做法：** `httpx.WriteError` 里 `clientGone(r, err)`：请求 context 的取消原因是 `context.Canceled` 且错误链里有 `context.Canceled` → 只写 499（`httpx.StatusClientClosedRequest`）、Debug 日志；服务端自己的超时、handler 自己派生的 context 仍按 500 ERROR。鉴权、项目授权、版本检查都走 `WriteError`，一处生效。SSE 刷响应头时失败且请求已取消 → Debug。apitest 新增 `NewEnvWithLog(t, log, …)`。
+- **遗留：** 上传请求体传到一半断开记 400 `invalid_input`（INFO）；原图已进 S3、写库前断开会留孤儿对象（Warn），以后可让写库一步 `WithoutCancel`。
 
 ## M6 桌面客户端（Wails）
 
@@ -230,12 +233,39 @@
 - **做法：** 新包 `client/internal/imgdecode`：`Open(path, maxPixels) (*Source, error)` 读文件头，`(*Source).Decode(ctx)` 解出文件里存的方向；错误 `*imgdecode.Error{Kind}`（unsupported_format、unsupported、corrupt、too_large、io、canceled）。转正函数（`OrientedSize`、`OrientPoint`、`RowPlacement`、`OrientRGBA`）从 tiles 和 cover 收进来，`tiles/orient.go` 删除；tiles 和 cover 都改走这个包。支持：Compression=7 条带和分块，有 JPEGTables 就拼进去；Compression=6 只认 JPEGInterchangeFormat 指向的完整 JPEG（和服务端导出一致）。颜色按 TIFF 的 Photometric 算：6 YCbCr、2 RGB（不管分量 ID、有没有 Adobe 标记）、1/0 灰度、5 CMYK（InkSet=1）；分平面支持 RGB、CMYK。不支持：每个样本不是 8 位、调色板、带透明或额外通道、YCbCr 分平面、无损或算术编码或 12 位的 JPEG。条带逐个解码贴进目标图；比标称大出 16 以上算坏文件，防止小文件声明巨大尺寸；ctx 在条带之间和每读 4 KB 检查。其他压缩的 TIFF 仍交给 x/image/tiff。imagecache 的切块失败本来就只记在内存里，升级重启后会重新切。
 - **遗留：** Windows 上只跑了 vet（M7）。自带 Adobe 标记的 CMYK JPEG 条带：客户端按 Adobe 惯例反相显示，服务端导出 PDF 原样嵌入，两边可能不一致（罕见，没有样本）。YCbCr 的 ReferenceBlackWhite 不是默认值时忽略。很大的单条带解码时 image/jpeg 内部那次分配打断不了；单条带 RGB、CMYK 解码瞬时约 7–8 字节/像素。浏览器里上传生成封面（`web/src/lib/cover-core.ts`）没查。已在队列里记成"没封面"的旧文件不补。
 - **须知（给 M6-4）：** DEMO-A「M6-3 切块自检」里新增了 8 个 JPEG TIFF 样本（原来那张 `tiff-jpeg-ycbcr.tif` 仍没有封面）。自检默认只切 G4 和 LZW，切 JPEG TIFF 要设 `DOCLITE_SMOKE_TILES_FILES="tiff-g4-1bit.tif,tiff-lzw-rgb.tif,tiff-jpeg-ycbcr.tif,tiff-jpeg-ycbcr-tables.tif,tiff-jpeg-rgb.tif,tiff-jpeg-tiles.tif,tiff-jpeg-planar.tif,tiff-jpeg-gray.tif,tiff-jpeg-cmyk.tif,tiff-jpeg-rgb-ids.tif,tiff-ojpeg.tif"`（G4 必须在第一个，viewer 一步看第一张；设了 FILES 不核对块格式）。`tiles.OrientedSize` 改为 `imgdecode.OrientedSize`。
-### [ ] M6-4 客户端验收（Mac）
+### [x] M6-4 客户端验收（Mac）（commit 4423ee4）
 - **范围：** 打包的客户端连 Go server 走一遍上传（热文件夹、壳里上传）、审核看大图、归类、导出下载（交给系统浏览器）；`--smoke` 全部步骤；截图脚本里依赖壳的部分（m1-shell、m1-scan、m1-cache、m2-viewer 等）。Windows 上的验收在 M7。
 - **前置：** M6-1 到 M6-3，以及服务端 M5。
+- **结果：** 检查全过（含 `GOOS=windows go vet`、`wails3 package`）；`--smoke` cold、warm 两遍各 24 步全过（含 rescan、tiles 11 张、14 个页面巡检、新加的主流程五步）；截图脚本壳模式全部跑通：m1-shell 6/6、m1-cache 4/4、m1-scan 8/8、m1-organize 10/10、m2-rescan 6/6、m2-viewer 21/21、m2-review 15/15、m2-accept 15/15（`M2_ACCEPT_SHELL_MOCK=1`；200 MB TIFF 切 388 块 1.0 s，壳内存峰值约 1.1 GB）；server 日志无 ERROR、WARN、5xx。客户端和前端没发现 bug，修的都是脚本。
+- **做法：** 壳的模拟 `web/scripts/lib/wails-mock.mjs`：页面用 `http://wails.localhost:<端口>` 打开（`isShell()` 认它），包住 `fetch` 拦 `POST /wails/runtime` 交给脚本的命令表，`_wails.dispatchWailsEvent` 推事件，`_wails.streamFactory` 换成经同源 `/api` 转发的模拟流；**没改正式前端代码**。`client/cmd/devshell`（不打包）：托管 `web/dist`、转发 `/api/`、`/shell/img/` 用客户端的 imagecache 和 tiles 现切、加同一份 CSP（挪到 `client/internal/webcsp`）。Tauri 模拟和 tiles-bench 去掉。自检加主流程五步（`DOCLITE_SMOKE_FLOW_SAMPLES` 才跑）：壳里上传、热文件夹、分配并在查看器里看块后逐页通过、建条目挂接定稿、导出并走 `openDownload → open_external`；自检模式下 `open_external`、上传对话框、选目录对话框改走自检路径（都以 `s.smoke != nil` 为条件），`smoke_external_check` 用 HTTP 下载核对 zip。
+- **遗留（用户亲手在 Mac 上试）：** 正常启动（填服务器地址、登录、关窗到托盘、Dock 打开、单实例聚焦）；托盘（状态、打开、暂停/继续、退出后图标消失）；系统对话框（/scan 选监控目录、/files 上传文件和文件夹、重扫件选择）；系统浏览器下载（/export、下载原图、升级提示）；真实扫描软件慢慢写大文件；/catalog 页序拖放；全键盘审核、查看器手感；本机缓存面板、"关于"里改服务器地址。**Windows（打包阶段）：** WebView2 的 CSP、导航保护、自检窗口、托盘、资产服务器大原图进内存、热文件夹文件锁和中文长路径、证书、混合内容、zip64、安装包、截图模拟和 devshell 复跑。
+- **须知：** devshell：`cd client && go run ./cmd/devshell -server <server> -listen 127.0.0.1:<端口> -cache <临时目录>`，截图 `--base http://127.0.0.1:<端口>`。自检主流程要 server 在执行导出，每跑一次在 DEMO-A 留「客户端自检/自检 <时间>」（6 页）、一个定稿条目（全宗 ZJ）和一个导出任务；重扫件内容在项目里不能重复。m1-scan 改用 DEMO-B；「2025 文书档案/盒 WS-2025-004」备注被脚本改成"3 号库 A 架 14 层"。「M2 验收演示 2026-10-16 M6-4」的「盒 04/IMG_0003」留着驳回给用户亲手演示。
 
 ---
 
-## M7 部署交付
+## M7 收尾功能（打包暂缓）
 
-原上一版的 M5：Docker 镜像和 compose、install.ps1、backup.ps1（封面必须备份）、离线交付包、许可证、存储迁移、客户端自动更新、SeaweedFS 4.45 复验、在用户的 Windows 上远程验收。requirements 第 11 节列了要问用户的事，开工前一起问。
+**用户决定（2026-10-16）：** 存储迁移允许只改快照的存放位置；许可证按登录会话数算；审计日志页做简单版；**先不走打包流程**，用户在自己电脑上验证没问题后再定打包。详见 requirements 第 11 节。**排期：** M7-1 ∥ M7-2 ∥ M7-3 → M7-4 验收 → 用户验证 → M8 打包交付。
+
+### [~] M7-1 许可证
+- **范围：** requirements 第 11 节"许可证"：install_id（首次启动生成，存 system_settings）、导入和查看接口、Ed25519 验签（兼容 `../bak/doclite-license` 签发的 .lic 格式，`hardware_id` = install_id）、登录和每个请求的席位与到期检查、到期提醒；前端"系统 → 许可证"页（替换占位页）、登录页的错误提示、到期提醒条。开发和测试用的密钥对：私钥只放测试数据或 scratchpad，**正式公钥由用户提供**，先留配置位置。
+- **完成标志：** API 测试：没许可证只有 admin 能登录、导入（签名错、install_id 不符、过期）、席位满拒绝、同人两处登录算 2、30 分钟无活动不计、admin 总能登录、到期后已登录的请求被拒、导入新证立即恢复、权限表；截图脚本新建一个 `m7-license.mjs`。
+- **前置：** M5、M6。
+
+### [~] M7-2 存储迁移
+- **范围：** requirements 第 11 节"存储迁移"：`POST storage-profiles/{id}/migrate`（把这个存储里的原图和封面迁到目标存储）、进度查询、取消；后台任务 `storage_migrate`（复用 `internal/platform/jobs`），分批复制 → sha256 核对 → 改快照位置 → 写审计，断点续；迁移时照常上传；共用对象只复制一次；完成后原存储可停用。前端在"系统 → 存储配置"里加迁移按钮、进度和结果。
+- **完成标志：** API 测试：端到端（两个桶，迁完新存储能读、原存储停用后照常看图和导出）、迁移中上传和重扫、中途重启续传、取消、核对不一致不改、共用对象、权限表；截图脚本新建 `m7-storage-migrate.mjs`。
+- **前置：** M5、M6。
+
+### [~] M7-3 审计日志页、上传拒绝罕见格式
+- **范围：** ① 审计日志查询接口（时间、操作人、target_type、action、项目筛选，按 id 倒序游标分页）和"系统 → 审计日志"页（替换占位页），显示可读的操作说明；② 上传时按文件头拒绝导出不了的罕见格式（`shared/imagehdr`，服务端上传和客户端、浏览器上传前的检查都用它）。
+- **完成标志：** API 测试（筛选、分页、权限表、10 万行审计时的耗时）；罕见格式的样本被拒、常见格式不受影响；截图脚本新建 `m7-audit.mjs`。
+- **前置：** M5、M6。
+
+### [ ] M7-4 收尾验收
+- **范围：** M7-1 到 M7-3 合并后，全部截图脚本（浏览器和壳模式）、`--smoke`、API 测试再跑一遍；整理给用户的本机试用说明。
+- **前置：** M7-1、M7-2、M7-3。
+
+## M8 打包交付（暂缓，等用户验证后再定）
+
+原上一版的 M5：Docker 镜像和 compose、install.ps1、backup.ps1（封面必须备份）、离线交付包、客户端自动更新、export-tree、SeaweedFS 4.45 复验、在用户的 Windows 上远程验收。requirements 第 11 节记了建议做法。

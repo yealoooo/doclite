@@ -104,7 +104,7 @@ docs/
 完整版和解释见 `docs/requirements.md` 第 2 节。
 
 1. **file_id 是锚。** `files` 表只有 id，其他模块都通过 file_id 引用文件。
-2. **快照只追加。** `file_snapshots` 不 UPDATE、不 DELETE，当前版本就是 `max(version_no)`。
+2. **快照只追加。** `file_snapshots` 不 UPDATE、不 DELETE，当前版本就是 `max(version_no)`。**唯一例外**【用户 2026-10-16】：存储迁移（`internal/storage` 的迁移任务）可以改 `storage_profile_id`、`storage_key`、`cover_key` 三列，复制并按 sha256 核对一致后才改，每行写审计。
 3. **文件目录只管位置和名字。** 移动、改名只改 `folders` 和 `folder_files`。
 4. **归类只存 file_id。** `archive_item_files` 不存快照，也不存文件夹。
 5. **审核记录审的是哪个快照，但不锁定。**
