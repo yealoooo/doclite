@@ -15,39 +15,29 @@
 
 ## 本机试用
 
-在这台 Mac 上自己试：server 跑在 9080、连远程服务器上的 `doclite_dev`（已经有演示账号和演示数据），只提供接口；网页由 web 单独提供（vite preview，4173，把 `/api` 转给 9080），浏览器打开网页的地址。PostgreSQL 在远程服务器上，S3（SeaweedFS）在本机 Docker 里（Docker Desktop 开着就行，见[本机开发](#本机开发)）；`server/.env` 已经配好（不要改里面的 `MASTER_KEY`）。server 和网页各占一个终端窗口。数据库在远程，翻页等操作比本机慢一些。
+**交付只有客户端**（界面在客户端里，不提供网页服务和浏览器访问）。在这台 Mac 上试就是两样：server（9080，只提供接口，连远程服务器上的 `doclite_dev`，已经有演示账号和演示数据）和客户端。PostgreSQL 在远程服务器上，S3（SeaweedFS）在本机 Docker 里（Docker Desktop 开着就行，见[本机开发](#本机开发)）；`server/.env` 已经配好（不要改里面的 `MASTER_KEY`）。数据库在远程，翻页等操作比本机慢一些。
 
-1. **server**（要在 `server/` 下运行，它读当前目录的 `.env`；启动时自动执行迁移，Ctrl+C 退出）：
+1. **server**（要在 `server/` 下运行，它读当前目录的 `.env`；启动时自动执行迁移）：
 
    ```sh
    cd server
    go build -o bin/doclite-server ./cmd/server
-   ./bin/doclite-server
+   nohup ./bin/doclite-server > tmp/server-9080.log 2>&1 &     # 后台运行，日志在 server/tmp/server-9080.log
+   kill $(lsof -tiTCP:9080 -sTCP:LISTEN)                      # 停止
    ```
 
-   server 只提供接口：浏览器直接打开 9080 只会得到 JSON 的 404（`/api/health` 能看到版本）。这是开发版，不检查许可证。导出、存储迁移由拿到执行器锁的 server 执行：启动日志里有"另一个 server 进程正在执行后台任务"时，是别的 server（例如开发任务临时起的 2908x）先拿到了锁，导出会交给它——先停掉那个再重启 9080（见[后台任务](#后台任务导出存储迁移)）。
-2. **网页**（另开一个终端，Ctrl+C 退出）：
+   server 只提供接口（`http://127.0.0.1:9080/api/health` 能看到版本）。这是开发版，不检查许可证。导出、存储迁移由拿到执行器锁的 server 执行：启动日志里有"另一个 server 进程正在执行后台任务"时，是连同一个库的别的 server 先拿到了锁（见[后台任务](#后台任务导出存储迁移)）。
+2. **客户端**：本地验证不用打包，编译后直接运行（界面编进客户端，所以先把 web 编成产物包；界面没改过就不用重做第一步）：
 
    ```sh
-   cd web
-   npm ci            # 第一次、或者 package-lock.json 变了之后
-   npm run build     # 第一次、或者 web/ 改过之后（产物在 web/dist）
-   npm run preview   # http://127.0.0.1:4173，/api（含实时推送）转给 http://127.0.0.1:9080
+   cd web && npm ci && npm run release          # web/release/doclite-web-<版本>.tar.gz
+   cd ../client && ~/go/bin/wails3 task build    # 编译出 client/bin/Doclite（取 WEB_VERSION 指定版本的产物包嵌进去）
+   ./bin/Doclite
    ```
 
-   浏览器打开 <http://127.0.0.1:4173>。server 不在 9080 时用 `DOCLITE_SERVER=http://127.0.0.1:<端口> npm run preview`；换端口 `npm run preview -- --port <端口>`；让局域网里别的电脑也能打开加 `-- --host`（监听所有地址；经局域网地址打开是非安全上下文）。改前端时用 `npm run dev`（<http://127.0.0.1:5173>，热更新，不用 build），代理一样。
-3. **桌面客户端**（界面随客户端打包：先把 web 打成产物包，客户端打包时嵌进去）：
+   要 `.app` 时用 `~/go/bin/wails3 package`（产物 `client/bin/Doclite.app`）。第一次启动填服务器地址 **`http://127.0.0.1:9080`**（server 的接口地址）。改了服务器地址会弹系统确认框。关窗口只是缩到托盘（菜单栏图标），托盘里"退出"才真的退出；再次打开会回到已经开着的那个窗口。客户端的设置、会话、上传队列、图片缓存在 `~/Library/Application Support/Doclite/`。
 
-   ```sh
-   cd web && npm run release            # web/release/doclite-web-<版本>.tar.gz（先 build 再打包）
-   cd ../client
-   ~/go/bin/wails3 package              # 取 WEB_VERSION 指定版本的产物包嵌进去，产物 client/bin/Doclite.app
-   open bin/Doclite.app
-   ```
-
-   第一次启动填服务器地址：`http://127.0.0.1:4173`（上一步的网页地址，和浏览器用的同一个；直接填 server 的 `http://127.0.0.1:9080` 也行，客户端只经它访问 `/api`）。界面是打包时嵌进去的那一版：改了 web 要重新 `npm run release`、`wails3 package`。关窗口只是缩到托盘（菜单栏图标），托盘里"退出"才真的退出；再次打开会回到已经开着的那个窗口。客户端的设置、会话、上传队列、图片缓存在 `~/Library/Application Support/Doclite/`。
-
-**账号**：`admin` / `admin123456`（系统管理员，什么都能做）；演示账号的密码都是 `demo123456`，常用的有 `demo_scanner`（扫描上传、重扫）、`demo_manager`（审核分配、看板、导出）、`demo_reviewer`（审核）、`demo_cataloger`（归类），全部见[演示账号](#演示账号)。同一个人可以在浏览器和客户端各登录一次。
+**账号**：`admin` / `admin123456`（系统管理员，什么都能做）；演示账号的密码都是 `demo123456`，常用的有 `demo_scanner`（扫描上传、重扫）、`demo_manager`（审核分配、看板、导出）、`demo_reviewer`（审核）、`demo_cataloger`（归类），全部见[演示账号](#演示账号)。
 
 **可以拿来试的数据**（都在项目 DEMO-A；会改东西的操作最好在自己新建的文件夹里做）：
 
@@ -100,8 +90,8 @@ cd web && npm ci && npm run dev            # 另一个终端；浏览器打开 h
 ```
 
 - server 只提供 `/api`，`/api` 以外的路径一律 JSON 404，不托管网页。
-- web 用 vite 单独启动：`npm run dev`（5173，热更新）或 `npm run build && npm run preview`（4173，构建产物，和部署时的 nginx 一样是静态文件）。两种都把 `/api`（包括实时推送）代理给 `DOCLITE_SERVER`（默认 `http://127.0.0.1:9080`）；端口、监听地址用 vite 的参数：`DOCLITE_SERVER=http://127.0.0.1:29080 npm run preview -- --port 24173 --strictPort`（默认只监听 127.0.0.1，`--host` 监听所有地址）。
-- 部署时 web 是单独的 nginx 容器（静态文件 + `/api` 反向代理给 server），M8 做。
+- web 用 vite 单独启动：`npm run dev`（5173，热更新）或 `npm run build && npm run preview`（4173，构建产物）。两种都把 `/api`（包括实时推送）代理给 `DOCLITE_SERVER`（默认 `http://127.0.0.1:9080`）；端口、监听地址用 vite 的参数：`DOCLITE_SERVER=http://127.0.0.1:29080 npm run preview -- --port 24173 --strictPort`（默认只监听 127.0.0.1，`--host` 监听所有地址）。
+- 交付不提供网页服务：web 只是界面的源码，编成产物包嵌进客户端；vite（dev、preview）只在改界面、跑截图脚本时用。
 - 端口约定：自己的 server 用 9080；并行的子任务用 29080–29082（server）和 24173–24175（vite preview），互不干扰。
 - 同一个库上开多个 server 时，只有一个执行导出（见[后台任务](#后台任务导出存储迁移)）；多个 server 的 `TMP_DIR` 要分开（启动时会清空 `TMP_DIR/uploads`）。
 
@@ -208,7 +198,7 @@ cd client && wails3 package      # 打包成 client/bin/Doclite.app（ad-hoc 签
 
 - `client/WEB_VERSION` 记要嵌入的 web 版本。打包（`wails3 build`、`wails3 package`）前的 frontend 任务（`client/cmd/webartifact`）按 `DOCLITE_WEB_ARTIFACT`（产物包的路径）取，没给就找 `../web/release/doclite-web-<WEB_VERSION>.tar.gz`；核对包里清单的版本和 `WEB_VERSION` 一致后解到 `client/frontend/`（不提交），再 embed 进可执行文件。找不到产物包或版本不对时构建失败并说明怎么办。别处构建好的产物包：`DOCLITE_WEB_ARTIFACT=/path/doclite-web-0.1.0.tar.gz wails3 package`（不需要 `web/` 目录）。以后拆仓库，改成从发布地址下载这个包；
 - 升级界面：改 `web/package.json` 的版本、`npm run release`，改 `client/WEB_VERSION`，重新打包客户端。客户端的版本号在 `client/VERSION`（`X-Client-Version`，server 的 `MIN_CLIENT_VERSION` 和它比），"关于"里同时显示客户端版本和界面版本；
-- 客户端里的"服务器地址"是 **web 服务的入口**（和浏览器用的同一个地址：部署时是 web 的 nginx 容器，本机是 vite 的 4173 或 5173），直接填 server 本身的地址也行——客户端只经它访问 `/api`（探测只要 `GET /api/health` 通）。已经配置过地址、再改成别的地址时，客户端弹系统确认框；
+- 客户端里的"服务器地址"是 **server 的接口地址**（本机 `http://127.0.0.1:9080`；交付时是服务器的 IP 和端口），客户端只访问 `/api`（探测只要 `GET /api/health` 通），不依赖网页服务（交付不提供网页服务）。开发时也可以填 vite 的地址（5173），vite 会把 `/api` 转给 server。已经配置过地址、再改成别的地址时，客户端弹系统确认框；
 - 连接服务器、连不上、需要升级几页是客户端自带的（`client/internal/shellpages`）；
 - 界面和客户端之间的约定（桥的命令、事件、能力、白名单、地址、信任边界）只有一份：[`client/BRIDGE.md`](client/BRIDGE.md)。
 
@@ -225,7 +215,7 @@ FRONTEND_DEVSERVER_URL=http://127.0.0.1:5173 bin/Doclite            # 界面由 
 **自检 `--smoke`**（参数从环境变量读；结果是标准输出的一行 JSON；退出码 0 成功、1 失败、2 连不上、3 需要升级）：
 
 ```sh
-DOCLITE_SMOKE_SERVER=http://127.0.0.1:4173 DOCLITE_SMOKE_USERNAME=demo_scanner DOCLITE_SMOKE_PASSWORD=demo123456 \
+DOCLITE_SMOKE_SERVER=http://127.0.0.1:9080 DOCLITE_SMOKE_USERNAME=demo_scanner DOCLITE_SMOKE_PASSWORD=demo123456 \
 DOCLITE_BACKGROUND=1 client/bin/Doclite.app/Contents/MacOS/Doclite --smoke
 ```
 
