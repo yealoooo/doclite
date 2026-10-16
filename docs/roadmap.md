@@ -274,9 +274,12 @@
 - **做法：** ① `GET /api/system/audit-logs?from=&to=&operator_id=&project_id=&target_type=&action=&limit=&cursor=` → `{items, next_cursor}`（id 倒序游标，limit 默认 50、上限 200，`[from, to)` RFC 3339；时间先在主键上二分换成 id 范围、两头各放宽 1 小时，再按 created_at 精确过滤；一页一条 SQL 带操作人、项目）；`GET /api/system/audit-logs/filter-options`（全部用户含停用、全部项目含已删除）。菜单 `system.audit`。前端 `AuditView.vue`（筛选同步到地址栏、加载更多、展开看前后差异），翻译集中在 `web/src/lib/audit.ts`（9 类对象、21 种动作 + license import/replace + file_snapshot/storage_migrate，不认识的原样显示）。② `shared/imagehdr.ParseUpload`（规则在 `encoding.go`，`Parse` 不变）：拒绝导出做不了的编码——JPEG 无损、分层、算术编码、非 8 位、分量数不是 1/3/4；TIFF 的 JPEG2000、JBIG 等压缩、非常规位数、浮点、CIELab、非 JPEG 的 YCbCr、找不到完整 JPEG 的旧式 6、JPEG 压缩又分平面或带透明等。server 上传、重扫和客户端上传队列、壳里重扫共用，400 `invalid_image`（"不支持的图片格式（…），请换个保存格式重扫"），客户端被拒的不发请求、不重试。`TestUploadCheckMatchesExport` 核对四个目录全部样本：导出不支持 ⇔ 上传拒绝。
 - **遗留：** 客户端看不了但导出能做的（不拒，客户端没封面、不能切块）：2、4 位 TIFF、非 JPEG 的 CMYK TIFF、灰度带透明 TIFF、非 JPEG 的分平面 TIFF、CCITT MH、4 分量无 Adobe APP14 的 JPEG。反过来分平面 JPEG TIFF 客户端能看但导出不行，现在上传被拒（已入库的不受影响）。时间筛选假设写审计的事务不超过 1 小时（M7-2 要短事务）；100 万条时全表扫估计约 70 ms。README 第 88 行"审计没有读接口"过时、requirements 第 8 节接口表待补（M7-4）。
 - **须知：** `m7-audit.mjs` 每跑一次在 DEMO-A 留一个已软删除的「截图验证 M7-3 审计 <时间>」文件夹。M7-2 的开始、结束、取消动作名定下后补进 `web/src/lib/audit.ts` 的 `AUDIT_ACTIONS` / `ACTION_LABELS`。
-### [~] M7-4 收尾验收
+### [x] M7-4 收尾验收（commit 5a9bdaf）
 - **范围：** M7-1 到 M7-3 合并后，全部截图脚本（浏览器和壳模式）、`--smoke`、API 测试再跑一遍；整理给用户的本机试用说明。
 - **前置：** M7-1、M7-2、M7-3。
+- **结果：** server（API 测试 82 个、单元测试 31 个）、shared（20 个）、client（含 `GOOS=windows` vet 和交叉编译）、`npm run build`、`wails3 package` 全过；**截图脚本 26 个 225/225**（浏览器、devshell 壳模式、局域网 preview；m2-accept 新建「M2 验收演示 2026-10-16 M7-4」，m3-accept 用试跑模式）；`--smoke` cold、warm 各 24/24；server 日志无 ERROR、5xx。perf：建导出任务第 1 遍（机器忙）中位数 1.036 s 超线，第 2 遍 968 ms，其余都在目标内（我的审核 110–132、看板 46–51、预检 49–95、交付后变更 301–388 ms、审计 0.7–10 ms）→ 总控把这一项的判失败线放宽到 1.5 秒（用户已接受、正式硬件重测）。跨任务：开发版全部演示账号能登录；审计页对迁移、许可证的中文说明正确；带测试公钥的构建连临时克隆库：未导入只有 admin 角色能登录、导入 50 席后都能登录、换 3 席后第 4 个 `license_seats_full`、admin 照样能登录（临时库已删）。m2-accept 200 MB TIFF：壳里切 388 块 978 ms、峰值 1073 MiB。
+- **修了什么：** 前端、客户端、服务端没发现 bug；脚本：`m7-audit` 的迁移假数据改成实际格式、多个脚本另存截图改为跟 `--out` 走、`m2-accept` G4 默认名改为 `a4-g4-1bit.tif`；"Windows 在 M7"改为 M8；README 开头加"本机试用"、测试个数、后台任务一节改名"导出、存储迁移"。
+- **遗留：** doclite_dev 有三个「M2 验收演示 …」（不带后缀、M6-4、M7-4，各有一页驳回的「盒 04/IMG_0003」），「客户端自检」下多个自检文件夹；`doclite_test` 下 12 个没人连的 `doclite_test_<随机>` 克隆库可手工删；许可证页"当前在线"可能超过席位数（admin 不受限），可加一句说明；devshell 页面取消请求时记 WARN；seed:demo 不建 `demo_reviewer2`。M8：Windows 验证项、正式公钥写进构建脚本、`wails3` 不在 PATH（用 `~/go/bin/wails3`）。
 
 ## M8 打包交付（暂缓，等用户验证后再定）
 

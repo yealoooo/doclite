@@ -34,7 +34,7 @@
 ## 目录
 
 ```
-go.work                 Go 工作区：server、shared、（以后）client
+go.work                 Go 工作区：server、shared、client
 server/                 Go 模块 doclite/server
   cmd/server/             入口：读配置、执行迁移、启动 HTTP 和后台任务、托管 web 构建产物
   internal/
@@ -58,8 +58,8 @@ shared/                 Go 模块 doclite/shared：server 和 client 共用的�
   imagehdr/               JPEG、PNG、TIFF 文件头解析（不解码像素）
   names/                  文件名、Windows 保留名等规则
 web/                    网页前端（从上一版复制）
-client/                 Wails 桌面客户端（M6 再建）
-deploy/                 compose、.env 示例；M7 再加 install.ps1、backup.ps1
+client/                 Wails 桌面客户端（M6）：cmd/devshell 是截图脚本用的开发服务器（不打包）
+deploy/                 （M8 打包交付时再建：compose、.env 示例、install.ps1、backup.ps1）
 docs/
 ```
 

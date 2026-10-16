@@ -268,7 +268,9 @@ func TestPerf(t *testing.T) {
 		return fmt.Sprintf("%d 件，不就绪 %d", out.ItemCount, out.NotReadyCount)
 	})
 	var taskID uuid.UUID
-	measure(t, &res, "建导出任务（冻结 2000 件 / 5 万页）", time.Second, 3, func() string {
+	// 目标是 1 秒；本机实测中位数 0.97–1.04 秒（大头是 COPY 明细），机器一忙就过线。用户 2026-10-16 接受现状、
+	// 正式硬件上重测，所以这里按 1.5 秒判失败，报告里照样记实测数字。
+	measure(t, &res, "建导出任务（冻结 2000 件 / 5 万页）", 1500*time.Millisecond, 3, func() string {
 		var task exportTask
 		admin.Post(pp+"/export-tasks", body).Expect(http.StatusCreated).JSON(&task)
 		if task.ItemCount != perfExportItem || task.PageCount != perfExportItem*perfPages {
