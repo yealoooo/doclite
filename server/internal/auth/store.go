@@ -81,16 +81,19 @@ type sessionRow struct {
 	Username    string
 	DisplayName string
 	UserStatus  string
+	IsAdmin     bool
 }
 
 func findSession(ctx context.Context, q db.Querier, tokenHash []byte) (*sessionRow, error) {
 	var s sessionRow
 	err := q.QueryRow(ctx, `SELECT s.id, s.user_id, s.client_type, s.last_seen_at, s.expires_at, s.revoked_at IS NOT NULL,
-       u.username, u.display_name, u.status
+       u.username, u.display_name, u.status,
+       EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+               WHERE ur.user_id = s.user_id AND r.role_code = '`+AdminRoleCode+`')
 FROM user_sessions s JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = $1`, tokenHash).
 		Scan(&s.SessionID, &s.UserID, &s.ClientType, &s.LastSeenAt, &s.ExpiresAt, &s.Revoked,
-			&s.Username, &s.DisplayName, &s.UserStatus)
+			&s.Username, &s.DisplayName, &s.UserStatus, &s.IsAdmin)
 	if db.IsNoRows(err) {
 		return nil, nil
 	}

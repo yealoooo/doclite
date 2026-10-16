@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { errorMessage } from '@/api/http'
+import { errorMessage, isApiError } from '@/api/http'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -18,19 +18,38 @@ const route = useRoute()
 const username = ref('')
 const password = ref('')
 const error = ref('')
+/** 错误码（M7-1：许可证的三种错误给专门的说明）。 */
+const errorCode = ref('')
 const submitting = ref(false)
+
+/** 登录失败的说明：许可证挡住的三种给中文说明，其余用服务器的 message。 */
+function loginError(err: unknown): string {
+  if (isApiError(err, 'license_seats_full')) {
+    const max = (err.details as { max_users?: number } | undefined)?.max_users
+    return `在线人数已达到许可证的上限${max ? `（${max} 个）` : ''}，请等其他人退出后再登录，或联系管理员。同一账号在几处登录就占几个。`
+  }
+  if (isApiError(err, 'license_expired')) {
+    return '系统的许可证已到期，暂时只有管理员能登录。请联系管理员导入新的许可证。'
+  }
+  if (isApiError(err, 'license_missing')) {
+    return '系统还没有导入有效的许可证，暂时只有管理员能登录。请联系管理员。'
+  }
+  return errorMessage(err)
+}
 
 const canSubmit = computed(() => username.value.trim() !== '' && password.value !== '' && !submitting.value)
 
 async function submit() {
   if (!canSubmit.value) return
   error.value = ''
+  errorCode.value = ''
   submitting.value = true
   try {
     await session.login(username.value.trim(), password.value)
     await router.replace(safeRedirect(route.query.redirect) ?? '/')
   } catch (err) {
-    error.value = errorMessage(err)
+    error.value = loginError(err)
+    errorCode.value = isApiError(err) ? err.code : ''
   } finally {
     submitting.value = false
   }
@@ -67,6 +86,7 @@ async function submit() {
           class="rounded-md bg-destructive-soft px-3 py-2 text-sm text-destructive"
           role="alert"
           data-testid="login-error"
+          :data-code="errorCode"
         >
           {{ error }}
         </p>

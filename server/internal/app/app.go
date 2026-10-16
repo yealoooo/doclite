@@ -18,6 +18,7 @@ import (
 	"doclite/server/internal/export"
 	"doclite/server/internal/file"
 	"doclite/server/internal/folder"
+	"doclite/server/internal/license"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
 	"doclite/server/internal/platform/jobs"
@@ -52,6 +53,8 @@ type Options struct {
 	ExportCleanupInterval time.Duration
 	// ExportPartSize 是导出物分片上传每片的大小，只给测试调小；零值按导出物的预计大小算（至少 8 MiB）。
 	ExportPartSize int64
+	// License 是许可证（M7-1）：PublicKey 为空时不检查（开发构建）。Run 里用编进程序的公钥，测试注入测试公钥。
+	License license.Options
 }
 
 // App 是组装好的 server。
@@ -74,6 +77,8 @@ type App struct {
 	// Exports 是导出（M5-2）；Jobs 是后台任务执行器（导出在里面执行）。
 	Exports *export.Service
 	Jobs    *jobs.Executor
+	// License 是许可证（M7-1）；处理请求之前要调 InitLicense。
+	License *license.Service
 
 	cleanupEvery time.Duration
 	stopCleanup  context.CancelFunc
@@ -106,6 +111,8 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	executor.Register(export.JobType, exportSvc.JobHandler())
 	// 导出的临时目录只有拿到单实例锁的进程才能清（别的进程可能正在用）。
 	executor.OnStart(func() { export.SweepTmp(opts.Upload.TmpDir, log) })
+	licenseSvc := license.NewService(pool, authSvc, opts.License)
+	authSvc.SetLicense(licenseSvc)
 
 	gate := auth.NewGate(authSvc)
 	api := httpx.NewRouter()
@@ -120,6 +127,7 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	file.NewHandler(fileSvc).Routes(api, gate)
 	review.NewHandler(reviewSvc).Routes(api, gate)
 	export.NewHandler(exportSvc).Routes(api, gate)
+	license.NewHandler(licenseSvc).Routes(api, gate)
 
 	// /api 的最外层是客户端版本检查（先于鉴权）；/api 以外是网页。
 	apiHandler := auth.ClientVersionCheck(opts.ClientVersions)(api)
@@ -150,6 +158,7 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 		Reviews:      reviewSvc,
 		Exports:      exportSvc,
 		Jobs:         executor,
+		License:      licenseSvc,
 		cleanupEvery: cleanupEvery,
 	}, nil
 }
@@ -202,6 +211,23 @@ func (a *App) EnsureInitialAdmin(ctx context.Context, admin *config.InitAdmin) e
 		return a.Users.EnsureInitialAdmin(ctx, "", "", "", false, a.log)
 	}
 	return a.Users.EnsureInitialAdmin(ctx, admin.Username, admin.DisplayName, admin.Password, true, a.log)
+}
+
+// InitLicense 生成 install_id（首次启动）、读导入的许可证并验签（M7-1）。要在处理请求之前调用。
+func (a *App) InitLicense(ctx context.Context) error {
+	if err := a.License.Init(ctx); err != nil {
+		return err
+	}
+	if a.License.Dev() {
+		a.log.Warn("开发构建（没有编进许可证公钥）：不检查许可证")
+	} else {
+		v, err := a.License.Get(ctx)
+		if err != nil {
+			return err
+		}
+		a.log.Info("许可证", "status", v.Status, "install_id", v.InstallID)
+	}
+	return nil
 }
 
 // EnsureInitialStorage 首次启动时按 S3_* 登记默认存储（库里没有存储配置时）。

@@ -155,7 +155,7 @@ func (c *Client) Rescan(ctx context.Context, server, fileID, path string, progre
 		if errors.Is(err, errServerChanged) || errors.Is(err, errNoServer) {
 			return nil, &UserError{"服务器地址换了，没有上传"}
 		}
-		// 连不上：先问一次 GET /api/me，会话失效（401）或要升级（426）就报那个错误。
+		// 连不上：先问一次 GET /api/me，会话失效（401）、要升级（426）或许可证挡住（403，M7-1）就报那个错误。
 		msg := err.Error()
 		var ne *NetError
 		if errors.As(err, &ne) {
@@ -163,7 +163,8 @@ func (c *Client) Rescan(ctx context.Context, server, fileID, path string, progre
 			merr := c.Me(mctx, server)
 			cancel()
 			var me *APIError
-			if errors.As(merr, &me) && (me.Status == http.StatusUnauthorized || me.Status == http.StatusUpgradeRequired) {
+			if errors.As(merr, &me) && (me.Status == http.StatusUnauthorized || me.Status == http.StatusUpgradeRequired ||
+				licenseBlocked(me)) {
 				out.Error = &RescanFailure{Status: me.Status, Code: me.Code, Message: me.Message, Details: me.Details}
 				break
 			}

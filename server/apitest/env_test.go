@@ -235,6 +235,9 @@ func NewEnvWithLog(t *testing.T, log *slog.Logger, opts ...func(*app.Options)) *
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := a.InitLicense(ctx); err != nil {
+		t.Fatal(err)
+	}
 	srv := httptest.NewServer(a.Handler())
 	t.Cleanup(srv.Close)
 	return &Env{t: t, URL: srv.URL, Pool: pool, App: a, personas: map[string]*persona{}}

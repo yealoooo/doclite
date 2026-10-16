@@ -10,6 +10,7 @@
 - [桌面客户端](#桌面客户端)
 - [后台任务（导出）](#后台任务导出)
 - [演示账号](#演示账号)
+- [许可证](#许可证)
 
 ## 本机开发
 
@@ -178,3 +179,34 @@ DOCLITE_BACKGROUND=1 client/bin/Doclite.app/Contents/MacOS/Doclite --smoke
 | `demo_disabled` | 审核员（已停用） | DEMO-B | 授权对话框里的"已停用"，登录不了 |
 
 新库上 `demo_reviewer2` 和 DEMO-A 里 `demo_reviewer`、`demo_reviewer2` 的个人授权要手工补（系统管理 → 用户、项目 → 授权），M2 的截图脚本要用。
+
+## 许可证
+
+规则见 requirements 第 11 节：席位按**登录会话数**算（同一个人两处登录算 2；30 分钟内有活动的才算在线，打开的实时通道也算活动）；持有内置 admin 角色的人总能登录（会话照样计数）；到期后别人登不上、已登录的下一次请求被拒（`license_expired`），导入新的立即恢复；没导入时只有 admin 能登录（`license_missing`）；到期前 30 天起给管理员显示提醒条。界面在"系统管理 → 许可证"（菜单 `system.license`）。
+
+**开发构建和正式构建**：server 只验签，公钥编进程序，**不能用环境变量改**。没编进公钥的构建（`go run`、普通的 `go build`）是开发版，不检查许可证（谁都能登录，许可证页显示"开发版，不检查许可证"，不能导入）。正式构建用 `-ldflags` 编进公钥，值是签发工具生成的 `public.pem` 中间那一行（SPKI 的 base64；也可以是 32 字节原始公钥的 base64）：
+
+```sh
+cd server
+go build -ldflags "-X doclite/server/internal/license.publicKey=$(grep -v -- ----- /path/to/public.pem)" -o doclite-server ./cmd/server
+```
+
+值不对时 server 不启动（日志写明原因）；启动日志里有公钥的指纹和许可证的状态。正式公钥由用户提供，打包（M8）时写进构建脚本。
+
+**install_id**：server 首次启动时生成，存在 `system_settings`（键 `install_id`），以后不变；格式是 `sha256:` + 64 位十六进制（签发工具要求的 `--hardware-id` 格式，内容是随机数）。许可证页显示，可以复制。
+
+**签发**（工具在 `../bak/doclite-license`，Rust，Ed25519；`cargo build --release`，Web 管理后台见它的 README）：
+
+```sh
+doclite-license keygen --output ./keys            # 只做一次：private.pem 妥善保管（backup-key 做加密备份），public.pem 给构建用
+doclite-license issue --private-key ./keys/private.pem --company "某某档案馆" --edition enterprise \
+  --max-users 20 --duration 1y --hardware-id "<许可证页上的 install_id>" --output license.lic
+doclite-license renew --private-key ./keys/private.pem --base-license license.lic --duration 1y --output renewed.lic   # 续期
+```
+
+`--max-users` 就是席位数；`--edition`（trial、standard、enterprise）只显示。把 .lic 交给客户，管理员在许可证页粘贴内容或选文件导入，立即生效；签名不对（`invalid_license`）、install_id 不符（`license_mismatch`）、已经过期（`license_file_expired`）都会说明。导入、替换写审计（`target_type=license`，`action` 是 `import` 或 `replace`）。
+
+**和签发工具的兼容**：签名签的是工具把 payload 重新序列化成的规范 JSON（字段按名字排序、serde_json 的转义、chrono 的时间写法），`internal/license` 照着复现；`internal/license/testdata` 里是用工具签的 .lic（命令行 `issue`，以及按路径编译工具自己的 `license.rs`、`crypto.rs` 签的固定时间、带各种转义字符的几份）和工具算出的规范 JSON，单元测试逐字节比对、验签，API 测试导入其中几份。夹具里只有测试公钥，私钥不在仓库里。
+
+**本机试正式构建**：用工具（或测试夹具的做法）生成一对测试密钥，按上面编进测试公钥，另起一个 server（换端口和 `TMP_DIR`）；它连的库里导入的许可证换回开发构建后不起作用，换成正式公钥后显示"无效"，要重新导入。
+

@@ -8,6 +8,8 @@
 // - 403 `admin_required`：交给 `onAdminRequired`（重新拉当前用户和菜单，让防提权预判跟上最新权限），
 //   message 照常提示（能进页面但操作要管理员，在原页面提示）；
 // - 426 `client_upgrade_required`（只会在壳里出现）：交给 `onUpgradeRequired`（整页提示更新）；
+// - 403 `license_expired`、`license_missing`（M7-1：许可证到期或没有有效的许可证，非管理员的请求被拒）：交给
+//   `onLicenseBlocked`（提示后回登录页）；登录接口本身除外（登录页自己显示）；
 // - 其他错误默认用 toast 提示 message；调用方要自己在原位置显示的，用 `handle` 声明接管哪些错误码
 //   （或 `true` 接管全部），这些错误就不再弹 toast。
 // SSE 订阅用 `api/stream.ts` 的 `openStream()`。
@@ -69,6 +71,11 @@ interface Handlers {
   onAdminRequired: (err: ApiError) => void
   /** 426 `client_upgrade_required`：壳的版本低于服务器要求的最低版本（details 见 design §5）。 */
   onUpgradeRequired?: (err: ApiError) => void
+  /**
+   * M7-1：403 `license_expired`、`license_missing`（非管理员被许可证挡住）。`redirect` 为 false 时是启动时的
+   * 登录状态探测（`authRedirect: false`），只提示、不跳转（路由守卫会去登录页）。
+   */
+  onLicenseBlocked?: (err: ApiError, redirect: boolean) => void
 }
 
 let handlers: Handlers = {
@@ -83,6 +90,9 @@ export function setHttpHandlers(h: Handlers) {
 }
 
 const LOGIN_PATH = '/api/auth/login'
+
+/** M7-1：许可证挡住非管理员时的错误码（403）。 */
+export const LICENSE_BLOCK_CODES: readonly string[] = ['license_expired', 'license_missing']
 
 /** 查询参数去掉空值后的键值对（顺序不变）。 */
 export function queryPairs(query?: Record<string, QueryValue>): [string, string][] {
@@ -149,6 +159,10 @@ export function failResponse(
   }
   if (status === 403 && err.code === 'forbidden') {
     handlers.onForbidden(err)
+    return err
+  }
+  if (status === 403 && LICENSE_BLOCK_CODES.includes(err.code) && path !== LOGIN_PATH) {
+    handlers.onLicenseBlocked?.(err, opts.authRedirect !== false)
     return err
   }
   if (status === 426 && err.code === 'client_upgrade_required') {

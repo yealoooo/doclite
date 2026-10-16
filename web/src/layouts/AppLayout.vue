@@ -17,6 +17,8 @@ import ImageCacheDialog from '@/components/app/ImageCacheDialog.vue'
 import { useShellStore } from '@/stores/shell'
 // M1-13：托盘菜单"继续热文件夹"失败时（tray:error），在任何页面都弹出原因（只在壳里订阅）。
 import { useTrayErrors } from '@/composables/useTrayErrors'
+// M7-1：许可证提醒条（只给管理员）。
+import LicenseBanner from '@/components/app/LicenseBanner.vue'
 
 const session = useSessionStore()
 const route = useRoute()
@@ -159,6 +161,7 @@ useTrayErrors()
     </aside>
 
     <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <LicenseBanner />
       <RouterView />
     </main>
     <AboutDialog v-model:open="aboutOpen" />

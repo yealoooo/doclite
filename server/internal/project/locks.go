@@ -25,7 +25,8 @@ import (
 //   - 6003：内容锁（file.LockContent，事务级）；
 //   - 6004：上一版的任务领取锁，这一版不用，留空；
 //   - 6005：档号（catalog 的 lockArchiveNo，事务级）；
-//   - 6006：后台任务执行器的单实例锁（6006,0，会话级，jobs.Executor 在一条专用连接上持有）。
+//   - 6006：后台任务执行器的单实例锁（6006,0，会话级，jobs.Executor 在一条专用连接上持有）；
+//   - 6011：许可证席位检查（auth 的 lockClassSeats，6011,0，事务级，登录时在锁住用户行之后取）。
 const (
 	lockClassFileTree    = 6001
 	lockClassCatalogTree = 6002

@@ -57,6 +57,14 @@ const (
 	CodeUpgradeRequired      = "client_upgrade_required"
 	CodeInternal             = "internal"
 	CodeBusy                 = "busy"
+	// M7-1：许可证。登录和请求被拒（403）：没有有效的许可证、已到期、在线会话满了；导入时（400）：文件不对或签名
+	// 验不过、install_id 不符、已经过期。
+	CodeLicenseMissing     = "license_missing"
+	CodeLicenseExpired     = "license_expired"
+	CodeLicenseSeatsFull   = "license_seats_full"
+	CodeInvalidLicense     = "invalid_license"
+	CodeLicenseMismatch    = "license_mismatch"
+	CodeLicenseFileExpired = "license_file_expired"
 )
 
 // Invalid 是 400 `invalid_input`。

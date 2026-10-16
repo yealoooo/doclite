@@ -30,6 +30,8 @@ const (
 	TargetFolder          = "folder"
 	// M5-2：导出任务（create、cancel、download）。
 	TargetExportTask = "export_task"
+	// M7-1：许可证（import、replace；target_id 是许可证的 license_id）。
+	TargetLicense = "license"
 )
 
 // Entry 是一条审计记录。

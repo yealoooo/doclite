@@ -30,7 +30,7 @@ declare module 'vue-router' {
 const PlaceholderView = () => import('@/views/PlaceholderView.vue')
 
 /** 系统管理下还没实现的页面。 */
-const SYSTEM_PLACEHOLDER_PATHS = ['plugins', 'license', 'audit']
+const SYSTEM_PLACEHOLDER_PATHS = ['plugins', 'audit']
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -105,6 +105,12 @@ const router = createRouter({
         {
           path: 'export',
           component: () => import('@/views/export/ExportView.vue'),
+          meta: { requiresMenu: true },
+        },
+        // M7-1：许可证（状态、install_id、导入）。
+        {
+          path: 'system/license',
+          component: () => import('@/views/system/LicenseView.vue'),
           meta: { requiresMenu: true },
         },
         ...SYSTEM_PLACEHOLDER_PATHS.map((p) => ({

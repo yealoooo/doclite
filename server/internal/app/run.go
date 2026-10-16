@@ -12,6 +12,7 @@ import (
 
 	"doclite/server/internal/config"
 	"doclite/server/internal/file"
+	"doclite/server/internal/license"
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/jobs"
 	"doclite/server/migrations"
@@ -29,6 +30,15 @@ const jobsStopTimeout = 8 * time.Second
 func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	log.Info("doclite server 启动", "version", Version, "listen", cfg.ListenAddr,
 		"master_key_id", cfg.MasterKey.KeyID(), "session_ttl", cfg.SessionTTL.String())
+
+	// 编进程序的许可证公钥（M7-1）：值不对时不启动；没有时是开发构建，不检查许可证。
+	licenseKey, err := license.BuiltinPublicKey()
+	if err != nil {
+		return err
+	}
+	if licenseKey != nil {
+		log.Info("许可证公钥", "fingerprint", license.Fingerprint(licenseKey))
+	}
 
 	pool, err := db.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -50,6 +60,7 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		Jobs: jobs.Options{Concurrency: cfg.JobConcurrency, Heartbeat: cfg.JobHeartbeat,
 			RetryBackoff: cfg.JobRetryBackoff},
 		ExportCleanupInterval: cfg.ExportCleanupInterval,
+		License:               license.Options{PublicKey: licenseKey},
 	}, log)
 	if err != nil {
 		return err
@@ -58,6 +69,9 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 	if err := a.EnsureInitialStorage(ctx, cfg.InitialStorage); err != nil {
+		return err
+	}
+	if err := a.InitLicense(ctx); err != nil {
 		return err
 	}
 

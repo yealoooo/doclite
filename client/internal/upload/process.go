@@ -20,7 +20,8 @@ import (
 // → 生成封面（生成不了就不带）→ 流式上传（file_name、content_sha256、cover?、file）。本地文件不改不删。
 //
 // 失败的分类：400、403、413、415 永久失败；网络错误、5xx、408、429、别的 409 临时失败（自动重试，1 秒起翻倍，封顶
-// 5 分钟）；401、426 暂停整个队列（这一项放回排队，不算重试）；400 invalid_cover 去掉封面再传一次；
+// 5 分钟）；401、426 暂停整个队列（这一项放回排队，不算重试）；403 `license_expired`、`license_missing`（M7-1：许可证
+// 到期或没有有效的许可证）和 401 一样暂停（重新登录后自动继续），不算文件失败；400 invalid_cover 去掉封面再传一次；
 // 409 duplicate_content 记为"内容重复"；404：传到子文件夹的忘掉映射、按名字重建（最多三轮），传到目标文件夹本身的
 // 记失败 target_not_found（不自动重建选定的目标）。
 
@@ -355,7 +356,8 @@ func (e *Engine) classify(ctx context.Context, it *Item, err error, upload bool)
 			merr := e.api.Me(mctx, it.ServerURL)
 			cancel()
 			var me *APIError
-			if errors.As(merr, &me) && (me.Status == http.StatusUnauthorized || me.Status == http.StatusUpgradeRequired) {
+			if errors.As(merr, &me) && (me.Status == http.StatusUnauthorized || me.Status == http.StatusUpgradeRequired ||
+				licenseBlocked(me)) {
 				return e.classifyAPI(it, me)
 			}
 		}
@@ -368,6 +370,8 @@ func (e *Engine) classifyAPI(it *Item, ae *APIError) *result {
 	switch {
 	case ae.Status == http.StatusUnauthorized:
 		return &result{kind: resPause, pause: PauseAuth, message: "登录已失效，上传已暂停。重新登录后自动继续"}
+	case licenseBlocked(ae):
+		return &result{kind: resPause, pause: PauseAuth, message: licensePauseMessage(ae)}
 	case ae.Status == http.StatusUpgradeRequired:
 		return &result{kind: resPause, pause: PauseUpgrade, message: "客户端版本过低，上传已暂停：" + ae.Message, details: ae.Details}
 	case ae.Status == http.StatusNotFound && it.RelDir == "":
@@ -450,4 +454,17 @@ func hashFile(path string, size int64) (string, error) {
 		return "", ErrFileChanged
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// licenseBlocked：403 `license_expired`、`license_missing`（M7-1：服务器的许可证到期或没有有效的许可证，非管理员的
+// 请求被拒）。和会话失效一样暂停整个队列，不是这个文件的问题。
+func licenseBlocked(ae *APIError) bool {
+	return ae.Status == http.StatusForbidden && (ae.Code == "license_expired" || ae.Code == "license_missing")
+}
+
+func licensePauseMessage(ae *APIError) string {
+	if ae.Code == "license_expired" {
+		return "服务器的许可证已到期，上传已暂停。管理员导入新的许可证后重新登录，自动继续"
+	}
+	return "服务器还没有有效的许可证，上传已暂停。管理员导入许可证后重新登录，自动继续"
 }

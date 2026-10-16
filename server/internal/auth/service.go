@@ -45,6 +45,8 @@ type Service struct {
 	opts      Options
 	hasher    *hasher
 	dummyHash string
+	// license 是许可证的限制（M7-1，见 license.go）；nil 时不检查。
+	license License
 }
 
 // NewService 建 Service。会预先算一个占位哈希（登录名不存在时拿它做一次校验，让"用户不存在"和"密码错"耗时相同）。
@@ -179,6 +181,10 @@ func (s *Service) Login(ctx context.Context, username, password string, ci Clien
 		if status != "active" {
 			return errUserDisabled // 校验之后被停用了
 		}
+		// M7-1：许可证（没导入、到期、席位满；admin 不受限制）。
+		if err := s.checkLoginLicense(ctx, tx, cred); err != nil {
+			return err
+		}
 		if err := insertSession(ctx, tx, sess); err != nil {
 			return err
 		}
@@ -206,6 +212,8 @@ type Principal struct {
 	SessionID        uuid.UUID
 	SessionExpiresAt time.Time
 	ClientType       string
+	// IsAdmin：有内置的 admin 角色（M7-1：不受许可证限制）。
+	IsAdmin bool
 	// menus 是菜单码（所有角色的并集），第一次用到时查库，同一个请求里只查一次。
 	menus map[string]bool
 }
@@ -223,6 +231,12 @@ func (s *Service) Authenticate(ctx context.Context, token string) (*Principal, e
 	if row == nil || row.Revoked || !now.Before(row.ExpiresAt) || row.UserStatus != "active" {
 		return nil, httpx.Unauthorized()
 	}
+	// M7-1：许可证到期（或没有有效的）时，非 admin 的请求一律拒绝（不记活动）。
+	if s.license != nil && !row.IsAdmin {
+		if err := s.license.RequestCheck(); err != nil {
+			return nil, err
+		}
+	}
 	if now.Sub(row.LastSeenAt) >= lastSeenInterval {
 		if err := touchSession(ctx, s.pool, row.SessionID); err != nil {
 			return nil, err
@@ -235,6 +249,7 @@ func (s *Service) Authenticate(ctx context.Context, token string) (*Principal, e
 		SessionID:        row.SessionID,
 		SessionExpiresAt: row.ExpiresAt,
 		ClientType:       row.ClientType,
+		IsAdmin:          row.IsAdmin,
 	}, nil
 }
 
@@ -268,6 +283,9 @@ type Me struct {
 	Status      string    `json:"status"`
 	// Roles 按 role_code 排序。
 	Roles []MeRole `json:"roles"`
+	// LicenseNotice 是许可证的提醒（M7-1：快到期、已到期、没导入、无效），只给有 system.license 菜单的人；
+	// 没有要提醒的时不输出。
+	LicenseNotice any `json:"license_notice,omitempty"`
 }
 
 // MeRole 是 Me 里的一个角色。
@@ -289,6 +307,17 @@ func (s *Service) GetMe(ctx context.Context, userID uuid.UUID) (*Me, error) {
 	me.Roles = make([]MeRole, 0, len(roles))
 	for _, r := range roles {
 		me.Roles = append(me.Roles, MeRole{RoleCode: r.RoleCode, RoleName: r.RoleName})
+	}
+	if s.license != nil {
+		if notice := s.license.Notice(); notice != nil {
+			menus, err := menuCodesOfUser(ctx, s.pool, userID)
+			if err != nil {
+				return nil, err
+			}
+			if menus[MenuSystemLicense] {
+				me.LicenseNotice = notice
+			}
+		}
 	}
 	return me, nil
 }

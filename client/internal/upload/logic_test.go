@@ -208,3 +208,17 @@ func TestMultipartBody(t *testing.T) {
 		t.Fatalf("文件变短了应该报 ErrFileChanged，实际 %v", err)
 	}
 }
+
+// M7-1：许可证到期、没有有效许可证（403）和会话失效一样暂停整个队列，不算文件失败；别的 403 照旧永久失败。
+func TestClassifyLicenseBlocked(t *testing.T) {
+	e := &Engine{}
+	for _, code := range []string{"license_expired", "license_missing"} {
+		r := e.classifyAPI(&Item{}, &APIError{Status: 403, Code: code, Message: "x"})
+		if r.kind != resPause || r.pause != PauseAuth || r.message == "" {
+			t.Fatalf("%s：%+v", code, r)
+		}
+	}
+	if r := e.classifyAPI(&Item{}, &APIError{Status: 403, Code: "forbidden", Message: "x"}); r.kind != resFailed {
+		t.Fatalf("forbidden：%+v", r)
+	}
+}

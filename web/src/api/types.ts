@@ -8,6 +8,8 @@ export interface Me {
   status: 'active' | 'disabled'
   /** 按 role_code 排序。 */
   roles: { role_code: string; role_name: string }[]
+  /** M7-1：许可证的提醒（快到期、已到期、没导入、无效），只给有 system.license 菜单的人；没有时不出现。 */
+  license_notice?: LicenseNotice | null
 }
 
 /** `GET /api/me/menus` 的一项（不含分组本身）。 */
@@ -1357,4 +1359,42 @@ export interface ExportDownload {
   size: number
   expires_at: string | null
   url_expires_at: string
+}
+
+// ---------- M7-1：许可证 ----------
+
+/**
+ * 许可证的状态：dev 开发构建（不检查）、missing 没导入、valid 有效、expiring 30 天内到期、expired 已到期、
+ * invalid 导入过但验不过（当作没导入）。
+ */
+export type LicenseStatusCode = 'dev' | 'missing' | 'valid' | 'expiring' | 'expired' | 'invalid'
+
+/** `GET /api/me` 的 license_notice。 */
+export interface LicenseNotice {
+  status: Exclude<LicenseStatusCode, 'dev' | 'valid'>
+  expires_at: string | null
+  /** 离到期还有几天（不足一天按一天）；已到期、没有许可证时为 null。 */
+  days_left: number | null
+}
+
+/** `GET`、`PUT /api/system/license`。 */
+export interface LicenseState {
+  status: LicenseStatusCode
+  install_id: string
+  /** 导入的、验签通过的许可证；开发构建、没导入、验不过时为 null。 */
+  license: {
+    license_id: string
+    company: string
+    /** trial、standard、enterprise（只显示）。 */
+    edition: string
+    max_users: number
+    issued_at: string
+    expires_at: string
+  } | null
+  days_left: number | null
+  /** 当前在线的登录会话数（含管理员的；30 分钟内有活动的才算）。 */
+  online_sessions: number
+  invalid_reason: string | null
+  imported_at: string | null
+  imported_by: string | null
 }

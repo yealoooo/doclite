@@ -54,6 +54,15 @@ setHttpHandlers({
   onUpgradeRequired(err) {
     useShellStore(pinia).requireUpgrade(err.details)
   },
+  // M7-1：许可证到期（或没有有效的许可证），非管理员的请求被拒：提示原因，回登录页（管理员导入新的许可证后再登录）。
+  onLicenseBlocked(err, redirect) {
+    useSessionStore(pinia).clear()
+    toast.error(err.message, { id: 'license-blocked', duration: 10000 })
+    if (!redirect) return
+    const current = router.currentRoute.value
+    if (current.name === 'login') return
+    void router.replace({ name: 'login', query: { redirect: current.fullPath } })
+  },
 })
 
 function mountApp() {
