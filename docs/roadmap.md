@@ -309,7 +309,7 @@
 - 用户停掉了；只合了它做完的测试相关改动（commit b97f4a0）：自检加 `runtime_guard` 一步（打包的客户端里核对非白名单的运行时调用被 403）；`m0-storage`、`m7-storage-migrate` 按"默认"标记找存储，不写死名字。完整回归改由用户用验收清单（`docs/acceptance-checklist.md`，M7-9，180 条，全部在客户端里）让 Codex 点击验证。
 
 ### [x] M7-9 功能验收清单（commit 1554e1d）
-- `docs/acceptance-checklist.md`：18 节 180 条，全部在客户端里操作（服务器地址 `http://127.0.0.1:9080`），会改数据的用「验收-MMDD」前缀，附现做样本的脚本和结果表。写清单时发现的小问题（待修）：多页 TIFF 和文件超限的提示文字重复；对比两个旧版本时角标 `v1 · v1`；"没有DPI 不足的文件"少空格；导出预检问题清单只显示 3 页（需求 5 页）。
+- `docs/acceptance-checklist.md`：18 节 180 条，全部在客户端里操作（服务器地址 `http://127.0.0.1:9080`），会改数据的用「验收-MMDD」前缀，附现做样本的脚本和结果表。写清单时发现的小问题（待修）：多页 TIFF 和文件超限的提示文字重复；对比两个旧版本时角标 `v1 · v1`；"没有DPI 不足的文件"少空格；导出预检问题清单只显示 3 页（需求 5 页）——已在 M7-12 修好。
 
 ### [x] M7-10 server、client 的 Makefile（commit 193e55b）
 - `server/Makefile`、`client/Makefile` 各有 `make build`、`make run`（用户要求只要这两个）。
@@ -319,6 +319,10 @@
 - **做法：** `/settings`（只在客户端里有入口，按能力显示）：服务器（地址、`/api/health` 连通和耗时、服务端版本、修改地址）、账号（退出登录，`useLogout` 共用）、本机存储（数据目录、图片缓存、上传队列四个计数和重试失败、日志目录，都能"在访达中打开"）、热文件夹（状态、去扫描上传设置）、关于（客户端版本、界面版本、系统和架构、复制诊断信息，不含令牌和 Cookie）。新能力 `settings`：`local_dirs`、`open_local_dir {dir}`（只认 data、logs、cache，路径由壳算，`--smoke` 时不打开）；`shell_info` 加 `arch`、`os_version`；托盘"设置…"发 `tray:open-settings`。删掉 AboutDialog、ImageCacheDialog、ImageCachePanel 的 compact 用法。侧栏收起：56px 图标栏、悬停提示、项目切换器显示编码、用户区只剩头像、⌘B / Ctrl+B，状态存 localStorage `doclite.sidebar.collapsed`。
 - **结果：** client 检查和测试、web build 和 release、`make build` 过；m1-shell 14/14（新加 5 张）、m1-cache 4/4、m1-scan 8/8、m0 13/13；自检 cold 30 步全过（含新的 `settings_page`）。
 - **遗留：** 托盘"设置…"和真的打开访达没在真机上点过；Windows 上 `OpenFileManager`、系统版本显示待实测；加了新能力但 `client/VERSION` 仍是 0.2.0，发版时升。
+
+### [x] M7-12 修验收清单发现的 4 个小问题（commit 6480f4f）
+- server `file/receive.go`：多页 TIFF、不支持的格式的错误说明不再追加重复的一段；web `uploads.ts`：文件太大不再加"文件太大："前缀（server 原文已有）；`ReviewView.vue`：自选两个版本对比时非当前版本角标只显示 `v<n>`，"没有 DPI 不足的文件"补空格；`NewExportPanel.vue`：预检问题清单显示前 5 页。
+- **结果：** server gofmt、vet、单元测试、`Folder|Upload|TestPermsFiles` API 测试过；web build、release 过；客户端 `make build` 过。改了 server，9080 要重启才生效。
 
 ## M8 打包交付（暂缓，等用户验证后再定）
 
