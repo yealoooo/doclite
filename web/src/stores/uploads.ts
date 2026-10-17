@@ -168,7 +168,7 @@ function uploadErrorMessage(e: unknown): string {
     case 'not_found':
       return '目标文件夹已不存在（可能刚被删除）'
     case 'payload_too_large':
-      return `文件太大：${e.message}`
+      return e.message // server 的说明已经是"文件太大：上限 …"
     case 'unsupported_media_type':
       return `格式不支持：${e.message}`
     case 'invalid_image':

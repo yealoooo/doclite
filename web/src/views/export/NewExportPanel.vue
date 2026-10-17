@@ -343,7 +343,7 @@ const reasonSummary = computed(() => {
 function shortIssue(it: ExportNotReadyItem): string {
   const parts = it.reasons.map((r) => {
     if (r.code === 'pages_not_approved' && r.pages?.length) {
-      const shown = r.pages.slice(0, 3).map((p) => `第 ${p.page_no} 页：${REVIEW_LABEL[p.review_status] ?? p.review_status}`)
+      const shown = r.pages.slice(0, 5).map((p) => `第 ${p.page_no} 页：${REVIEW_LABEL[p.review_status] ?? p.review_status}`)
       const more = (r.count ?? 0) > shown.length ? ` 等 ${r.count} 页` : ''
       return shown.join(' · ') + more
     }

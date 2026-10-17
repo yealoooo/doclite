@@ -291,9 +291,9 @@ func bodyError(err error) error {
 func imageError(err error) error {
 	switch {
 	case errors.Is(err, imagehdr.ErrUnsupported):
-		return httpx.NewError(http.StatusUnsupportedMediaType, httpx.CodeUnsupportedMedia, err.Error()+"：只收 JPEG、PNG、TIFF")
+		return httpx.NewError(http.StatusUnsupportedMediaType, httpx.CodeUnsupportedMedia, err.Error())
 	case errors.Is(err, imagehdr.ErrMultiPage):
-		return httpx.NewError(http.StatusBadRequest, CodeInvalidImage, err.Error()+"：不收多页 TIFF，请先拆成单页再上传")
+		return httpx.NewError(http.StatusBadRequest, CodeInvalidImage, err.Error())
 	case errors.Is(err, imagehdr.ErrInvalid), errors.Is(err, imagehdr.ErrTooLarge), errors.Is(err, imagehdr.ErrUnsupportedEncoding):
 		return httpx.NewError(http.StatusBadRequest, CodeInvalidImage, err.Error())
 	}

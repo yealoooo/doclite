@@ -560,8 +560,9 @@ async function openCompare(pair?: [string, string]) {
     const labelOf = (s: SnapshotItem, fallback: string) => (s.snapshot_id === latest.snapshot_id ? '当前' : fallback)
     compare.value = {
       fileId: fid,
-      left: sideOf(left, pair ? labelOf(left, `v${left.version_no}`) : leftLabel),
-      right: sideOf(right, labelOf(right, `v${right.version_no}`)),
+      // 角标是"v<n> · 说明"：自选的两个版本里不是当前版本的只显示 v<n>，不再重复版本号。
+      left: sideOf(left, pair ? labelOf(left, '') : leftLabel),
+      right: sideOf(right, labelOf(right, '')),
       sids: [left.snapshot_id, right.snapshot_id],
     }
     compareMode.value = 'side'
@@ -1189,7 +1190,8 @@ const positionText = computed(() => {
 
 const emptyText = computed(() => {
   const tab = TABS.find((t) => t.state === stateFilter.value)?.label ?? ''
-  const what = lowDpi.value ? `DPI 不足、${tab === '全部' ? '' : tab}` : tab === '全部' ? '' : tab
+  // "DPI"前留空格（中文和英文之间）：没有 DPI 不足的文件。
+  const what = lowDpi.value ? ` DPI 不足、${tab === '全部' ? '' : tab}` : tab === '全部' ? '' : tab
   return `没有${what ? `${what.replace(/、$/, '')}的` : '分给你的'}文件`
 })
 </script>
