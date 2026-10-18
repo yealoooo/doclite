@@ -12,10 +12,10 @@
 1. **上传**：扫描员经客户端热文件夹或浏览器上传，进文件目录，状态"待分配"。
 2. **分配审核**：负责人按文件夹或选中的文件分给审核员，可改派。
 3. **审核**：逐页看原图，通过或驳回（带原因）。驳回 → 重扫（同一 file_id 追加版本，轮次 +1）→ 自动回原审核员 → 对比上一轮再审。
-4. **归类挂接**（和审核并行，互不限制）：建归类树和条目、著录、生成档号、挂文件排页序、定稿。
+4. **归档**（和审核并行，互不限制）：建归类树；**整个文件夹归档**——把盒子（或几个子文件夹）放到归类节点上，每个子文件夹生成一件，文件夹里的文件和顺序就是页；归档后文件夹**封存**；著录、生成档号、锁定。要改页：解除封存 → 在文件目录里改 → 重新归档【用户 2026-10-19，见 5.9】。
 5. **导出**：只从归类树发起；预检 → 后台生成 zip（每件一个 PDF 或原图包）→ 浏览器直连 S3 下载；之后的变化列为"交付后变更"，可只补交变了的件。
 
-两棵树只靠 file_id 相连：**文件目录**按物理来源组织（"2025 文书档案 / 盒 WS-2025-003"），像电脑文件夹一样整理；**归类树**是档案逻辑（全宗 → 门类 → 年度 → 保管期限 → 机构 → 条目（件）→ 页序），决定档号和著录。整理文件目录不影响归类。两棵树同一结构（parent_id + path_code），共用树组件。
+两棵树：**文件目录**按物理来源组织（"2025 文书档案 / 盒 WS-2025-003 / 关于…的通知"），由扫描员像电脑文件夹一样整理；**归类树**是档案逻辑（全宗 → 门类 → 年度 → 保管期限 → 机构 → 条目（件）→ 页序），决定档号和著录。**数据单向流动**：文件目录整理好 → 整个文件夹归档进归类树，件记住来源文件夹、页存 file_id；归档后来源文件夹封存，归类树这边不改页。两棵树同一结构（parent_id + path_code），共用树组件。
 
 ### 1.2 部署
 
@@ -47,8 +47,8 @@
 
 1. **file_id 是锚。** files 只有 id，其他模块都用 file_id 引用文件，终生不变。
 2. **快照只追加。** file_snapshots 不改不删，当前版本 = max(version_no)。恢复旧版 = 追加快照、复用旧 key，不复制字节。
-3. **文件目录只管位置和名字。** 移动、改名只改 folders、folder_files；对象、快照、审核、归类不动。
-4. **归类只存 file_id。** 挂接不存快照和文件夹；归类员永远看到最新快照。
+3. **文件目录只管位置和名字。** 移动、改名只改 folders、folder_files；对象、快照、审核、归类不动。**已封存的文件夹**（是某个未删除条目的来源、且不在"修改中"）不能改结构，见 5.5【用户 2026-10-19】。
+4. **只能整个文件夹归档。** 件记住来源文件夹（`archive_items.source_folder_id`，一个文件夹只对应一件）；页 = 归档时文件夹里的文件，挂接只存 file_id、不存快照；归类员永远看到最新快照。归类树这边不能单独挂页、移页、排页序【用户 2026-10-19，取代 2026-10-14 Q3、Q4 的按页挂接和待归类池】。
 5. **审核记下审的快照，但不锁定。** 审后仍可编辑（插件阶段），状态不变。
 6. **导出只从归类发起。** 范围是归类节点或条目，只含已归类文件；"只导出审核通过的"每次勾选。
 7. **S3 key 按 ID。** `<path_prefix><project_code>/<file_id>/v<no>.<jpg|png|tif>`（按文件头格式），封面 `v<no>.cover.jpg`；移动时 key 不变。
@@ -69,6 +69,7 @@
 
 - `/Users/yanlong/project/doclite-project/bak/doclite-v3/server/migrations/0001_init.sql`：25 张表 + 菜单和内置角色初始数据，约束在 PG 16 验证过，字段注释即说明；需要 `pg_trgm`。
 - 同目录 `0002_review_indexes.sql`（我的审核的部分索引）、`0003_item_no_index.sql`（已删除条目的件号索引）。
+- **`0004`（2026-10-19，整个文件夹归档）**：archive_items 加 `source_folder_id`（引用 folders，未删除条目里唯一的部分索引）、`source_status`（sealed / modifying）、`unsealed_by`、`unsealed_at`、`unseal_reason`；status 的 done 改成 draft，CHECK 改为 draft / locked。**不处理旧数据**【用户 2026-10-19：旧数据不用管，开发库直接重建】：开发库 `doclite_dev` 删掉重建，再用精简的演示数据脚本造数据（只要够功能测试，见 roadmap M9-3）。
 - 参考 SQL：`/Users/yanlong/project/doclite-project/bak/doclite-v3/docs/sql/key-queries.sql`（查重、path_code 分配、移动、分配、通过、软删除、导出预检、任务领取等）。
 - 0001 中 `cover_key` 注释"WebP、server 生成"已过时。预留不写：快照类型 auto/edit/restore、案卷（volume）、page_label、pdf_ocr/ofd、ocr_results。
 
@@ -90,7 +91,7 @@
 | file_snapshots | 版本：存储、key、封面 key、sha256、大小、mime、宽高、DPI、颜色、upload_name、类型 |
 | file_reviews | 一次分配和结果：审核人、分配人、open/done/cancelled、结果、所审快照、原因、说明 |
 | archive_categories | 归类树：类型、业务编码、名称 |
-| archive_items | 条目（件）：节点、件号、档号、题名、extra_fields、draft/done/locked、row_version |
+| archive_items | 条目（件）：节点、件号、档号、题名、extra_fields、draft（未锁定）/locked（已锁定）、row_version；来源文件夹、封存状态 sealed/modifying 和解除封存的人、时间、原因（迁移 0004） |
 | archive_item_files | 挂接：条目、file_id（唯一）、页号 |
 | export_tasks / export_task_files | 导出任务；每页当时的快照和页号 |
 | background_jobs | 任务队列：payload、状态、尝试、心跳、进度 |
@@ -101,8 +102,9 @@
 
 - **path_code**：根文件夹和归类根都是 `00001.`，每项目一个根；子编码 = 父编码 + 父 last_child_no 原子 +1 的 5 位数 + 点；不回收；每层 ≤ 99999（超出 409 `tree_full`）；子树按前缀区间查，按 path_code 排序即先序。移动：拿锁 → 目标以自己编码开头 409 `tree_cycle` → 新父下领编码 → 一条 UPDATE 换子树前缀。归类的 `category_code`（拼档号）和 path_code 无关。
 - **软删除**：文件、文件夹、项目、节点、条目；删文件夹时子树一起；重名和唯一只看未删除的。
-- **两种状态独立**：审核状态 = `folder_files.review_status`（unassigned/pending/approved/rejected）；归类状态 = 有无挂接行（条目 locked = 已定稿）。不变量：已删除的条目没有挂接行。
-- 一个文件同时只有一行 open 分配，只在一个条目里；项目内未删除条目档号唯一。
+- **两种状态独立**：审核状态 = `folder_files.review_status`（unassigned/pending/approved/rejected）；归档状态 = 有无挂接行（条目 locked = 已锁定）。不变量：已删除的条目没有挂接行、不占来源文件夹。
+- **文件夹的归档状态**（两边显示同一个）：未归档（不是任何未删除条目的来源）/ 已归档 · 未锁定（sealed + draft）/ 已归档 · 已锁定（sealed + locked）/ 修改中（modifying，一定是 draft）。不变量：sealed 的条目，页 = 来源文件夹里未删除的文件（按 sort_no、名称），由封存检查保证，不靠事后比对。
+- 一个文件同时只有一行 open 分配，只在一个条目里；一个文件夹只是一个未删除条目的来源；项目内未删除条目档号唯一。
 - 日志 detail 存当时的名字和从项目根起的文件夹路径，只看日志能还原一个文件的全过程。
 - 乐观锁：条目 row_version；项目 updated_at。
 
@@ -114,8 +116,8 @@
 | `review.rescan_reassign` | 只有 `same_reviewer` |
 | `archive_no.template` | 如 `{fonds}-{category}·{year}-{retention}-{org}-{item_no:04}` |
 | `item_fields` | `[{key, label, type: text/date/enum, required, options, max_length, default}]` |
-| `catalog.lock_requires_approved` | 定稿要求全部页通过，默认 true |
-| `export.require_locked_item` | 导出要求已定稿，默认 true |
+| `catalog.lock_requires_approved` | 锁定要求全部页通过，默认 true |
+| `export.require_locked_item` | 导出要求已锁定，默认 true |
 | `export.retention_days` | 导出物保留天数，默认 7，1–365 |
 
 ### 3.5 日志
@@ -123,6 +125,7 @@
 - file_logs action：upload、rescan、rename、move、copy、delete、assign_review、reassign_review、approve、reject、reopen、link、unlink、export（edit、restore 留给插件）；审核动作带 version_no、review_round。
 - 改名、移动文件夹只写审计；删文件夹每个文件记 delete【用户 2026-09-27】。
 - audit_logs target：user、role、storage_profile、project、folder、archive_category、archive_item、export_task；detail `{before, after}` 只放变了的。空修改不写库、不审计、不发事件。登录退出不审计。
+- 归档相关的 archive_item 审计 action：archive（归档，带来源文件夹路径和页数）、unseal（解除封存，带原因）、reseal（重新归档，带新增、去掉、调序的页）、lock、unlock、delete（撤销归档）；每页照旧写 file_logs link / unlink。
 
 ### 3.6 并发和加锁
 
@@ -131,6 +134,7 @@
 - **顺序**：归类树锁 → 节点行 → 条目行（id 升序）→ 文件树锁 → 项目行 → files 行（id 升序）→ folders 行 → 存储配置行 → 内容锁。**例外**（M7-2）：复制在内容锁里重读源快照，发现它刚被存储迁移改到别的存储时，在内容锁之后再对那个存储配置行拿 FOR KEY SHARE（和插入快照时外键检查拿的锁一样）；不会成环，因为对存储配置行拿 FOR UPDATE 的只有设默认、停用、删除，它们不拿也不等内容锁、树锁、files 行、folders 行。存储迁移改快照位置的事务：job 行 → 存储配置行（FOR KEY SHARE）→ 内容锁 → 快照行。
 - **审核不等归类**：审核不拿归类锁、不锁条目；拿着文件树锁的事务不等归类的锁和行；挂接、项目改名这类两棵树都要的操作，先拿归类锁和归类行，最后拿文件树锁【总控】。
 - **files 行是每个文件的写锁**：分配、改派、审核、撤回、重扫、删除、挂接、移出都先锁它，锁后重读 folder_files；所以挂接和删除已归类文件互斥。
+- **封存检查和归档读文件清单要互斥**【总控】：归档、重新归档读来源文件夹的文件清单，和往这个文件夹上传、移入移出、复制进去、删除不能交错（否则可能"刚归档完又进来一个文件"）。具体用哪把锁实现时定，不能破坏上面的顺序；并发测试加"同一文件夹同时归档和上传"。
 - 行锁用不挡外键检查的 `FOR NO KEY UPDATE`，例外只有任务领取的 `SKIP LOCKED`。
 - **内容锁**：上传、重扫按（项目, sha256）加锁、锁内复查重。建导出任务不拿树锁，在一致快照里只插新行。事件提交后才发。
 - （可简化：内容锁、任务领取锁、存储配置表锁、重扫按文件的锁可用进程内互斥；但"同内容并发只入库一个""同一文件重扫串行"必须保证。）
@@ -142,13 +146,13 @@
 | 内置角色 | 菜单 | 职责 |
 |---|---|---|
 | admin 系统管理员 | 全部（锁定） | 系统管理，进所有项目 |
-| manager 项目负责人 | dashboard files scan review review_assign catalog export | 分配改派、看进度、导出、解锁；默认不能建项目 |
-| scanner 扫描员 | files scan | 建文件夹、上传、重扫 |
+| manager 项目负责人 | dashboard files scan review review_assign catalog export | 分配改派、看进度、导出；默认不能建项目 |
+| scanner 扫描员 | files scan | 建文件夹、上传、重扫（整理文件目录） |
 | reviewer 审核员 | files review | 审分给自己的 |
-| cataloger 归类员 | files catalog | 归类、挂接、定稿 |
+| cataloger 归类员 | files catalog | 归档、解除封存、重新归档、著录、锁定、解锁 |
 
 - 多角色菜单取并集，`GET /api/me/menus` 生成导航和路由守卫；有 `system.*` 时显示"系统管理"入口，/system 侧栏换成系统菜单并能返回业务界面。
-- 接口一般"有其中一个菜单即可"；**解锁定稿条目要同时有 catalog 和 review_assign**【用户 2026-10-14】。审核设置、归类设置、归类信息、SSE 只要能进项目；我的项目、图片信息、快照登录即可。
+- 接口一般"有其中一个菜单即可"；**归类的全部操作（含解锁）只要 catalog + 能进项目**，不另设负责人、不加字段【用户 2026-10-19，取代 2026-10-14"解锁要 catalog 和 review_assign"】。审核设置、归类设置、归类信息、SSE 只要能进项目；我的项目、图片信息、快照登录即可。
 - **项目授权**：在 project_members、有 project_roles 里的角色、或 admin。项目不存在或已删除 404，没授权 403；以资源 id 为参数的接口先反查项目（找不到、已删除、所在文件夹或项目已删除都 404）。
 - **检查顺序**：菜单 403 → 项目 404/403 → 参数 400 → 状态 409 → 版本 409 → 内容 400 → 前置条件 409。进不了项目的人带错参数也是 403。
 - 内置角色不能删，admin 菜单不能改；迁移新增菜单要同时给 admin。
@@ -201,8 +205,9 @@
 - **复制**：新 file_id，v1 类型 copy，复用源当前快照的对象，记来源；新文件待分配、自动改名、排末尾；只在新文件记 copy 日志；源存储停用 409 `storage_unavailable`。
 - 同时改名和移动：新名在目标重名 409，日志先 rename 后 move。
 - **删除**：软删除，删文件夹连子树；已归类的文件不能删（409 `file_cataloged`）；取消进行中的分配，每文件记 delete。
+- **封存**【用户 2026-10-18、19】：文件夹是某个未删除条目的来源、且条目不在"修改中"时，以下一律 409 `folder_archived`（details：folder_id、条目 id、件号、档号、题名、节点名称链、锁定与否，界面据此给"解除封存去修改"的引导）：往里上传、复制进去、移入移出文件、删除里面的文件、给里面的文件改名、在里面建子文件夹、这个文件夹本身改名、移动、删除。**可以**：重扫（同一文件出新版本）、审核、改这个文件夹的备注。上级文件夹（盒子）不封存：改名、移动可以，封存的子文件夹跟着走、内容不变；删上级时子树里有已归类文件照旧 409 `file_cataloged`。"修改中"的文件夹和未归档的一样可以整理。批量操作里有一个碰到封存就整体不做。
 - **批量** move / delete：≤ 500、同一项目（否则 400）、一个事务、一个不合规就整体不做（details.ids 是 folder_files id）。
-- children 一次返回子文件夹（名、备注、子文件夹数、文件数）和文件（id、名、sort_no、审核状态、轮次、版本号、是否已归类），不分页、不带图片地址。日志倒序带操作人名；已删除的文件 404。
+- children 一次返回子文件夹（名、备注、子文件夹数、文件数、**归档信息**）和文件（id、名、sort_no、审核状态、轮次、版本号、是否已归类），不分页、不带图片地址。归档信息（新增字段，没有时为 null）：条目 id、件号、档号、题名、节点名称链、锁定与否、封存状态（sealed / modifying）、解除封存的人和时间；`GET folders/{id}` 同样带上自己的归档信息。日志倒序带操作人名；已删除的文件 404。
 - 菜单：读、列、建文件夹 scan 或 files；整理只要 files。
 
 ### 5.6 上传和重扫（M1、M2）
@@ -257,64 +262,78 @@
 - **键位**【Q3】：← → ↑ ↓ 翻页；A 通过并跳下一张；R 驳回面板（1–9 勾原因、Tab 说明、Enter 确认、Esc 取消）；空格 适合窗口 / 100%；+ − 0 缩放；[ ] 旋转；C 对比，V 同位切换；Esc 依次关面板、对比、多选。输入框里字母键不触发；按住的重复按键忽略。
 - **对比**【Q2】：左右并排、联动，另可 V 同位切换；"上一轮"取最近一次驳回审的快照；也可选任意两版；两侧标版本和驳回原因。
 
-### 5.9 归类（M3）
+### 5.9 归类（M3；归档方式 2026-10-19 改为"整个文件夹归档"）
+
+> 本节"定稿"一律改称**锁定**；条目状态只有 **draft（未锁定）/ locked（已锁定）**，去掉 done（已完成）【用户 2026-10-19】。
 
 **节点**
 
 - 类型：root、fonds、category、year、retention、org、custom；root 只在建项目时建。同一链可有多层同类型。
 - 编码 1–32 字，不能有空白、控制字符、`{}`、`\ / : * ? " < > |` 和当前模板的分隔符；只在新建和改编码时校验；同层判重（区分大小写，409 `conflict`）。名称去首尾空白 1–100 字，同层可重名。
 - 根节点不能改名、改编码、改类型、移动、删除（409 `invalid_state`），界面不显示。
-- 移动、改编码、改类型：子树有定稿条目 409 `item_locked`【用户 2026-10-14，Q8】；否则同事务重算子树未定稿条目的档号。删除：软删子树；还有未删除条目 409 `category_not_empty`【Q8】。
+- 移动、改编码、改类型：子树有已锁定条目 409 `item_locked`【用户 2026-10-14，Q8】；否则同事务重算子树未锁定条目的档号。删除：软删子树；还有未删除条目 409 `category_not_empty`【Q8】。
 - 按需加载直接子节点，带子节点数、子树条目数。
 
 **档号和件号**【用户 2026-10-14，Q2】
 
 - 模板占位符 `{fonds}{category}{year}{retention}{org}{custom}`、`{item_no}` / `{item_no:0N}`（补零到 N 位，N ≤ 10）。`{item_no}` 正好一次、节点占位符各最多一次、相邻占位符间要有分隔符；文字不能有空白、控制字符、文件名非法字符、花括号；1–200 字；不合法 400。
-- 生成：沿祖先链，占位符取**离条目最近的**同类型节点编码；缺级则档号留空（能建不能定稿）。建条目时生成，移动节点、改编码、改类型、移动条目、改件号时重算（定稿的不动）；改模板不自动重算，提供"按新模板重新生成"（只改未定稿的）。不支持手改档号。
-- **撞号**【总控】：生成的档号已被别的未删除条目占 → 自动生成和重算都留空不报错，只有显式改件号撞号 409 `conflict`。批量重算时范围外和定稿的先占，范围内分档先到先得：① 有号不换 ② 有号要换 ③ 原为空，档内按 id；结果确定。
+- 生成：沿祖先链，占位符取**离条目最近的**同类型节点编码；缺级则档号留空（能建不能锁定）。建条目时生成，移动节点、改编码、改类型、移动条目、改件号时重算（已锁定的不动）；改模板不自动重算，提供"按新模板重新生成"（只改未锁定的）。不支持手改档号。
+- **撞号**【总控】：生成的档号已被别的未删除条目占 → 自动生成和重算都留空不报错，只有显式改件号撞号 409 `conflict`。批量重算时范围外和已锁定的先占，范围内分档先到先得：① 有号不换 ② 有号要换 ③ 原为空，档内按 id；结果确定。
 - 详情给空档号原因：incomplete（缺哪级）、conflict（被谁占）、not_generated（重新生成会补上）、template_invalid。
-- **件号**：节点内 max+1，**算上已删除条目**（不回收）；未定稿可手改（1–999999999），已占（含已删除）409；移到别的节点取目标 max+1。
+- **件号**：节点内 max+1，**算上已删除条目**（不回收）；未锁定可手改（1–999999999），已占（含已删除）409；移到别的节点取目标 max+1。重新归档不改件号、档号。
+
+**归档**【用户 2026-10-18、19】（条目只能这样产生，不再有"新建空条目"）
+
+- **件文件夹**：能成为一件的文件夹 = 不是根、没有未删除的子文件夹、有 1–2000 个未删除文件、还不是别的未删除条目的来源。
+- **归档** `POST /api/archive-categories/{id}/items:from-folders {folder_ids, titles?, dry_run?}`：目标节点不能是根（409 `invalid_state`）。folder_ids 1–500 个，每个是件文件夹（自己成一件）或上级文件夹（它的**直接子文件夹**各成一件）；展开后 ≤ 500 件。不合格的跳过并给原因：`has_subfolders`（含下级文件夹）、`empty`、`too_many_pages`（> 2000）、`archived`（已归档为某件，带件号）。`dry_run: true` 只返回预览（将新建的件：来源文件夹、默认题名、页数；跳过的和原因），不写库；不带时同一事务建全部件，一件都建不出 409 `invalid_state`（details 即预览）。题名默认 = 文件夹名，`titles {folder_id: 题名}` 可改。页 = 文件夹里未删除的文件按 sort_no、名称排，页号 1..n。新件 draft、sealed，件号按节点 max+1 依次领，档号照常生成。
+- **封存**：归档后来源文件夹封存（规则见 5.5）。重扫、审核不受影响，条目里自动显示新版本和"第 n 轮 / 待审"。
+- **解除封存** `POST /api/archive-items/{id}/unseal {row_version, reason?}`：只有 draft 且 sealed 的可以（locked 409 `item_locked`，已是 modifying 409 `invalid_state`）；reason 选填 ≤ 200 字。→ modifying，记下谁、何时、原因；件号、档号、著录、页都不变，**和文件夹的绑定不断**。修改中：不能锁定、导出预检不就绪；著录照常可改。
+- **重新归档** `GET /api/archive-items/{id}/reseal-preview` → 原页数、现页数、新增（文件、在第几页）、去掉、调序（只算相对顺序变了的，同 reorder 审计的算法）；`POST /api/archive-items/{id}/reseal {row_version}`：只有 modifying 的可以；来源文件夹要仍是件文件夹（被删了、有了子文件夹、空了、> 2000 → 409 `invalid_state` 写明原因；不要这一件就撤销归档）；新增的文件已在别的条目里（比如从另一个修改中的文件夹移过来）409 `file_cataloged`，提示先重新归档那一件。成功：页换成文件夹现在的清单、→ sealed、没有变化也可以（等于"没改，恢复封存"）。
+- **撤销归档** = `DELETE /api/archive-items/{id}`：只有 draft 的可以（locked 409 `item_locked`）；页一并移出（unlink 带 item_deleted），件号不回收，文件夹回到未归档。
+- 一个文件只在一个条目（`archive_item_files.file_id` 唯一）、一个文件夹只对应一个未删除条目（`source_folder_id` 部分唯一索引）。
 
 **条目**（只做"件"）
 
-| 动作 \ 状态 | draft | done | locked |
+| 动作 \ 状态 | draft · sealed | draft · modifying | locked（一定 sealed） |
 |---|---|---|---|
-| 改著录、移动、改件号、改页序、删除 | 可以 | 可以，保持 done | 409 `item_locked` |
-| 标记完成 / 退回草稿 | → done（查必填）/ 409 | 409 / → draft | 409 `item_locked` |
-| 定稿 / 解锁 | 409 `invalid_state` | → locked / 409 | 409 / → done |
+| 改著录、移动（换节点）、改件号 | 可以 | 可以 | 409 `item_locked` |
+| 解除封存 | → modifying | 409 `invalid_state` | 409 `item_locked` |
+| 重新归档 | 409 `invalid_state` | → sealed | 409 `item_locked` |
+| 锁定 | → locked（查前置） | 409 `invalid_state`（修改中，先重新归档） | 409 `invalid_state` |
+| 解锁 | 409 `invalid_state` | 409 `invalid_state` | → draft |
+| 撤销归档（删除） | 可以 | 可以 | 409 `item_locked` |
 
-- 成功动作 row_version +1 并审计；PATCH、状态动作、改页序都带 row_version，不一致 409 `conflict`。挂接文件的重扫、审核不改它。无实际变化不写库。
-- **著录**【Q1】：题名固定列（≤ 1000 字）；其他存 extra_fields，PATCH 按 key 合并，null 或空串清空。text ≤ max_length（默认 500，可 1–10000）；date `YYYY` / `YYYY-MM` / `YYYY-MM-DD` 真实日期；enum 在选项里。草稿只查格式，**必填在标记完成和定稿时查**，现有值也要合当前设置；已完成的改著录后保持完成、再查必填。新建时没给的用 default。
+- 成功动作 row_version +1 并审计；PATCH、状态动作都带 row_version，不一致 409 `conflict`。挂接文件的重扫、审核不改它。无实际变化不写库。
+- **著录**【Q1】：题名固定列（≤ 1000 字）；其他存 extra_fields，PATCH 按 key 合并，null 或空串清空。text ≤ max_length（默认 500，可 1–10000）；date `YYYY` / `YYYY-MM` / `YYYY-MM-DD` 真实日期；enum 在选项里。未锁定时只查格式，**必填在锁定时查**，现有值也要合当前设置。新建时没给的用 default。
 - 改设置后的旧值（不在选项、超长、已删除的著录项）不改就能保存，详情原样返回并用 `field_issues` 标出；不能悄悄丢掉【Q1】。
 - 校验不过 400 `invalid_input`，`details.fields [{key, message}]` 一次列全（题名 key 为 `title`，著录项不能叫 title）。
-- **定稿前置**【Q5】：已完成、著录合格、≥ 1 页、档号不空、`lock_requires_approved` 时全部页通过；后三条不满足 409 `invalid_state` 写明（"有 2 页还没审核通过（例如第 3 页）"）。定稿后著录、页序、档号、移动、删除冻结，文件仍可重扫；有页在定稿后出了新快照就标"定稿后有新版本"（按最近一次定稿审计的时间比，解锁后不标）。
-- 解锁要 catalog + review_assign，→ done。**批量定稿** 1–500，已定稿跳过，有一个不满足整体 409（details.ids 列全部，message 按原因计数）。
-
-**挂接**【Q3、Q8】
-
-- `PUT /api/archive-items/{id}/files {row_version, file_ids}` 整体替换页、页号重排 1..n；≤ 2000 页；重复 400；无变化不写库。
-- 一个文件只在一个条目：已在别处 409 `file_cataloged`，details 写在哪（条目、档号、件号、题名、节点名称链、第几页、状态），界面给"从原条目移出"（原条目定稿时不行）。不存在或别项目 404（details.ids 是 file_id）。
-- 新建条目可带 file_ids 直接挂，失败整体回滚。删除条目：有页一并移出（unlink 带 item_deleted），件号不回收，定稿的 409。
-- 日志：每页 link / unlink，带件号、档号、题名、页号、文件名、路径、版本、审核状态；留下的页相对顺序变了写一条 reorder 审计，只记挪动过的页（最长递增子序列之外），插入移出的顺延不算。
-- 重扫后条目里自动显示新版本和"第 n 轮 / 待审"，不用重新挂接；/files 不加"从条目移出"。
+- **锁定前置**：sealed（不在修改中）、著录合格（含必填）、≥ 1 页、档号不空、`lock_requires_approved` 时全部页通过；不满足 409 `invalid_state` 写明（"有 2 页还没审核通过（例如第 3 页）"，必填项不满足时 400 `invalid_input` 带 details.fields）。锁定后著录、档号、移动、删除、解除封存冻结，文件仍可重扫；有页在锁定后出了新快照就标"锁定后有新版本"（按最近一次锁定审计的时间比，解锁后不标）。
+- **解锁**只要 catalog，→ draft。**批量锁定** 1–500，已锁定跳过，有一个不满足整体 409（details.ids 列全部，message 按原因计数）。
+- **日志**：归档、重新归档每页 link / unlink，带件号、档号、题名、页号、文件名、路径、版本、审核状态；重新归档里留下的页相对顺序变了写一条 reorder 审计，只记挪动过的页（最长递增子序列之外）。
+- **去掉的接口**：`PUT archive-items/{id}/files`（按页挂接）、`mark-done`、`back-to-draft`、`POST archive-categories/{id}/items`（新建空条目）。
 
 **归类信息（只读）**【Q10】：能进项目就能看。`POST catalog-placements {file_ids ≤ 500}`、`GET files/{fid}/catalog` 返回挂在哪（件号、档号、题名、页号、状态、节点名称链数组，不含根）；/review 和 /files 只显示档号（空时"第 n 件"）、题名、第几页。`GET catalog-settings` 返回补全的模板及错误、用到的层级、著录项、开关、可选类型、编码禁用字符、日期格式。
 
-**界面 /catalog**：左栏归类树（根下直接放的条目单列一行【总控】）；中栏条目列表（虚拟滚动，"n 待审"，批量定稿）、著录表单（按设置生成，档号只读、空时写原因，按权限显示解锁）、页序条（封面、版本、审核状态和轮次、"定稿后有新版本"；原生拖放排序，另有键盘和"移到第 n 页"；定稿后只读）；右栏**待归类池**【Q4】：只看所选文件夹直接放的文件，默认仅未归类，Shift 区间和"第 a–b 张"，已归类的显示"在 0012 第 3 页"；可挂到末尾、插到选中页后、拖进页序条、用选中文件新建条目。
+**界面 /catalog**【用户 2026-10-18、19，Mockup `doclite-project/doclite-catalog-redesign.html` v3.1】：左右两个资源管理器，中间"归档 →"。
 
-- **每个动作立即保存**【总控】：放下、移出、挂接都马上 PUT；409 conflict 时把操作重做在最新页序上做成预览由用户确认；移出 ≥ 5 页先确认、可撤销。
-- 著录设置在 /system/projects 编辑里（字段增删改排序、模板实时预览、定稿开关），默认只有 system.projects 能改【Q1】。改设置不发事件。
+- **左：文件目录**（要 files 或 scan 菜单）：目录树 + 当前文件夹的内容；每个子文件夹显示归档状态（未归档 / 🔒 节点名 件号 / ✎ 修改中），盒子显示"已归档 n/m"；打开封存的文件夹时顶部紫色横条"已归档为 … 已封存"和"解除封存去修改…"，修改中的是橙色横条（将重新归档到哪一件、谁何时解除、原因，三步进度，"改完了，重新归档…"）。
+- **右：归档目录**：归类树（工具栏和右键：新建、改名称编码类型、移动、删除、重新生成档号、导出，同现在）+ 选中节点的件列表（件号、题名、页数、封存和锁定状态；勾选批量锁定）；双击打开一件：档号、状态、著录表单、页（只读，来自文件夹）、锁定 / 解锁、移到别的节点、改件号、解除封存、撤销归档；修改中的件顶部橙色横条和"去文件目录""重新归档…"。根下直接放的条目单列一行【总控】。
+- **归档**：左边选文件夹（盒子或几个子文件夹，只能选文件夹）→ 拖到右边树上的节点、件列表，或点"归档 →"（放到右边选中的节点）→ 预览对话框（每件的件号、可改的题名、页数，跳过的和原因）→ "归档并封存"。
+- **解除封存**对话框：写明件号档号著录保留、修改中不能锁定导出、改完要重新归档；原因选填（漏扫 / 多扫 / 顺序不对 / 其他）。**重新归档**对话框：原 n 页 → 现 m 页，新增、去掉、调序分别列出。
+- **不让人忘**：归类页顶部常驻"✎ 修改中 n 件"，点开列出件、文件夹、谁、原因，可跳去修改或直接重新归档；文件目录的树上修改中的文件夹所在的盒子带橙点。
+- **/files** 也显示同样的横条和状态：封存的文件夹里上传、删除、移动等按钮置灰并写原因；拖文件进去时给"已封存，要修改请到归类页解除封存"的说明而不是报错。/review 的归类信息不变（档号、题名、第几页）。
+- 著录设置在 /system/projects 编辑里（字段增删改排序、模板实时预览、锁定开关），默认只有 system.projects 能改【Q1】。改设置不发事件。
 - 客户端里页面的 HTML5 拖放要能用（WebView2 上要关掉壳的原生文件拖放）【总控】。
 
 ### 5.10 项目看板（M3）
 
-【用户 2026-10-14，Q6】只有 dashboard 能看；实时聚合，不建汇总表。矩阵 = 4 种审核状态 × 3 种归类状态（未归类、已归类未定稿、已定稿）加行列合计；可导出按 `require_locked_item` 算、按审核状态拆开；KPI：已上传、通过、待重扫、已归类、已定稿、可导出（主数字"通过且可导出"）【总控】；文件夹进度表逐层展开（`catalog-summary?folder_id=`，结构同审核的按文件夹计数）。人员统计、今天 / 本周不做。
+【用户 2026-10-14，Q6】只有 dashboard 能看；实时聚合，不建汇总表。矩阵 = 4 种审核状态 × 3 种归档状态（未归档、已归档未锁定（含修改中）、已锁定）加行列合计；可导出按 `require_locked_item` 算、按审核状态拆开；KPI：已上传、通过、待重扫、已归档、已锁定、可导出（主数字"通过且可导出"）【总控】；文件夹进度表逐层展开（`catalog-summary?folder_id=`，结构同审核的按文件夹计数）。人员统计、今天 / 本周不做。
 
 ### 5.11 导出（M4）
 
 **范围**：`category`（节点子树里未删除的条目，重叠算一次）或 `item`；scope_ids 1–5000，须是本项目未删除的（否则 404 details.ids）。条目按节点 path_code、件号、id 排。页 = 挂接行里文件和文件夹都未删除的，页号 1..n。没归类的文件不可能被导出。
 
-**预检**【用户 2026-10-15，Q7】：就绪 =（require_locked_item 时）已定稿、档号不空、≥ 1 页、（勾"只导出审核通过的"，默认勾）全部页 approved。原因码 `not_locked`、`no_archive_no`、`no_pages`、`pages_not_approved`（带前 5 页，如"0012 第 3 页：待审"）。给件数页数、就绪与否、各原因件数、不就绪条目（≤ 500 件）。单任务 ≤ **20 万页**【总控】。建任务时没有条目、无一就绪、没勾"只导出就绪的"而有不就绪、超页数 → 409 `invalid_state`，details 即预检结果。
+**预检**【用户 2026-10-15，Q7】：就绪 = 不在修改中、（require_locked_item 时）已锁定、档号不空、≥ 1 页、（勾"只导出审核通过的"，默认勾）全部页 approved。原因码 `source_modifying`（来源文件夹修改中，2026-10-19 新增）、`not_locked`、`no_archive_no`、`no_pages`、`pages_not_approved`（带前 5 页，如"0012 第 3 页：待审"）。给件数页数、就绪与否、各原因件数、不就绪条目（≤ 500 件）。单任务 ≤ **20 万页**【总控】。建任务时没有条目、无一就绪、没勾"只导出就绪的"而有不就绪、超页数 → 409 `invalid_state`，details 即预检结果。
 
 **冻结**【Q4】：点导出那一刻在一致快照里定下条目、页和每页的最新快照（export_task_files），连同条目当时的档号、题名、著录、节点名称链、状态（原版存 job payload，写后不改、job 行永久保留【总控】）。之后的变化不影响这次导出，归入交付后变更。建任务不拿树锁。
 
@@ -359,13 +378,13 @@
 
 | type | 字段 | 含义 |
 |---|---|---|
-| folders.changed | folder_ids | 文件夹建、改名、改备注、移动、删除；项目改名时是根 |
+| folders.changed | folder_ids | 文件夹建、改名、改备注、移动、删除、归档状态变（归档、解除封存、重新归档、撤销归档、锁定、解锁）；项目改名时是根 |
 | files.changed | folder_ids, file_ids? | 上传、重扫、改名、移动、复制、删除、审核状态变、挂上移出（只换页号不算）；> 500 个只带 folder_ids |
 | catalog.changed | category_ids?, item_ids | 归类节点或条目变化 |
 | export.changed | task_ids | 任务建立、取消、开始、进度（≤ 1 次/秒）、完成、失败、重试、清理完 |
 | resync | — | 整体刷新 |
 
-**catalog.changed 的 item_ids**【总控】：存在时按条目刷新；`[]` = 只有节点变；**不存在** = 变了的条目 > 500，把 category_ids 当子树根整体刷新。item_ids 只列条目本身变了的（档号、著录、状态、页）；节点改名、移动、改编码会改子树条目的路径显示，显示归类路径的地方要按 category_ids 刷新，/files、/review 的归类信息收到任何 catalog.changed 都重取。挂接、页序、删条目先发 files.changed（有挂上移出时）再发 catalog.changed。
+**catalog.changed 的 item_ids**【总控】：存在时按条目刷新；`[]` = 只有节点变；**不存在** = 变了的条目 > 500，把 category_ids 当子树根整体刷新。item_ids 只列条目本身变了的（档号、著录、状态、页、封存状态）；节点改名、移动、改编码会改子树条目的路径显示，显示归类路径的地方要按 category_ids 刷新，/files、/review 的归类信息收到任何 catalog.changed 都重取。归档、解除封存、重新归档、撤销归档先发 files.changed（有挂上移出时）和 folders.changed（来源文件夹的归档状态变了，folder_ids 是来源文件夹）再发 catalog.changed。
 
 ## 8. 接口清单
 
@@ -392,12 +411,11 @@
 | POST files/{fid}/reopen · GET files/{fid}/reviews | review 或 review_assign | 撤回、分配历史 |
 | GET …/review-settings · …/catalog-settings · POST …/catalog-placements · GET files/{fid}/catalog · …/stream | 能进项目 | 设置、归类信息、SSE |
 | projects/{pid}/archive-categories（GET/POST）· {id}（PATCH/DELETE） | catalog | 节点 |
-| archive-categories/{id}/items（GET/POST）· archive-items/{id}（GET/PATCH/DELETE）· {id}/mark-done·back-to-draft·lock · {id}/files（PUT）· projects/{pid}/archive-items:lock · :renumber | catalog | 条目、挂接 |
-| POST archive-items/{id}/unlock | catalog **和** review_assign | 解锁 |
+| GET archive-categories/{id}/items · POST archive-categories/{id}/items:from-folders · archive-items/{id}（GET/PATCH/DELETE）· {id}/lock · {id}/unlock · {id}/unseal · GET {id}/reseal-preview · POST {id}/reseal · projects/{pid}/archive-items:lock · :renumber | catalog | 条目、归档、封存、锁定解锁（2026-10-19 去掉 POST items、mark-done、back-to-draft、PUT files；解锁不再要 review_assign） |
 | GET projects/{pid}/catalog-summary | dashboard | 看板 |
 | POST projects/{pid}/export-tasks:precheck · export-tasks（POST/GET）· export-tasks/{id} · /files · /changes · /download · /cancel | export | 导出 |
 
-**错误码**：400 `invalid_license`、`license_mismatch`、`license_file_expired`（M7-1 导入）；400 `invalid_input`（参数、名称、格式、著录 `details.fields`、批量跨项目、空列表或 > 500）、`invalid_client_version`、`checksum_mismatch`、`invalid_image`、`invalid_cover`；401 `unauthorized`、`invalid_credentials`；403 `forbidden`、`admin_required`、`user_disabled`、`not_assignee`、`license_missing`、`license_expired`、`license_seats_full`（M7-1）；404 `not_found`（批量 details.ids：文件目录批量是 folder_files id，审核和挂接是 file_id，批量定稿是条目 id，导出是节点或条目 id）；405 `method_not_allowed`；409 `conflict`（唯一冲突、版本过期、件号占用、显式改件号撞号、审的不是当前快照）、`invalid_state`（状态不允许、定稿前置、导出不就绪）、`tree_cycle`、`tree_full`、`root_folder_locked`、`file_cataloged`、`duplicate_content`、`storage_changed`、`storage_unavailable`、`storage_not_active`、`storage_is_default`、`storage_in_use`、`project_not_empty`、`item_locked`、`category_not_empty`、`last_admin`、`cannot_disable_self`、`builtin_role`、`admin_menus_locked`；413 `payload_too_large`；415 `unsupported_media_type`；426 `client_upgrade_required`；500 `internal`、`secret_unreadable`；503 `busy`。
+**错误码**：400 `invalid_license`、`license_mismatch`、`license_file_expired`（M7-1 导入）；400 `invalid_input`（参数、名称、格式、著录 `details.fields`、批量跨项目、空列表或 > 500）、`invalid_client_version`、`checksum_mismatch`、`invalid_image`、`invalid_cover`；401 `unauthorized`、`invalid_credentials`；403 `forbidden`、`admin_required`、`user_disabled`、`not_assignee`、`license_missing`、`license_expired`、`license_seats_full`（M7-1）；404 `not_found`（批量 details.ids：文件目录批量是 folder_files id，审核和挂接是 file_id，批量定稿是条目 id，导出是节点或条目 id）；405 `method_not_allowed`；409 `conflict`（唯一冲突、版本过期、件号占用、显式改件号撞号、审的不是当前快照）、`invalid_state`（状态不允许、定稿前置、导出不就绪）、`tree_cycle`、`tree_full`、`root_folder_locked`、`file_cataloged`、`folder_archived`（文件夹已封存，2026-10-19）、`duplicate_content`、`storage_changed`、`storage_unavailable`、`storage_not_active`、`storage_is_default`、`storage_in_use`、`project_not_empty`、`item_locked`、`category_not_empty`、`last_admin`、`cannot_disable_self`、`builtin_role`、`admin_menus_locked`；413 `payload_too_large`；415 `unsupported_media_type`；426 `client_upgrade_required`；500 `internal`、`secret_unreadable`；503 `busy`。
 
 ## 9. 用户决定汇总（按时间）
 
@@ -408,6 +426,7 @@
 - **2026-10-07**：App Nap 不处理；项目名去首尾空白、1–100 字；老名字不重校验；M2 不改表、同意迁移 0002；Q1 OpenSeadragon + 壳里切块、不换 Electron；Q2 对比；Q3 键位；Q4 驳回原因；Q5 分配规则；Q6 待重扫入口和壳的一次性重扫；Q8 撤回通过、不做撤回驳回；Q9 批量通过；Q10 > 500 只带 folder_ids；Q11 /files 查看原图；Q12 待办跟随项目；Q13 `not_assignee`、带 snapshot_id、DPI 筛选、不做放大镜；原审核人不能再审时改待分配。
 - **2026-10-14**：先做完图像处理以外的流程，M6 和二期不排期；确认 M2；M3 全部按建议（Q1 著录项、Q2 档号件号、Q3 一文件一条目 / ≤ 2000 页 / 原生拖放 / 不做页号和案卷、Q4 待归类池、Q5 定稿解锁批量定稿、Q6 看板、Q7 互不阻塞定义和新事件错误码、Q8 删除移动、Q9 不改表、Q10 归类信息）。
 - **2026-10-15**：确认 M3；M4 Q1（用户改选）放不进 PDF 的由 server 无损转换；Q2 导出物格式；Q3 xlsx + CSV；Q4 建任务时冻结；Q5 存 S3 直连下载、保留 7 天；Q6 交付后变更和补交；Q7 预检、并发 2、可取消、重试 3 次；QA 迁移 0003；QB 项目保存版本检查；接受"保存著录设置写入默认值"。
+- **2026-10-18、19（归类改成整个文件夹归档，Mockup `doclite-project/doclite-catalog-redesign.html` v3.1）**：一个文件只能归类一次（照旧）；只能整个文件夹归档，选盒子时每个直接子文件夹一件，题名默认文件夹名，含下级文件夹的跳过并提示；数据单向，文件目录自己维护，归档后文件夹封存（盒子本身不封存）；可以重扫；要改走"解除封存（原因选填）→ 修改 → 重新归档（给对比）"，件号档号著录保留、绑定不断，修改中不能锁定和导出，到处提示；撤销归档 = 删除这一件；条目状态去掉"已完成"，只有未锁定 / 已锁定，必填在锁定时查；归类全部操作（含解锁）只要 catalog + 能进项目，不另设负责人。为此同意改表（迁移 0004）和接口。取代 2026-10-14 的 Q3（按页挂接、原生拖放排序）、Q4（待归类池）、Q5 里的"已完成"和"解锁要 review_assign"。
 
 ## 10. 总控代定的规则
 
@@ -424,8 +443,9 @@
 | 档号撞号留空，只有手改件号报错 | 否则后建的条目建不出来 |
 | 重算档号分档先到先得 | 不让快定稿的条目丢号 |
 | 归类锁和归类行在文件树锁之前 | 原顺序审核被间接拖慢 1.4 秒，改后约 0.01 秒 |
-| 挂接每步立即保存，冲突做成预览 | 减少两人抢页，操作不丢 |
-| 删有页的条目写明页数、期间有变化重新确认 | 不误移别人刚挂的页 |
+| ~~挂接每步立即保存，冲突做成预览~~（2026-10-19 不再按页挂接） | 减少两人抢页，操作不丢 |
+| 撤销归档（删有页的条目）写明页数、期间有变化重新确认 | 不误移别人刚挂的页 |
+| 封存检查和归档读文件清单互斥（2026-10-19） | 否则"刚归档完又进来一个文件"，封存的不变量被破坏 |
 | 根下直接放的条目单列 | 否则看不见、移不走 |
 | 客户端关原生文件拖放 | Windows 上页面拖拽会失效 |
 | catalog.changed item_ids 三种含义 | 分清"无条目变"和"太多" |

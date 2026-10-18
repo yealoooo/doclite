@@ -329,3 +329,31 @@
 **已定：** 交付就是客户端（Windows 安装包，界面在客户端里），**不提供网页服务和浏览器访问**（用户 2026-10-17，取代 10-16"web 是单独的 nginx 容器"）；服务器上的 compose 是 server、PostgreSQL、SeaweedFS 三个服务；客户端直连 server 的 `/api`。
 
 原上一版的 M5：Docker 镜像和 compose、install.ps1、backup.ps1（封面必须备份）、离线交付包、客户端自动更新、export-tree、SeaweedFS 4.45 复验、在用户的 Windows 上远程验收。requirements 第 11 节记了建议做法。
+
+## M9 归类改成整个文件夹归档（用户 2026-10-18、19）
+
+**已定**（requirements 2 节规则 3、4，5.5，5.9，9 节 2026-10-18、19；Mockup `doclite-project/doclite-catalog-redesign.html` v3.1）：只能整个文件夹归档，选盒子时每个直接子文件夹一件；归档后文件夹封存（可重扫）；要改走"解除封存 → 修改 → 重新归档"，绑定不断；条目只有未锁定 / 已锁定；归类全部操作只要 catalog。旧数据不管，开发库重建；演示数据精简到够功能测试。
+
+### [ ] M9-1 server：迁移 0004、归档和封存
+- 迁移 0004（加 `source_folder_id`、`source_status`、解除封存的人 / 时间 / 原因；done → draft、CHECK 改 draft / locked）。
+- 新接口：`items:from-folders`（dry_run 预览）、`unseal`、`reseal-preview`、`reseal`；`DELETE` 即撤销归档；锁定前置加"不在修改中"、必填在锁定时查；解锁只要 catalog；批量锁定。去掉 `POST archive-categories/{id}/items`、`mark-done`、`back-to-draft`、`PUT archive-items/{id}/files`。
+- 文件目录的封存检查（409 `folder_archived`，覆盖 5.5 列的全部写操作，重扫、审核、改备注放行）；children 和 `GET folders/{id}` 带归档信息；导出预检 `source_modifying`；看板归档状态；事件（folders.changed 带来源文件夹）。
+- 测试：重写归类的 API 测试（归档预览和确认、跳过原因、封存挡住各写操作、解除和重新归档的对比、锁定解锁、权限表）；并发测试"同一文件夹同时归档和上传"。属于风险较高的服务端改动，合并前做一轮独立审查。
+
+### [ ] M9-2 web：归类页双栏、文件目录的封存提示
+- /catalog 按 requirements 5.9 界面一节重写（左文件目录、右归档目录、归档预览、解除封存、重新归档对比、"修改中 n 件"）；去掉待归类池、页序条、按页挂接。
+- /files：封存和修改中的横条、按钮置灰、拖入时的说明；/review、看板、导出预检的文字跟着改（锁定、未归档、来源修改中）。
+- web build、release，客户端重新编译；改写归类的截图脚本（一个主流程即可），删掉不再适用的。
+
+### [ ] M9-3 开发库重建、精简演示数据
+- 用户同意删掉重建 `doclite_dev`（只动这个库；动手前告诉用户，用户的 9080 要停一下再起）。
+- 一个脚本造全部演示数据（取代 seed:demo + m3/m4 演示 + seed:files 的大数据），总共约 40 页：
+  - 账号同现在（admin + demo_*），授权全部在脚本里做（不再手工补 demo_reviewer2 等）；
+  - DEMO-A：「2025 文书档案 / 盒 WS-2025-001」5 个子文件夹各 2–6 页；「盒 WS-2025-002」3 个子文件夹，另有一个带下级文件夹的（演示"跳过"）；「格式样本」放 scripts/samples 的几种 JPEG、PNG、TIFF；
+  - 审核：盒 001 分给 demo_reviewer，部分通过、驳回 2 页（待重扫）、其余待审；盒 002 待分配；
+  - 归类树：Z001 文书档案 › WS 文书 › 2025 › Y 永久 / D30 30 年 › BGS 办公室、CWK 财务科；盒 001 前 3 件已归档到 永久 › 办公室，其中 1 件已锁定（够导出试一下）；
+  - DEMO-B：空项目（权限演示）。
+- 不再造 2000 页的文件夹、200 MB 的 TIFF、1200 件的归类（不做性能测试）。README"可以拿来试的数据"和"演示账号"按新数据改。
+
+### [ ] M9-4 验收清单
+- `docs/acceptance-checklist.md` 归类一节按新流程重写（归档、封存挡住整理、解除封存、重新归档、锁定、导出），其他节里"挂接""定稿"的说法跟着改，数据改用 M9-3 的。
