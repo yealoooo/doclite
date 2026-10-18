@@ -8,24 +8,26 @@
 //                   接口核对子文件夹按名字建好、文件按名字的自然顺序排、带封面。
 //   flow_review     审核看大图：把这两批页分给自己，第一页在真正的查看器（ImageViewer，壳的分块）里看到原图，再逐页带
 //                   看到的 snapshot_id 通过。
-//   flow_catalog    归类：按档号模板用到的层级找或建一条节点链（全宗「客户端自检」，编码见 LEVEL_CODES），新建条目
-//                   挂上全部页、标记完成、定稿；要求档号不空。
+//   flow_catalog    归类：按档号模板用到的层级找或建一条节点链（全宗「客户端自检」，编码见 LEVEL_CODES），把这两批页
+//                   所在的两个文件夹整个归档（M9：每个文件夹一件），补上必填著录项、锁定；要求档号不空。
 //   flow_export     导出下载：按条目建导出任务（DOCLITE_SMOKE_FLOW_FORMAT，默认 pdf），等 server 执行完；取下载地址后
 //                   走导出页的同一段代码（lib/download.ts 的 openDownload → 壳的 open_external）。自检里壳不打开系统浏览器，
 //                   只记下地址；smoke_external_check 用 HTTP 下载这个地址，核对文件名、大小、zip 的目录（目录.xlsx、
 //                   清单.csv、每件的 PDF 或原图）。
 // 每一步失败时后面各步照跑（依赖前一步结果的会报"前一步没做完"）。数据留在服务器上（每次一个新的「自检 <时间>」文件夹
-// 和一个定稿的条目），可以在 /files、/catalog、/export 里看到。
+// 和两件锁定的条目），可以在 /files、/catalog、/export 里看到。
 
 import { createFolder, listChildren } from '@/api/folders'
 import { batchFiles } from '@/api/files'
 import { request } from '@/api/http'
 import {
+  archiveFolders,
   createArchiveCategory,
-  createArchiveItem,
+  getArchiveItem,
   getCatalogSettings,
   itemAction,
   listArchiveCategories,
+  updateArchiveItem,
 } from '@/api/catalog'
 import { createExportTask, getExportDownload, getExportTask } from '@/api/export'
 import { assignReviews, submitReview } from '@/api/reviews'
@@ -302,18 +304,26 @@ export async function checkFlowCatalog(st: FlowState) {
   for (const f of settings.item_fields) {
     if (f.required) extra[f.key] = f.default ?? (f.type === 'date' ? '2026' : f.type === 'enum' ? (f.options[0] ?? '') : '客户端自检')
   }
-  let item = await createArchiveItem(
+  const res = await archiveFolders(
     leaf.id,
-    { title: `客户端自检 ${prep.run}`, extra_fields: extra, file_ids: reviewed.map((r) => r.file_id) },
+    { folder_ids: st.folderIds, titles: Object.fromEntries(st.folderIds.map((id, i) => [id, `客户端自检 ${prep.run}（${i + 1}）`])) },
     true,
   )
-  item = await itemAction(item.id, 'mark-done', item.row_version, true)
-  item = await itemAction(item.id, 'lock', item.row_version, true)
-  if (item.status !== 'locked') throw new Error(`条目没有定稿：${item.status}`)
-  if (!item.archive_no) throw new Error(`条目没有档号：${JSON.stringify(item.archive_no_reason)}`)
-  if (item.page_count !== reviewed.length) throw new Error(`条目有 ${item.page_count} 页，应为 ${reviewed.length} 页`)
+  if (res.items.length !== st.folderIds.length) throw new Error(`应归档 ${st.folderIds.length} 件，实际 ${res.items.length} 件：${JSON.stringify(res.skipped)}`)
+  const locked: ArchiveItem[] = []
+  for (const planned of res.items) {
+    let it = await getArchiveItem(need(planned.item_id, '新件的 id'), true)
+    if (Object.keys(extra).length) it = await updateArchiveItem(it.id, { row_version: it.row_version, extra_fields: extra }, true)
+    it = await itemAction(it.id, 'lock', it.row_version, true)
+    if (it.status !== 'locked') throw new Error(`条目没有锁定：${it.status}`)
+    if (!it.archive_no) throw new Error(`条目没有档号：${JSON.stringify(it.archive_no_reason)}`)
+    locked.push(it)
+  }
+  const pages = locked.reduce((n, it) => n + it.page_count, 0)
+  if (pages !== reviewed.length) throw new Error(`归档了 ${pages} 页，应为 ${reviewed.length} 页`)
+  const item = locked[0]!
   st.item = item
-  return { category: item.category_path, archive_no: item.archive_no, item_no: item.item_no, pages: item.page_count, status: item.status }
+  return { category: item.category_path, archive_no: item.archive_no, item_no: item.item_no, items: locked.length, pages, status: item.status }
 }
 
 /** zip 里的文件名（服务端 export 的规则：Windows 非法字符换成 _）。只用来核对，结尾的点、保留名这些少见情况不管。 */
@@ -324,7 +334,7 @@ function zipName(archiveNo: string) {
 /** flow_export：导出下载（见文件开头）。 */
 export async function checkFlowExport(st: FlowState) {
   const project = need(st.project, '项目')
-  const item = need(st.item, '定稿的条目')
+  const item = need(st.item, '锁定的条目')
   const started = performance.now()
   let task: ExportTask = await createExportTask(
     project.id,

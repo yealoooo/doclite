@@ -45,8 +45,8 @@ const emit = defineEmits<{ toggle: [folderId: string] }>()
       <span class="text-right">文件</span>
       <span>审核进度（通过）</span>
       <span class="text-right">待重扫</span>
-      <span>归类进度（已归类）</span>
-      <span class="text-right" :title="props.requireLocked ? '通过且已定稿 / 全部已定稿' : '通过且已归类 / 全部已归类'">可导出</span>
+      <span>归档进度（已归档）</span>
+      <span class="text-right" :title="props.requireLocked ? '通过且已锁定 / 全部已锁定' : '通过且已归档 / 全部已归档'">可导出</span>
     </div>
     <div
       v-for="r in props.rows"

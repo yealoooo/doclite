@@ -28,6 +28,8 @@ export interface EditableFolder {
   remark: string | null
   /** 根文件夹（只能改备注）。 */
   isRoot: boolean
+  /** 已归档并封存（M9：只能改备注）。 */
+  sealed?: boolean
 }
 
 const open = defineModel<boolean>('open', { required: true })
@@ -49,7 +51,7 @@ const error = ref('')
 const saving = ref(false)
 
 const isEdit = computed(() => props.folder !== null)
-const nameLocked = computed(() => !!props.folder?.isRoot)
+const nameLocked = computed(() => !!props.folder?.isRoot || !!props.folder?.sealed)
 
 watch(open, (v) => {
   if (!v) return
@@ -75,7 +77,7 @@ async function submit() {
     const f = props.folder
     if (f) {
       const body: UpdateFolderBody = {}
-      if (!f.isRoot && name.value !== f.folder_name) body.folder_name = name.value
+      if (!nameLocked.value && name.value !== f.folder_name) body.folder_name = name.value
       if (remark.value.trim() !== (f.remark ?? '')) body.remark = remark.value.trim()
       if (Object.keys(body).length === 0) {
         open.value = false
@@ -103,11 +105,12 @@ async function submit() {
   <Dialog v-model:open="open">
     <DialogContent class="sm:max-w-md" data-testid="folder-form" @open-auto-focus="onOpenAutoFocus">
       <DialogHeader>
-        <DialogTitle>{{ isEdit ? (nameLocked ? '修改根文件夹的备注' : '编辑文件夹') : '新建文件夹' }}</DialogTitle>
+        <DialogTitle>{{ isEdit ? (nameLocked ? (props.folder?.isRoot ? '修改根文件夹的备注' : '修改文件夹的备注') : '编辑文件夹') : '新建文件夹' }}</DialogTitle>
         <DialogDescription>
           <template v-if="!isEdit && props.parent">新建在「{{ props.parent.folder_name }}」里。</template>
-          <template v-else-if="nameLocked">根文件夹的名称跟着项目名称走，这里只能改备注。</template>
-          <template v-else>改名、移动都不影响里面文件的审核和归类。</template>
+          <template v-else-if="props.folder?.isRoot">根文件夹的名称跟着项目名称走，这里只能改备注。</template>
+          <template v-else-if="props.folder?.sealed">这个文件夹已归档并封存，名称不能改，只能改备注；要改名先到归类页解除封存。</template>
+          <template v-else>改名、移动都不影响里面文件的审核和归档。</template>
         </DialogDescription>
       </DialogHeader>
 

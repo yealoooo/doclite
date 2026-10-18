@@ -309,14 +309,13 @@ export function placementNo(p: Pick<CatalogPlacement, 'archive_no' | 'item_no'>)
 
 // ---------- 档案条目（M3-5） ----------
 
-/** 条目状态的中文名和徽标颜色（design §2.3：draft 著录中 → done 著录完成 → locked 定稿）。 */
+/** 条目状态的中文名和徽标颜色（M9 起只有两种：draft 未锁定、locked 已锁定，用户 2026-10-19）。 */
 export const ITEM_STATUS: Record<ItemStatus, { label: string; badge: string; dot: string }> = {
-  draft: { label: '草稿', badge: 'bg-muted text-muted-foreground', dot: 'bg-muted-foreground/45' },
-  done: { label: '已完成', badge: 'bg-info-soft text-info', dot: 'bg-info' },
-  locked: { label: '已定稿', badge: 'bg-ok-soft text-ok', dot: 'bg-ok' },
+  draft: { label: '未锁定', badge: 'bg-muted text-muted-foreground', dot: 'bg-muted-foreground/45' },
+  locked: { label: '已锁定', badge: 'bg-violet-100 text-violet-700', dot: 'bg-violet-700' },
 }
 
-export const ITEM_STATUS_ORDER: ItemStatus[] = ['draft', 'done', 'locked']
+export const ITEM_STATUS_ORDER: ItemStatus[] = ['draft', 'locked']
 
 export function itemStatusOf(status: string) {
   return ITEM_STATUS[status as ItemStatus] ?? { label: status, badge: 'bg-muted text-muted-foreground', dot: 'bg-muted-foreground/45' }
@@ -395,6 +394,36 @@ export function archiveNoReasonShort(r: ArchiveNoReason | null | undefined): str
     default:
       return '档号为空'
   }
+}
+
+// ---------- 整个文件夹归档和封存（M9，requirements 5.5、5.9） ----------
+
+/** 归档目录里一件的简称："节点名 件号"（件号按位数补零），例如"办公室 0003"。 */
+export function itemShortLabel(a: { category_names: string[]; item_no: number }, width: number): string {
+  const node = a.category_names[a.category_names.length - 1]
+  const no = formatItemNo(a.item_no, width)
+  return node ? `${node} ${no}` : `第 ${no} 件`
+}
+
+/**
+ * 不知道模板的件号位数时（文件目录页没有取 catalog-settings），从档号末尾的数字猜：末尾那串数字的值就是件号时用它的
+ * 长度，否则不补零。
+ */
+export function itemNoWidthFrom(archiveNo: string | null, itemNo: number): number {
+  const m = archiveNo ? /(\d+)$/.exec(archiveNo) : null
+  return m && Number(m[1]) === itemNo ? m[1]!.length : 0
+}
+
+/** 解除封存时可以选的原因（选填，用户 2026-10-19）。 */
+export const UNSEAL_REASONS = ['漏扫了页', '多扫了页', '页的顺序不对', '其他'] as const
+
+/** 归档时跳过的原因的短名。 */
+export const ARCHIVE_SKIP_LABEL: Record<string, string> = {
+  archived: '已归档',
+  has_subfolders: '含下级文件夹',
+  empty: '空文件夹',
+  too_many_pages: '超过 2000 页',
+  file_cataloged: '有文件在别的件里',
 }
 
 // ---------- 归类节点的编码和名称（M3-5，规则见 design §2.3"归类节点"） ----------

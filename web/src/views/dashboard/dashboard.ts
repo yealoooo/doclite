@@ -12,9 +12,9 @@ export const REVIEW_ROWS: ReviewStatus[] = ['unassigned', 'pending', 'approved',
 export type CatalogColumn = 'uncataloged' | 'unlocked' | 'locked'
 export const CATALOG_COLUMNS: CatalogColumn[] = ['uncataloged', 'unlocked', 'locked']
 export const CATALOG_COLUMN_LABEL: Record<CatalogColumn, string> = {
-  uncataloged: '未归类',
-  unlocked: '已归类未定稿',
-  locked: '已定稿',
+  uncataloged: '未归档',
+  unlocked: '已归档未锁定',
+  locked: '已锁定',
 }
 
 /** 审核状态的颜色（和 /files、/review-assign 的状态点一致）。 */
@@ -25,7 +25,7 @@ export const REVIEW_COLOR: Record<ReviewStatus, string> = {
   unassigned: 'bg-muted-foreground/35',
 }
 
-/** 归类状态的颜色：一种色相由浅到深（未归类是底色）。 */
+/** 归档状态的颜色：一种色相由浅到深（未归档是底色）。 */
 export const CATALOG_COLOR: Record<CatalogColumn, string> = {
   locked: 'bg-violet-700',
   unlocked: 'bg-violet-300',
@@ -42,7 +42,7 @@ export function reviewSegments(c: CatalogCounts): BarSegment[] {
   }))
 }
 
-/** 归类进度条：已定稿、已归类未定稿（其余是底色：未归类）。 */
+/** 归档进度条：已锁定、已归档未锁定（含修改中；其余是底色：未归档）。 */
 export function catalogSegments(c: CatalogCounts): BarSegment[] {
   return (['locked', 'unlocked'] as CatalogColumn[]).map((k) => ({
     key: k,
@@ -52,7 +52,7 @@ export function catalogSegments(c: CatalogCounts): BarSegment[] {
   }))
 }
 
-/** 矩阵里一格属于"可导出"吗（按 `export.require_locked_item`：true 只算已定稿，false 算已归类）。 */
+/** 矩阵里一格属于"可导出"吗（按 `export.require_locked_item`：true 只算已锁定，false 算已归档）。 */
 export function isExportableColumn(col: CatalogColumn, requireLocked: boolean): boolean {
   return col === 'locked' || (!requireLocked && col === 'unlocked')
 }
@@ -60,13 +60,13 @@ export function isExportableColumn(col: CatalogColumn, requireLocked: boolean): 
 /** 矩阵每格的一句说明（plan.html 看板 Mockup 的写法）。 */
 export function cellNote(row: ReviewStatus, col: CatalogColumn, requireLocked: boolean): string {
   if (row === 'approved') {
-    if (col === 'uncataloged') return '待归类'
+    if (col === 'uncataloged') return '待归档'
     if (isExportableColumn(col, requireLocked)) return '可导出'
-    return '待定稿'
+    return '待锁定'
   }
   if (row === 'rejected') return col === 'uncataloged' ? '等重扫' : '重扫后自动跟随'
   if (col === 'uncataloged') return row === 'unassigned' ? '刚入库' : '审核中'
-  return '归类先行'
+  return '归档先行'
 }
 
 /** 占比（0–100 的整数；分母为 0 时 null）。 */

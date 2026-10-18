@@ -233,7 +233,7 @@ function changesAgainst(b: Base): UpdateProjectBody {
   return body
 }
 
-/** settings 里由这个对话框编辑的部分（模板、定稿要求、著录项），用来判断别人改没改。 */
+/** settings 里由这个对话框编辑的部分（模板、锁定要求、著录项），用来判断别人改没改。 */
 function catalogPart(settings: Record<string, unknown>): string {
   return draftSignature(draftFromSettings(settings))
 }

@@ -28,7 +28,7 @@ export const AUDIT_ACTIONS: Record<string, string[]> = {
   storage_profile: ['create', 'update', 'delete', 'set_default', 'unset_default', 'migrate_start', 'migrate_cancel', 'migrate_end'],
   folder: ['create', 'update', 'move', 'delete'],
   archive_category: ['create', 'update', 'move', 'delete', 'renumber'],
-  archive_item: ['create', 'update', 'move', 'delete', 'mark_done', 'back_to_draft', 'lock', 'unlock', 'renumber', 'reorder'],
+  archive_item: ['archive', 'update', 'move', 'unseal', 'reseal', 'lock', 'unlock', 'delete', 'renumber', 'reorder'],
   export_task: ['create', 'cancel', 'download'],
   file_snapshot: ['storage_migrate'],
   license: ['import', 'replace'],
@@ -47,9 +47,10 @@ const ACTION_LABELS: Record<string, string> = {
   set_default: '设为默认',
   unset_default: '取消默认',
   set_access: '改授权',
-  mark_done: '标记完成',
-  back_to_draft: '退回草稿',
-  lock: '定稿',
+  archive: '归档',
+  unseal: '解除封存',
+  reseal: '重新归档',
+  lock: '锁定',
   unlock: '解锁',
   renumber: '重算档号',
   reorder: '调整页序',
@@ -66,6 +67,7 @@ const ACTION_LABELS: Record<string, string> = {
 /** 同一个动作在某些类型上的叫法。 */
 const ACTION_OVERRIDES: Record<string, Record<string, string>> = {
   archive_category: { renumber: '按新模板重新生成档号' },
+  archive_item: { delete: '撤销归档' },
   export_task: { create: '新建导出', cancel: '取消导出', download: '下载导出物' },
   license: { import: '导入许可证', replace: '替换许可证' },
 }
@@ -232,7 +234,7 @@ export const FIELD_LABELS: Record<string, string> = {
   renumbered: '重算档号的条目数',
   deleted_categories: '删除的节点数',
   template: '档号模板',
-  skipped_locked: '跳过的已定稿条目',
+  skipped_locked: '跳过的已锁定的件',
   archive_no_conflicts: '档号被占用的条目',
   title: '题名',
   item_no: '件号',
@@ -246,7 +248,7 @@ export const FIELD_LABELS: Record<string, string> = {
   item_count: '件数',
   only_approved: '只导出审核通过的',
   only_ready: '只导出就绪的',
-  require_locked_item: '要求已定稿',
+  require_locked_item: '要求已锁定',
   skipped_item_count: '跳过的件数',
   job_id: '后台任务 id',
   resubmit_of: '补交自',
@@ -273,7 +275,7 @@ export const FIELD_LABELS: Record<string, string> = {
   batch: '批量',
   cause: '原因',
   conflict: '撞号',
-  lock_requires_approved: '定稿要求全部通过',
+  lock_requires_approved: '锁定要求全部通过',
   moved: '挪动的页',
   linked: '挂上的页数',
   unlinked: '移出的页数',
@@ -294,9 +296,10 @@ const STATUS_LABELS: Record<string, string> = {
   disabled: '停用',
   readonly: '只读',
   archived: '已归档',
-  draft: '草稿',
-  done: '已完成',
-  locked: '已定稿',
+  draft: '未锁定',
+  locked: '已锁定',
+  sealed: '已封存',
+  modifying: '修改中',
   queued: '排队',
   running: '执行中',
   canceled: '已取消',
@@ -418,13 +421,22 @@ export function describe(log: AuditLog): string {
     case 'archive_category/renumber':
       return `重算 ${Number(a.renumbered ?? 0)} 件`
     case 'archive_item/create':
-      return [str(a.title), a.page_count ? `${a.page_count} 页` : null].filter(Boolean).join('，')
+    case 'archive_item/archive':
+      return [str(a.title), a.page_count ? `${a.page_count} 页` : null, str(a.source_folder_path) ? `来源 ${str(a.source_folder_path)}` : null]
+        .filter(Boolean)
+        .join('，')
+    case 'archive_item/unseal':
+      return [str(d.source_folder_path) ? `来源 ${str(d.source_folder_path)}` : null, str(d.reason) ? `原因：${str(d.reason)}` : null]
+        .filter(Boolean)
+        .join('，')
+    case 'archive_item/reseal':
+      return `${Number(b.page_count ?? 0)} 页 → ${Number(a.page_count ?? 0)} 页（新增 ${count(d.added) ?? 0}、去掉 ${count(d.removed) ?? 0}、调序 ${count(d.moved) ?? 0}）`
     case 'archive_item/move':
       return `移到 ${formatValue('category_path', a.category_path)}`
     case 'archive_item/renumber':
       return `档号：${formatValue('archive_no', b.archive_no)} → ${formatValue('archive_no', a.archive_no)}`
     case 'archive_item/lock':
-      return d.batch ? '批量定稿' : ''
+      return d.batch ? '批量锁定' : ''
     case 'archive_item/reorder': {
       const n = count(d.moved) ?? 0
       return `挪动 ${n} 页，共 ${Number(d.page_count ?? 0)} 页`

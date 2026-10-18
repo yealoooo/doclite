@@ -387,7 +387,7 @@ const counts = computed(() => {
   >
     <header class="flex h-14 shrink-0 items-center gap-3 border-b px-5">
       <h1 class="shrink-0 text-base font-semibold tracking-tight text-foreground">导出交付</h1>
-      <span class="shrink-0 rounded-full bg-muted px-2 text-[11px] leading-5 text-muted-foreground">只导出已归类的文件</span>
+      <span class="shrink-0 rounded-full bg-muted px-2 text-[11px] leading-5 text-muted-foreground">只导出已归档的文件</span>
       <div class="flex-1" />
       <span
         v-if="project.current"

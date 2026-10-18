@@ -19,6 +19,12 @@
 //   文件之间切换、对比上一版。
 // - 重扫件（M2-7）：文件夹摘要那一行的"只看已驳回"筛选（只筛当前文件夹直接放的文件，子文件夹照常显示）；一个已驳回的
 //   文件在右键菜单和选择栏里有"上传重扫件"（RescanDialog：浏览器里生成封面后 upload()，壳里走 `pick_and_rescan`）。
+// - 封存（M9，requirements 5.5"封存"、5.9"/files 也显示同样的横条和状态"）：打开的文件夹已归档时顶部横条（SealBanner：
+//   紫色已封存、橙色修改中）。已封存的文件夹里新建文件夹、上传、复制、改名、移动、删除的按钮和右键菜单置灰并写原因
+//   （重扫、看图、下载、改备注照常）；子文件夹本身封存时它的改名、移动、删除置灰。有 catalog 菜单的人横条上能直接
+//   "解除封存去修改…"（UnsealDialog），修改中的给"改完了，去归类页重新归档"；没有的写"请联系归类员"。子文件夹的格子、
+//   行上显示归档状态（FileGrid）；树上修改中的文件夹带橙点。任何写操作碰到 409 `folder_archived`（例如把文件移进
+//   封存的文件夹）给 server 的说明和"去归类页查看"（useFileActions）。
 import {
   ChevronRightIcon,
   CopyIcon,
@@ -65,6 +71,12 @@ import { isTauri } from '@/lib/client'
 import { UPLOAD_ACCEPT } from '@/lib/upload-plan'
 import { useImageInfoStore } from '@/stores/image-info'
 import { useProjectStore } from '@/stores/project'
+import { useSessionStore } from '@/stores/session'
+// ---- 封存（M9） ----
+import GuardedButton from '@/components/app/GuardedButton.vue'
+import SealBanner from '@/components/catalog/SealBanner.vue'
+import UnsealDialog from '@/components/catalog/UnsealDialog.vue'
+import type { ArchiveItem } from '@/api/types'
 
 import { type Entry, toEntries, type ViewMode } from './entries'
 import FileDetailPanel from './FileDetailPanel.vue'
@@ -84,6 +96,7 @@ import RescanDialog from '@/components/files/RescanDialog.vue'
 import type { RescanTarget } from '@/lib/rescan'
 
 const project = useProjectStore()
+const session = useSessionStore()
 const images = useImageInfoStore()
 const route = useRoute()
 const router = useRouter()
@@ -340,7 +353,7 @@ function scheduleApply() {
 
 /**
  * M3-7：详情面板的归类信息。`catalog.changed` 不带文件（档号、题名、页序可能变了），收到就让面板重新取当前这个文件的
- * （面板自己去抖 150 ms）；挂接、移出另有这个文件的 `files.changed`，走 detailRefresh。
+ * （面板自己去抖 150 ms）；归档、移出另有这个文件的 `files.changed`，走 detailRefresh。
  */
 const catalogRefresh = ref(0)
 
@@ -510,6 +523,7 @@ function onAreaContextMenu(ev: MouseEvent) {
 }
 
 function onGridCommand(cmd: GridCommand) {
+  if (sealedCommandBlocked(cmd)) return
   if (cmd === 'rename') actions.renameSelected()
   else if (cmd === 'delete') actions.deleteSelected()
   else void actions.copySelected()
@@ -621,6 +635,54 @@ function openRescan(file: FileEntry) {
   rescanOpen.value = true
 }
 
+// ---------- 封存（M9） ----------
+
+const canCatalog = computed(() => session.menuCodes.has('catalog'))
+const canFilesMenu = computed(() => session.menuCodes.has('files'))
+/** 打开的文件夹已封存：里面不能放、拿、改文件，不能建子文件夹，自己不能改名、移动、删除。 */
+const sealed = computed(() => folder.value?.archive?.source_status === 'sealed')
+const SEALED_REASON = '这个文件夹已归档并封存：要修改先解除封存（可以重扫、看图、改备注）'
+const sealReason = computed(() => (sealed.value ? SEALED_REASON : null))
+/** 选中的子文件夹已封存（它的改名、移动、删除不能做）。 */
+const selectedFolderSealed = computed(
+  () => actions.kind.value === 'folder' && actions.folders.value[0]?.archive?.source_status === 'sealed',
+)
+const FOLDER_SEALED_REASON = '这个文件夹已归档并封存：不能改名、移动、删除（可以改备注）；要修改先解除封存'
+
+const unsealOpen = ref(false)
+const unsealItemId = ref<string | null>(null)
+function askUnseal() {
+  const a = folder.value?.archive
+  if (!a) return
+  unsealItemId.value = a.item_id
+  unsealOpen.value = true
+}
+function onUnsealed(_it: ArchiveItem) {
+  toast.success('已解除封存：现在可以在这里修改，改完到归类页"重新归档"')
+  const cur = folder.value
+  if (cur) afterChange([cur.id])
+  void reloadBreadcrumb()
+}
+function openCatalog() {
+  const a = folder.value?.archive
+  const cur = folder.value
+  if (!a || !cur) return
+  void router.push({ path: '/catalog', query: { folder: cur.id, category: a.category_id, item: a.item_id } })
+}
+
+/** 快捷键（F2、Delete、Ctrl/⌘+C）碰到封存时提示，不发请求。 */
+function sealedCommandBlocked(cmd: GridCommand): boolean {
+  if (sealed.value && (actions.kind.value === 'file' || actions.kind.value === 'files')) {
+    toast.info(SEALED_REASON)
+    return true
+  }
+  if (cmd !== 'copy' && selectedFolderSealed.value) {
+    toast.info(FOLDER_SEALED_REASON)
+    return true
+  }
+  return false
+}
+
 /** 重扫结束（成功或状态已变）：刷新列表和详情（SSE 的 files.changed 随后也会到）。 */
 function onRescanFinished() {
   const cur = folder.value
@@ -723,7 +785,16 @@ function onRescanFinished() {
 
     <div v-else class="flex min-h-0 flex-1">
       <aside class="w-56 shrink-0 overflow-y-auto border-r bg-sidebar/60 px-2 py-2.5">
-        <FolderTree :tree="tree" :selected-id="folder?.id ?? folderQuery ?? project.current.root_folder_id" @select="navigate" />
+        <FolderTree :tree="tree" :selected-id="folder?.id ?? folderQuery ?? project.current.root_folder_id" @select="navigate">
+          <template #suffix="{ folder: f }">
+            <span
+              v-if="f.archive?.source_status === 'modifying' || tree.childrenOf(f)?.some((k) => k.archive?.source_status === 'modifying')"
+              class="size-1.5 shrink-0 rounded-full bg-orange-500"
+              title="里面有修改中的文件夹（改完要重新归档）"
+              data-testid="tree-modifying-dot"
+            />
+          </template>
+        </FolderTree>
       </aside>
 
       <section class="relative flex min-w-0 flex-1 flex-col">
@@ -752,15 +823,15 @@ function onRescanFinished() {
           <div class="flex-1" />
           <!-- 整理和上传（M1-12）：作用于当前文件夹。 -->
           <div class="flex shrink-0 items-center gap-1.5">
-            <Button variant="outline" size="xs" :disabled="!folder" data-testid="new-folder" @click="actions.newFolder()">
+            <GuardedButton variant="outline" size="xs" :reason="sealReason" :disabled="!folder" data-testid="new-folder" @click="actions.newFolder()">
               <FolderPlusIcon />新建文件夹
-            </Button>
-            <Button variant="outline" size="xs" :disabled="!folder" data-testid="upload-files" @click="pickUpload('files')">
+            </GuardedButton>
+            <GuardedButton variant="outline" size="xs" :reason="sealReason" :disabled="!folder" data-testid="upload-files" @click="pickUpload('files')">
               <UploadIcon />上传文件
-            </Button>
-            <Button variant="outline" size="xs" :disabled="!folder" data-testid="upload-folder" @click="pickUpload('folder')">
+            </GuardedButton>
+            <GuardedButton variant="outline" size="xs" :reason="sealReason" :disabled="!folder" data-testid="upload-folder" @click="pickUpload('folder')">
               <FolderUpIcon />上传文件夹
-            </Button>
+            </GuardedButton>
             <!-- 浏览器上传用的选择框（壳里不用）。 -->
             <input
               ref="filesInput"
@@ -783,6 +854,17 @@ function onRescanFinished() {
           </div>
           <span class="shrink-0 border-l pl-2">按扫描顺序</span>
         </div>
+
+        <!-- 封存横条（M9） -->
+        <SealBanner
+          v-if="folder?.archive"
+          :archive="folder.archive"
+          where="files"
+          :can-catalog="canCatalog"
+          :can-files="canFilesMenu"
+          @unseal="askUnseal"
+          @open-catalog="openCatalog"
+        />
 
         <ContextMenu :modal="false">
           <ContextMenuTrigger as-child>
@@ -823,6 +905,16 @@ function onRescanFinished() {
           </ContextMenuTrigger>
           <ContextMenuContent class="w-56" data-testid="context-menu" :data-kind="menuKind">
             <!-- 一个文件 -->
+            <ContextMenuLabel
+              v-if="sealed && menuKind !== 'folder' && menuKind !== 'folders'"
+              class="max-w-56 text-xs leading-relaxed font-normal text-violet-700"
+              data-testid="menu-sealed-note"
+            >{{ SEALED_REASON }}</ContextMenuLabel>
+            <ContextMenuLabel
+              v-else-if="menuKind === 'folder' && selectedFolderSealed"
+              class="max-w-56 text-xs leading-relaxed font-normal text-violet-700"
+              data-testid="menu-sealed-note"
+            >{{ FOLDER_SEALED_REASON }}</ContextMenuLabel>
             <template v-if="menuKind === 'file'">
               <ContextMenuItem data-testid="menu-open" @select="menuEntry && actions.openEntry(menuEntry)">
                 <EyeIcon />打开
@@ -830,13 +922,13 @@ function onRescanFinished() {
               <ContextMenuItem data-testid="menu-view-original" @select="viewOriginal(menuEntry)">
                 <ImageIcon />查看原图
               </ContextMenuItem>
-              <ContextMenuItem data-testid="menu-rename" @select="actions.renameSelected()">
+              <ContextMenuItem :disabled="sealed" data-testid="menu-rename" @select="actions.renameSelected()">
                 <PencilIcon />重命名<ContextMenuShortcut>F2</ContextMenuShortcut>
               </ContextMenuItem>
-              <ContextMenuItem data-testid="menu-move" @select="actions.moveSelected()">
+              <ContextMenuItem :disabled="sealed" data-testid="menu-move" @select="actions.moveSelected()">
                 <FolderInputIcon />移动到…
               </ContextMenuItem>
-              <ContextMenuItem data-testid="menu-copy" @select="actions.copySelected()">
+              <ContextMenuItem :disabled="sealed" data-testid="menu-copy" @select="actions.copySelected()">
                 <CopyIcon />复制<ContextMenuShortcut>{{ modKey }}+C</ContextMenuShortcut>
               </ContextMenuItem>
               <ContextMenuItem data-testid="menu-download" @select="actions.downloadOriginal()">
@@ -850,21 +942,21 @@ function onRescanFinished() {
                 <RescanIcon />上传重扫件
               </ContextMenuItem>
               <ContextMenuSeparator />
-              <ContextMenuItem variant="destructive" data-testid="menu-delete" @select="actions.deleteSelected()">
+              <ContextMenuItem :disabled="sealed" variant="destructive" data-testid="menu-delete" @select="actions.deleteSelected()">
                 <Trash2Icon />删除<ContextMenuShortcut>Del</ContextMenuShortcut>
               </ContextMenuItem>
             </template>
             <!-- 多个文件 -->
             <template v-else-if="menuKind === 'files'">
               <ContextMenuLabel class="text-xs text-muted-foreground">已选 {{ actions.files.value.length }} 个文件</ContextMenuLabel>
-              <ContextMenuItem data-testid="menu-move" @select="actions.moveSelected()">
+              <ContextMenuItem :disabled="sealed" data-testid="menu-move" @select="actions.moveSelected()">
                 <FolderInputIcon />移动到…
               </ContextMenuItem>
-              <ContextMenuItem data-testid="menu-copy" @select="actions.copySelected()">
+              <ContextMenuItem :disabled="sealed" data-testid="menu-copy" @select="actions.copySelected()">
                 <CopyIcon />复制<ContextMenuShortcut>{{ modKey }}+C</ContextMenuShortcut>
               </ContextMenuItem>
               <ContextMenuSeparator />
-              <ContextMenuItem variant="destructive" data-testid="menu-delete" @select="actions.deleteSelected()">
+              <ContextMenuItem :disabled="sealed" variant="destructive" data-testid="menu-delete" @select="actions.deleteSelected()">
                 <Trash2Icon />删除<ContextMenuShortcut>Del</ContextMenuShortcut>
               </ContextMenuItem>
             </template>
@@ -873,17 +965,17 @@ function onRescanFinished() {
               <ContextMenuItem data-testid="menu-open" @select="menuEntry && actions.openEntry(menuEntry)">
                 <FolderOpenIcon />打开
               </ContextMenuItem>
-              <ContextMenuItem data-testid="menu-rename" @select="actions.renameSelected()">
+              <ContextMenuItem :disabled="selectedFolderSealed" data-testid="menu-rename" @select="actions.renameSelected()">
                 <PencilIcon />重命名<ContextMenuShortcut>F2</ContextMenuShortcut>
               </ContextMenuItem>
               <ContextMenuItem data-testid="menu-remark" @select="editSelectedFolderRemark()">
                 <NotebookPenIcon />修改备注
               </ContextMenuItem>
-              <ContextMenuItem data-testid="menu-move" @select="actions.moveSelected()">
+              <ContextMenuItem :disabled="selectedFolderSealed" data-testid="menu-move" @select="actions.moveSelected()">
                 <FolderInputIcon />移动到…
               </ContextMenuItem>
               <ContextMenuSeparator />
-              <ContextMenuItem variant="destructive" data-testid="menu-delete" @select="actions.deleteSelected()">
+              <ContextMenuItem :disabled="selectedFolderSealed" variant="destructive" data-testid="menu-delete" @select="actions.deleteSelected()">
                 <Trash2Icon />删除<ContextMenuShortcut>Del</ContextMenuShortcut>
               </ContextMenuItem>
             </template>
@@ -901,13 +993,13 @@ function onRescanFinished() {
             </template>
             <!-- 空白处 -->
             <template v-else>
-              <ContextMenuItem data-testid="menu-new-folder" @select="actions.newFolder()">
+              <ContextMenuItem :disabled="sealed" data-testid="menu-new-folder" @select="actions.newFolder()">
                 <FolderPlusIcon />新建文件夹
               </ContextMenuItem>
-              <ContextMenuItem data-testid="menu-upload-files" @select="pickUpload('files')">
+              <ContextMenuItem :disabled="sealed" data-testid="menu-upload-files" @select="pickUpload('files')">
                 <UploadIcon />上传文件
               </ContextMenuItem>
-              <ContextMenuItem data-testid="menu-upload-folder" @select="pickUpload('folder')">
+              <ContextMenuItem :disabled="sealed" data-testid="menu-upload-folder" @select="pickUpload('folder')">
                 <FolderUpIcon />上传文件夹
               </ContextMenuItem>
               <ContextMenuSeparator />
@@ -926,12 +1018,12 @@ function onRescanFinished() {
         >
           <span class="mr-2">已选 {{ selection.count.value }} 项</span>
           <template v-if="actions.kind.value === 'file' || actions.kind.value === 'files'">
-            <Button variant="ghost" size="xs" data-testid="bar-move" @click="actions.moveSelected()">
+            <GuardedButton variant="ghost" size="xs" :reason="sealReason" data-testid="bar-move" @click="actions.moveSelected()">
               <FolderInputIcon />移动到…
-            </Button>
-            <Button variant="ghost" size="xs" data-testid="bar-copy" @click="actions.copySelected()">
+            </GuardedButton>
+            <GuardedButton variant="ghost" size="xs" :reason="sealReason" data-testid="bar-copy" @click="actions.copySelected()">
               <CopyIcon />复制
-            </Button>
+            </GuardedButton>
             <Button
               v-if="actions.kind.value === 'file'"
               variant="ghost"
@@ -945,32 +1037,34 @@ function onRescanFinished() {
             <Button v-if="rescanFile" variant="ghost" size="xs" data-testid="bar-rescan" @click="openRescan(rescanFile)">
               <RescanIcon />上传重扫件
             </Button>
-            <Button
+            <GuardedButton
               variant="ghost"
               size="xs"
               class="text-destructive hover:text-destructive"
+              :reason="sealReason"
               data-testid="bar-delete"
               @click="actions.deleteSelected()"
             >
               <Trash2Icon />删除
-            </Button>
+            </GuardedButton>
           </template>
           <template v-else-if="actions.kind.value === 'folder'">
-            <Button variant="ghost" size="xs" data-testid="bar-rename" @click="actions.renameSelected()">
+            <GuardedButton variant="ghost" size="xs" :reason="selectedFolderSealed ? FOLDER_SEALED_REASON : null" data-testid="bar-rename" @click="actions.renameSelected()">
               <PencilIcon />重命名
-            </Button>
-            <Button variant="ghost" size="xs" data-testid="bar-move" @click="actions.moveSelected()">
+            </GuardedButton>
+            <GuardedButton variant="ghost" size="xs" :reason="selectedFolderSealed ? FOLDER_SEALED_REASON : null" data-testid="bar-move" @click="actions.moveSelected()">
               <FolderInputIcon />移动到…
-            </Button>
-            <Button
+            </GuardedButton>
+            <GuardedButton
               variant="ghost"
               size="xs"
               class="text-destructive hover:text-destructive"
+              :reason="selectedFolderSealed ? FOLDER_SEALED_REASON : null"
               data-testid="bar-delete"
               @click="actions.deleteSelected()"
             >
               <Trash2Icon />删除
-            </Button>
+            </GuardedButton>
           </template>
           <span v-else class="text-muted-foreground">{{ actions.kind.value === 'folders' ? '文件夹一次只能操作一个' : '文件夹和文件要分开操作' }}</span>
           <div class="flex-1" />
@@ -1047,6 +1141,9 @@ function onRescanFinished() {
 
     <!-- 查看原图（M2-4） -->
     <OriginalViewerDialog v-if="viewerMounted" v-model:open="viewerOpen" :files="viewerFiles" :file-id="viewerFileId" />
+
+    <!-- 解除封存（M9） -->
+    <UnsealDialog v-if="canCatalog" v-model:open="unsealOpen" :item-id="unsealItemId" @unsealed="onUnsealed" />
 
     <!-- 上传重扫件（M2-7） -->
     <RescanDialog v-model:open="rescanOpen" :target="rescanTarget" :project-id="project.currentId" @finished="onRescanFinished" />

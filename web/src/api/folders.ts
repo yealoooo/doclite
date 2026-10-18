@@ -1,5 +1,7 @@
 // 文件目录的文件夹（M1-6）：读文件夹（面包屑）、列子项、新建（菜单码 scan 或 files）；
 // 改名、改备注、移动、删除（菜单码 files，M1-12）。每个函数的最后一个参数可以传 `handle`（见 http.ts）。
+// M9：响应里带文件夹的归档信息（`archive`）；封存的文件夹（requirements 5.5）里建子文件夹、文件夹本身改名、移动、删除
+// 一律 409 `folder_archived`（details 见 FolderArchivedDetails），改备注照常。
 
 import { request, type RequestOptions, requestQuiet } from './http'
 import type { CreateFolderBody, FolderChildren, FolderItem, UpdateFolderBody } from './types'
@@ -39,7 +41,7 @@ export function deleteFolder(id: string, handle?: Handle) {
 }
 
 /**
- * 探测一个文件夹（M3-6，归类页的 `?pool=`）：同 getFolder，只是文件夹在进不了的项目里时（403 `forbidden`）不走全局
+ * 探测一个文件夹（归类页左栏的 `?folder=`）：同 getFolder，只是文件夹在进不了的项目里时（403 `forbidden`）不走全局
  * 处理（不刷新会话），由调用方当作"没有这个文件夹"处理。
  */
 export function probeFolder(id: string, handle?: Handle) {

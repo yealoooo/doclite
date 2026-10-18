@@ -11,12 +11,14 @@
 //   位置"#n"——区间选择按显示位置，用户决定 Q4）、`note`（每个文件多一行说明，例如"在 0012 第 3 页"）、
 //   `draggableFiles`（文件可以拖出去：`dragstart`、`dragend` 事件，拖什么由页面决定）、`visibleOwner`（在 image-info
 //   store 里登记可见范围用的名字）；可见的 file_id 变了发 `visible` 事件（页面按需取别的信息，例如归在哪个条目）。
+// - M9：子文件夹的格子、行上显示归档状态（FolderArchiveBadge：🔒 节点名 件号 / ✎ 修改中）。
 import { useResizeObserver } from '@vueuse/core'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { FolderIcon } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import type { FileEntry } from '@/api/types'
+import FolderArchiveBadge from '@/components/catalog/FolderArchiveBadge.vue'
 import FileCover from '@/components/files/FileCover.vue'
 import type { Selection } from '@/composables/useSelection'
 import { formatDateTime } from '@/lib/format'
@@ -37,7 +39,7 @@ const props = defineProps<{
   entries: Entry[]
   view: ViewMode
   selection: Selection
-  /** 窄格子、小封面，名字前显示位置"#n"（M3-6 待归类池）。只影响图标视图。 */
+  /** 窄格子、小封面，名字前显示位置"#n"（归类页的左栏和件的页）。只影响图标视图。 */
   dense?: boolean
   /** 文件格子下面多显示的一行；返回 null 不显示。 */
   note?: (file: FileEntry) => GridNote | null
@@ -70,7 +72,7 @@ const PAD = 12
 const COL_GAP = 8
 /** 图标视图每格的最小宽度和每行的高度（封面 92×130 + 名字 + 状态）。 */
 const CELL_MIN_W = props.dense ? 92 : 124
-const ICON_ROW_H = props.dense ? 178 : 192
+const ICON_ROW_H = props.dense ? 178 : 206
 const LIST_ROW_H = 40
 
 const scrollEl = ref<HTMLElement | null>(null)
@@ -298,7 +300,7 @@ defineExpose({ scrollToKey })
                   <span
                     v-if="entry.file.cataloged"
                     class="absolute top-1 left-1 rounded bg-violet-100 px-1 text-[10px] leading-4 text-violet-700"
-                  >已归类</span>
+                  >已归档</span>
                   <span
                     v-if="entry.file.version_no > 1"
                     class="absolute top-1 right-1 rounded bg-foreground/75 px-1 font-mono text-[10px] leading-4 text-background"
@@ -344,6 +346,7 @@ defineExpose({ scrollToKey })
                   <template v-if="entry.folder.folder_count">{{ entry.folder.folder_count }} 个文件夹 · </template>
                   {{ entry.folder.file_count }} 个文件
                 </div>
+                <FolderArchiveBadge v-if="entry.folder.archive" :archive="entry.folder.archive" class="max-w-full" />
               </template>
             </div>
 
@@ -375,7 +378,7 @@ defineExpose({ scrollToKey })
                   <span
                     v-if="entry.file.cataloged"
                     class="shrink-0 rounded bg-violet-100 px-1 text-[10px] leading-4 text-violet-700"
-                  >已归类</span>
+                  >已归档</span>
                 </span>
                 <span>
                   <span
@@ -411,6 +414,7 @@ defineExpose({ scrollToKey })
                   <span v-if="entry.folder.remark" class="truncate text-xs text-muted-foreground" :title="entry.folder.remark">
                     {{ entry.folder.remark }}
                   </span>
+                  <FolderArchiveBadge v-if="entry.folder.archive" :archive="entry.folder.archive" class="self-center" />
                 </span>
                 <span class="text-xs text-muted-foreground">文件夹</span>
                 <span />

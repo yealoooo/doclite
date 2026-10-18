@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 一个文件"归到了哪件档案"（只读，M3-7，用户决定 Q10）：`GET /api/files/{fid}/catalog`（能进项目即可）。
-// 只显示档号（为空时"第 n 件"）、题名、第几页；没挂接时显示"未归类"。/review 右栏、/files 详情面板用。
+// 只显示档号（为空时"第 n 件"）、题名、第几页；没归档时显示"未归档"。/review 右栏、/files 详情面板用。
 // - 换文件后去抖 150 ms 再取（方向键、快速翻页时不连发）；`refreshToken` 变了重新取（SSE：这个文件的
 //   `files.changed`，或任何 `catalog.changed`——档号、题名、页序变了），刷新期间先保留旧内容；换文件时马上清空，
 //   在途的请求作废。
@@ -96,7 +96,7 @@ const state = computed(() => (loadError.value ? 'error' : ready.value ? 'ready' 
     <p v-if="loadError" class="text-destructive">{{ loadError }}</p>
     <template v-else-if="ready">
       <template v-if="placement">
-        <div class="flex flex-wrap items-baseline gap-x-2" :title="`已挂接：${placementNo(placement)} 第 ${placement.page_no} 页`">
+        <div class="flex flex-wrap items-baseline gap-x-2" :title="`已归档：${placementNo(placement)} 第 ${placement.page_no} 页`">
           <b
             class="min-w-0 font-medium [overflow-wrap:anywhere] text-foreground"
             :class="placement.archive_no ? 'font-mono text-[12px]' : ''"
@@ -110,7 +110,7 @@ const state = computed(() => (loadError.value ? 'error' : ready.value ? 'ready' 
           {{ placement.title || '（还没填题名）' }}
         </div>
       </template>
-      <div v-else class="text-violet-900/80" data-testid="catalog-info-none">未归类</div>
+      <div v-else class="text-violet-900/80" data-testid="catalog-info-none">未归档</div>
     </template>
     <div v-else class="text-violet-900/50">正在取…</div>
   </section>

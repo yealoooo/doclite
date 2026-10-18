@@ -1,14 +1,16 @@
 <script setup lang="ts">
 // 归类页的条目列表（M3-5）：当前归类节点里直接放的条目，按件号排，@tanstack/vue-virtual 虚拟滚动（每行 50 px）。
-// - 每行：勾选框、件号（按模板补零）、题名（没填时"（未填题名）"）、状态、页数、"n 待审"、档号为空、定稿后有新版本；
+// - 每行：勾选框、件号（按模板补零）、题名（没填时"（未填题名）"）、页数、"n 待审"、档号为空、锁定后有新版本；右边
+//   封存状态（🔒 已封存 / ✎ 修改中，M9）和锁定状态（未锁定 / 已锁定）；
 //   列表只显示档号是否为空，原因在详情里（M3-2 须知）；
-// - 点一行：打开这个条目（页面的"当前条目"），同时只勾选它；Ctrl/⌘ 点、点勾选框：加选或取消；Shift 点：选区间
-//   （给批量定稿用），这几种不换当前条目；
+// - 点一行：只勾选它；双击打开这个条目（页面的"当前条目"，Mockup v3.1：件列表双击打开）；Ctrl/⌘ 点、点勾选框：
+//   加选或取消；Shift 点：选区间（给批量锁定用）；
 // - 滚到离末尾不到 LOAD_MORE_ROWS 行时要下一页（`loadMore`）；
-// - 批量定稿被拒时（409 `invalid_state` 的 `details.ids`），不满足条件的行标红（`blockedIds`）。
+// - 批量锁定被拒时（409 `invalid_state` 的 `details.ids`），不满足条件的行标红（`blockedIds`）。
 // - 截图脚本用的属性：容器 data-testid=item-list（data-rows）；行 data-testid=item-row（data-item-id、data-item-no、
-//   data-status、data-archive-no、data-pending、data-pages、data-current、data-selected、data-blocked）。
+//   data-status、data-source、data-archive-no、data-pending、data-pages、data-current、data-selected、data-blocked）。
 import { useVirtualizer } from '@tanstack/vue-virtual'
+import { LockIcon, PencilLineIcon } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 
 import type { ArchiveItemSummary } from '@/api/types'
@@ -25,7 +27,7 @@ const props = defineProps<{
   hasMore: boolean
   loadingMore: boolean
   loadMoreError: string | null
-  /** 批量定稿时不满足条件的条目。 */
+  /** 批量锁定时不满足条件的条目。 */
   blockedIds: ReadonlySet<string>
 }>()
 
@@ -79,7 +81,6 @@ function onRowClick(item: ArchiveItemSummary, ev: MouseEvent) {
     return
   }
   props.selection.click(item.id)
-  emit('activate', item.id)
 }
 
 function onCheck(item: ArchiveItemSummary, ev: MouseEvent) {
@@ -125,6 +126,7 @@ defineExpose({ scrollToItem })
           :data-item-id="item.id"
           :data-item-no="item.item_no"
           :data-status="item.status"
+          :data-source="item.source_status"
           :data-archive-no="item.archive_no ?? ''"
           :data-pending="item.page_counts.pending"
           :data-pages="item.page_count"
@@ -133,6 +135,7 @@ defineExpose({ scrollToItem })
           :data-blocked="props.blockedIds.has(item.id) ? 'true' : undefined"
           :aria-selected="props.selection.isSelected(item.id)"
           @click="onRowClick(item, $event)"
+          @dblclick="emit('activate', item.id)"
         >
           <span v-if="item.id === props.currentId" class="absolute inset-y-0 left-0 w-0.5 bg-info" />
           <span class="flex shrink-0 items-center" @click="onCheck(item, $event)">
@@ -173,10 +176,17 @@ defineExpose({ scrollToItem })
               <span
                 v-if="item.new_version_after_lock"
                 class="rounded bg-info-soft px-1 leading-4 text-info"
-                title="定稿之后有页出了新版本（重扫）"
-              >定稿后有新版本</span>
+                title="锁定之后有页出了新版本（重扫）"
+              >锁定后有新版本</span>
             </div>
           </div>
+          <span
+            v-if="item.source_status === 'modifying'"
+            class="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-orange-300 bg-orange-50 px-1.5 text-[11px] leading-[18px] text-orange-700"
+            :title="`来源文件夹修改中：${item.unsealed_by_name ?? ''} 解除封存${item.unseal_reason ? `，${item.unseal_reason}` : ''}`"
+            data-testid="item-row-modifying"
+          ><PencilLineIcon class="size-3" />修改中</span>
+          <span v-else class="flex shrink-0" :title="`已封存（来源：${item.source_folder_path}）`"><LockIcon class="size-3.5 text-violet-600" /></span>
           <span
             class="shrink-0 rounded-full px-1.5 text-[11px] leading-5"
             :class="itemStatusOf(item.status).badge"

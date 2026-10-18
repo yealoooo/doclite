@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// 状态矩阵（M3-7，用户决定 Q6）：4 行审核状态（待分配、待审、通过、驳回）× 3 列归类状态（未归类、已归类未定稿、
-// 已定稿），另有每行合计、"可导出"一列和最后一行合计。"可导出"按项目设置 `export.require_locked_item`（true 只算
-// 已定稿的，false 算已归类的），审核状态不影响能不能导出（"只导出审核通过的"在导出时勾选）；算作可导出的格子标绿。
+// 状态矩阵（M3-7，用户决定 Q6）：4 行审核状态（待分配、待审、通过、驳回）× 3 列归档状态（未归档、已归档未锁定、
+// 已锁定），另有每行合计、"可导出"一列和最后一行合计。"可导出"按项目设置 `export.require_locked_item`（true 只算
+// 已锁定的，false 算已归档的），审核状态不影响能不能导出（"只导出审核通过的"在导出时勾选）；算作可导出的格子标绿。
 // 每格写一句说明（plan.html 看板 Mockup 的写法），悬停看占比。
 // 截图脚本用的属性：data-testid=matrix-cell（data-review、data-catalog（uncataloged、unlocked、locked、total、
 // exportable）、data-value）。

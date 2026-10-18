@@ -13,7 +13,7 @@
 
 import { listChildren } from '@/api/folders'
 import { isApiError } from '@/api/http'
-import type { FolderChildren, FolderItem, SubfolderEntry } from '@/api/types'
+import type { FolderArchive, FolderChildren, FolderItem, SubfolderEntry } from '@/api/types'
 
 import { useLazyTree } from './useLazyTree'
 
@@ -30,6 +30,8 @@ export interface TreeFolder {
   folder_count: number
   /** 文件数；-1 表示还不知道。 */
   file_count: number
+  /** 归档信息（M9；children 里带的，根文件夹在第一次加载前没有）。 */
+  archive?: FolderArchive | null
 }
 
 export function useFolderTree() {

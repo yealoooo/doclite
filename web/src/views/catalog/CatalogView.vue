@@ -1,54 +1,37 @@
 <script setup lang="ts">
-// 归类页 /catalog（M3-5，参考 plan.html 的 p-catalog Mockup；菜单码 catalog）：归类树和条目著录；M3-6 加上挂接工作台
-// （右边第三栏的待归类池 CatalogPool、详情里可编辑的页序条 PageStrip）。著录设置在「系统管理 › 项目」里编辑（M3-7）。
+// 归类页 /catalog（M3-5；M9-2 按 requirements 5.9"界面 /catalog"和 Mockup v3.1 重写；菜单码 catalog）：左右两个资源
+// 管理器，中间"归档 →"。只能整个文件夹归档：没有待归类池、页序条、按页挂接、新建空条目、标记完成 / 退回草稿。
 //
-// M4-5：节点（工具栏、右键菜单、节点的空白页）和条目（详情页头）上的"导出"入口，带着范围跳到 /export 的新建导出
-// （`?new=category|item&ids=<id>`，lib/export.ts）；只有 export 菜单的人看得到。
-//
-// M3-6：
-// - **待归类池**（第三栏，要 files 或 scan 菜单才能浏览目录）：文件夹记在地址栏 `?pool=`（没有时用这个项目上次用的，
-//   localStorage，只是个人习惯）；"挂到末尾"、"插到选中页之后"交给条目详情（ItemDetail.linkFiles，经 PUT 提交整份
-//   列表）；"用选中的文件新建条目"在这里：POST 带 file_ids（M3-3），已在别的条目里时同样给"从原条目移出"。
-// - **看原图**：页序条双击、池里双击，都用 OriginalViewerDialog（左右切换在同一组文件之间）。
-// - **删除条目**在详情里（确认框写明页数），删掉后回到节点、刷新列表和树。
-// - **路径过期**（M3-5 遗留，design §7）：节点改名、移动、改编码而档号没变时事件是 `catalog.changed {category_ids,
-//   item_ids: []}`，条目的路径显示（详情的 category_path）却变了：刷新树之后，打开着的条目所在节点的路径（树上的名称链）
-//   变了就重取详情；待归类池的"在哪个条目"按同一条事件重取。
-//
-// - **左栏上半：归类树**（CategoryTree，按需加载，根节点不显示）：每个节点显示编码和子树里的条目数；工具栏和右键菜单
-//   提供新建（顶层、下级）、修改（名称、编码、类型）、移动、删除、"按新模板重新生成档号"。改编码、改类型、移动的
-//   响应里 `archive_no_conflicts > 0` 时提示"有 n 个条目因为撞号档号为空"。server 允许条目直接放在根节点下：
-//   有这样的条目时树顶多一行"（直接放在顶层的条目）n 件"，能打开（根节点当作当前节点）、看详情、移走；根节点本身
-//   不能改、不能在那里新建条目。
-// - **左栏下半：条目列表**（ItemList，虚拟滚动，keyset 分页每页 500）：当前节点直接放的条目；新建条目、勾选后批量
-//   定稿（≤500 个；被拒时标出不满足条件的条目）。
-// - **右边：条目详情**（ItemDetail）：档号（只读，为空时显示原因）、著录表单（按 catalog-settings 动态生成）、
-//   页序（只读）、标记完成 / 退回草稿 / 定稿 / 解锁（只有同时有 catalog 和 review_assign 的人看得到）、移到别的节点、
-//   改件号。表单有未保存的修改时，换条目、换节点、离开页面、在切换器里换项目（project store 的 addSwitchGuard）
-//   都先确认。
-// - **地址栏**：`?category=<节点>&item=<条目>`；链接里的节点不在当前项目里（404）时回到没有选中的状态。
-// - **著录设置**改了不发事件：进入页面、切换节点、写操作失败（4xx）时重取 catalog-settings。
-// - **实时**（useProjectStream，去抖：最后一条事件后 300 ms、最多等 1 秒，和 /files 一样；同时最多跑一轮，跑的过程中
-//   新来的事件并到下一轮）：
-//   - `catalog.changed {category_ids?, item_ids?}`：树按节点刷新它自己和祖先（条目数沿祖先链变），只为看得到的展开节点
-//     发请求，收起的丢掉子节点、再展开时重新取；树上不认识的节点位置不明，刷新全部看得到的展开节点。item_ids 的
-//     语义见下面"实时事件"一节：非空时当前节点在 category_ids 里或列表里有这些条目就重新取列表，选中的条目在里面
-//     就重新取详情；空数组只有节点变了，不重取列表、详情；没带时（超过 500 个；M3-3 合入前节点的事件也不带）把
-//     category_ids 当作子树的根，当前节点在这些子树里才重新取列表和详情（当前节点的祖先链一定在树上，不认识的节点
-//     不会是它的祖先）；
-//   - `files.changed`：页的审核状态、版本会变。带 file_ids 时，选中条目的页在里面就重新取详情；再用
-//     catalog-placements 查这些文件在哪些条目，列表里有就重新取列表（"n 待审"）；没带 file_ids 时都重新取。
-//     封面缓存按 file_id 作废（重扫出了新版本）；
-//   - `folders.changed`：页所在的文件夹路径可能变了，选中的条目有页就重新取详情；
-//   - `resync`、断线重连：整体刷新（设置、树里看得到的部分、列表、详情）。
+// - **左：文件目录**（FolderPane，要 files 或 scan 菜单，没有时给说明）：目录树 + 当前文件夹（地址栏 `?folder=`）；
+//   子文件夹显示归档状态；打开已归档的文件夹时顶部紫色（已封存）/ 橙色（修改中）横条。选中的文件夹拖到右边树上的节点、
+//   件列表，或者点中间的"归档 →"（放到右边选中的节点），打开归档预览（ArchiveDialog）。
+// - **右：归档目录**：归类树（CategoryTree；工具栏和右键：新建、改名称编码类型、移动、删除、重新生成档号、导出）+
+//   选中节点的件列表（ItemList：件号、题名、页数、封存和锁定状态；勾选后批量锁定）；双击打开一件（ItemDetail，替换列表，
+//   "‹ 返回"回到列表）。根下直接放的件单列一行。
+// - **解除封存**（components/catalog/UnsealDialog）、**重新归档**（ResealDialog，先给对比）从左栏横条、件详情、
+//   "修改中 n 件"清单打开。
+// - **不让人忘**：顶部常驻"✎ 修改中 n 件"（modifying.ts 走一遍归类树凑出来——server 没有这个接口，见那个文件），
+//   点开列出件、文件夹、谁、原因（ModifyingDialog）。
+// - 导出入口（M4-5）：节点（工具栏、右键、节点的空白页）和件详情上的"导出"，带着范围跳到 /export；只有 export 菜单的人看得到。
+// - **地址栏**：`?folder=<左栏的文件夹>&category=<节点>&item=<件>`。
+// - 著录表单有未保存的修改时，换件、换节点、离开页面、在切换器里换项目都先确认。著录设置改了不发事件：进入页面、切换
+//   节点、写操作失败（4xx）时重取 catalog-settings。
+// - **实时**（useProjectStream，去抖：最后一条事件后 300 ms、最多等 1 秒；同时最多跑一轮）：
+//   - `catalog.changed {category_ids?, item_ids?}`：树按节点刷新它自己和祖先；item_ids 非空时当前节点在 category_ids 里或
+//     列表里有这些件就重取列表，打开的件在里面就重取详情；空数组只有节点变了；没带时把 category_ids 当子树的根。
+//     顺带重算"修改中 n 件"。
+//   - `files.changed`：打开的件的页在里面就重取详情；列表里有页的件可能变了（"n 待审"）；左栏按 folder_ids 刷新。
+//   - `folders.changed`：左栏（归档状态、名字、文件夹没了）；打开的件的来源路径可能变了。
+//   - `resync`、断线重连：整体刷新。
 import {
+  ArrowRightIcon,
   ArrowRightLeftIcon,
   FileOutputIcon,
   FolderPlusIcon,
-  ListPlusIcon,
   LoaderCircleIcon,
   LockIcon,
   PencilIcon,
+  PencilLineIcon,
   PlusIcon,
   RefreshCwIcon,
   Trash2Icon,
@@ -59,13 +42,12 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import { toast } from 'vue-sonner'
 
 import {
-  createArchiveItem,
   deleteArchiveCategory,
   getCatalogPlacements,
   getCatalogSettings,
   listArchiveItems,
   lockArchiveItems,
-  MAX_ITEM_PAGES,
+  MAX_ARCHIVE_FOLDERS,
   MAX_ITEMS_PAGE,
   MAX_LOCK_ITEMS,
   renumberArchiveItems,
@@ -76,18 +58,19 @@ import type {
   ArchiveCategory,
   ArchiveItem,
   ArchiveItemSummary,
-  CatalogedElsewhere,
+  ArchiveResult,
   CatalogSettings,
-  FileCatalogedDetails,
   FileEntry,
-  ItemStatus,
+  FolderArchive,
   MyProject,
   ProjectEvent,
+  SubfolderEntry,
   UpdatedArchiveCategory,
 } from '@/api/types'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import CategoryPicker, { type PickedCategory } from '@/components/catalog/CategoryPicker.vue'
 import CategoryTree from '@/components/catalog/CategoryTree.vue'
+import UnsealDialog from '@/components/catalog/UnsealDialog.vue'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -101,20 +84,23 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useCategoryTree } from '@/composables/useCategoryTree'
 import { useProjectStream } from '@/composables/useProjectStream'
 import { useSelection } from '@/composables/useSelection'
-import { CATEGORY_TYPES, categoryTypeLabel, ITEM_STATUS, ITEM_STATUS_ORDER, parseArchiveNoTemplate } from '@/lib/catalog'
+import { CATEGORY_TYPES, categoryTypeLabel, formatItemNo, itemShortLabel, parseArchiveNoTemplate } from '@/lib/catalog'
 import { newExportQuery } from '@/lib/export'
 import { useImageInfoStore } from '@/stores/image-info'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { handledGlobally } from '@/views/review-assign/review-errors'
 
+import ArchiveDialog from './ArchiveDialog.vue'
 import { categoryOpErrorText } from './catalog-errors'
-import CatalogPool, { type PoolAction } from './CatalogPool.vue'
 import CategoryFormDialog from './CategoryFormDialog.vue'
-import FileCatalogedDialog from './FileCatalogedDialog.vue'
-import ItemDetail, { type StripState } from './ItemDetail.vue'
+import { folderDrag, isFolderDrag } from './drag'
+import FolderPane from './FolderPane.vue'
+import ItemDetail from './ItemDetail.vue'
 import ItemList from './ItemList.vue'
-import { filesText } from './page-ops'
+import { loadModifyingItems, type ModifyingItem } from './modifying'
+import ModifyingDialog from './ModifyingDialog.vue'
+import ResealDialog from './ResealDialog.vue'
 
 const OriginalViewerDialog = defineAsyncComponent(() => import('@/views/files/OriginalViewerDialog.vue'))
 
@@ -125,15 +111,14 @@ const route = useRoute()
 const router = useRouter()
 const tree = useCategoryTree()
 
-/** 解锁要同时有 catalog 和 review_assign 两个菜单（用户决定 Q5；内置只有负责人和 admin）。 */
-const canUnlock = computed(() => session.menuCodes.has('catalog') && session.menuCodes.has('review_assign'))
-
 const categoryQuery = computed(() => (typeof route.query.category === 'string' ? route.query.category : null))
 const itemQuery = computed(() => (typeof route.query.item === 'string' ? route.query.item : null))
-/** 待归类池的文件夹（M3-6）。 */
-const poolQuery = computed(() => (typeof route.query.pool === 'string' ? route.query.pool : null))
-/** 浏览文件目录（待归类池用 children 接口）要 files 或 scan 菜单（内置归类员有 files）。 */
+/** 左栏的文件夹（M9）。 */
+const folderQuery = computed(() => (typeof route.query.folder === 'string' ? route.query.folder : null))
+/** 浏览文件目录（左栏用 children 接口）要 files 或 scan 菜单（内置归类员有 files）。 */
 const canBrowse = computed(() => session.menuCodes.has('files') || session.menuCodes.has('scan'))
+/** 能去「文件目录」页修改（files 菜单）。 */
+const canFiles = computed(() => session.menuCodes.has('files'))
 /** 导出入口（M4-5）：只有 export 菜单的人看得到（内置负责人和 admin）。 */
 const canExport = computed(() => session.menuCodes.has('export'))
 
@@ -172,7 +157,7 @@ const itemNoWidth = computed(() => {
 const treeState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
 const treeError = ref('')
 const category = computed(() => (categoryQuery.value ? (tree.nodes.get(categoryQuery.value) ?? null) : null))
-/** 打开的是根节点（"直接放在顶层的条目"）。 */
+/** 打开的是根节点（"直接放在顶层的件"）。 */
 const atRoot = computed(() => !!categoryQuery.value && categoryQuery.value === tree.rootId.value)
 /** 节点操作（新建下级、修改、移动、删除、重新生成）针对的节点：根节点不能改，也不在树上显示。 */
 const opNode = computed(() => (atRoot.value ? null : category.value))
@@ -187,12 +172,14 @@ async function resetForProject(p: MyProject) {
   listState.value = 'idle'
   selection.clear()
   blockedIds.value = new Set()
+  modifyingItems.value = []
   treeState.value = 'loading'
   void loadSettings()
   try {
     await tree.init(p.id)
     if (my !== projectSeq) return
     treeState.value = 'ready'
+    void loadModifying()
   } catch (e) {
     if (my !== projectSeq) return
     treeState.value = 'error'
@@ -201,7 +188,7 @@ async function resetForProject(p: MyProject) {
 }
 
 let openSeq = 0
-/** 进入一个节点：在树上展开到它，加载它的条目。 */
+/** 进入一个节点：在树上展开到它，加载它的件。 */
 async function openCategory(id: string | null) {
   const my = ++openSeq
   selection.clear()
@@ -216,25 +203,31 @@ async function openCategory(id: string | null) {
     items.value = []
     listState.value = 'loading'
   }
-  // 根节点也能打开：直接放在根节点下的条目（server 允许）要能看到、能移走。
   const node = await tree.reveal(id).catch(() => null)
   if (my !== openSeq) return
   if (!node) {
     toast.error('归类节点不存在或已被删除')
-    await router.replace({ query: {} })
+    await setQuery({ category: null, item: null }, true)
     return
   }
   await loadList()
 }
 
-function go(categoryId: string | null, itemId: string | null = null, replace = false) {
+/** 改地址栏的一部分（其余的保留）。 */
+function setQuery(patch: Record<string, string | null>, replace = false) {
   if (!alive) return Promise.resolve()
   const query: Record<string, string> = {}
-  if (categoryId) query.category = categoryId
-  if (categoryId && itemId) query.item = itemId
-  // 待归类池的文件夹（M3-6）跟着走。
-  if (poolQuery.value) query.pool = poolQuery.value
+  for (const [k, v] of Object.entries(route.query)) if (typeof v === 'string') query[k] = v
+  for (const [k, v] of Object.entries(patch)) {
+    if (v) query[k] = v
+    else delete query[k]
+  }
+  if (!query.category) delete query.item
   return replace ? router.replace({ query }) : router.push({ query })
+}
+
+function go(categoryId: string | null, itemId: string | null = null, replace = false) {
+  return setQuery({ category: categoryId, item: itemId }, replace)
 }
 
 function selectCategory(id: string) {
@@ -249,12 +242,12 @@ function nextType(parent: ArchiveCategory | null): string {
   return CATEGORY_TYPES[Math.min(i + 1, CATEGORY_TYPES.length - 1)] ?? 'custom'
 }
 
-// ---------- 条目列表 ----------
+// ---------- 件列表 ----------
 
 const PAGE = 500
 const items = ref<ArchiveItemSummary[]>([])
 const listTotal = ref(0)
-const listCounts = ref<Record<ItemStatus, number>>({ draft: 0, done: 0, locked: 0 })
+const listCounts = ref({ draft: 0, locked: 0, modifying: 0 })
 const nextCursor = ref<string | null>(null)
 const listState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
 const listError = ref('')
@@ -267,7 +260,7 @@ let listLoadedAt = 0
 
 const selection = useSelection(() => items.value.map((i) => i.id))
 watch(items, () => selection.prune())
-/** 批量定稿时不满足条件的条目（409 的 details.ids）。 */
+/** 批量锁定时不满足条件的件（409 的 details.ids）。 */
 const blockedIds = ref<ReadonlySet<string>>(new Set())
 const itemListRef = ref<InstanceType<typeof ItemList> | null>(null)
 
@@ -281,7 +274,7 @@ async function loadList() {
     const collected: ArchiveItemSummary[] = []
     let cursor: string | null = null
     let total = 0
-    let counts = { draft: 0, done: 0, locked: 0 }
+    let counts = { draft: 0, locked: 0, modifying: 0 }
     for (;;) {
       const res = await listArchiveItems(cid, { limit: Math.min(MAX_ITEMS_PAGE, Math.max(PAGE, want - collected.length)), cursor }, ['not_found'])
       if (my !== listSeq || categoryQuery.value !== cid) return
@@ -343,15 +336,14 @@ function categoryGone(id: string) {
   void go(parent && parent !== tree.rootId.value ? parent : null, null, true)
 }
 
-/** 用详情更新列表里的这一行（状态计数跟着改）；不在这个节点里了就去掉。 */
+/** 用详情更新列表里的这一行（计数跟着改）；不在这个节点里了就去掉。 */
 function patchRow(it: ArchiveItem) {
   const i = items.value.findIndex((x) => x.id === it.id)
   if (i < 0) return
   const old = items.value[i]!
   if (it.category_id !== listCategoryId) {
     items.value = items.value.filter((x) => x.id !== it.id)
-    listTotal.value = Math.max(0, listTotal.value - 1)
-    listCounts.value = { ...listCounts.value, [old.status]: Math.max(0, listCounts.value[old.status] - 1) }
+    void loadList()
     return
   }
   const row: ArchiveItemSummary = {
@@ -367,22 +359,32 @@ function patchRow(it: ArchiveItem) {
     locked_at: it.locked_at,
     new_version_after_lock: it.new_version_after_lock,
     updated_at: it.updated_at,
+    source_folder_id: it.source_folder_id,
+    source_folder_name: it.source_folder_name,
+    source_folder_path: it.source_folder_path,
+    source_folder_deleted: it.source_folder_deleted,
+    source_status: it.source_status,
+    unsealed_by: it.unsealed_by,
+    unsealed_by_name: it.unsealed_by_name,
+    unsealed_at: it.unsealed_at,
+    unseal_reason: it.unseal_reason,
   }
   const next = [...items.value]
   next[i] = row
   // 改了件号：按件号重新排。
   if (old.item_no !== it.item_no) next.sort((a, b) => a.item_no - b.item_no || (a.id < b.id ? -1 : 1))
   items.value = next
-  if (old.status !== it.status) {
-    listCounts.value = {
-      ...listCounts.value,
-      [old.status]: Math.max(0, listCounts.value[old.status] - 1),
-      [it.status]: listCounts.value[it.status] + 1,
-    }
+  if (old.status !== it.status || old.source_status !== it.source_status) {
+    const c = { ...listCounts.value }
+    c[old.status] = Math.max(0, c[old.status] - 1)
+    c[it.status] += 1
+    if (old.source_status === 'modifying') c.modifying = Math.max(0, c.modifying - 1)
+    if (it.source_status === 'modifying') c.modifying += 1
+    listCounts.value = c
   }
 }
 
-// ---------- 当前条目 ----------
+// ---------- 打开的件 ----------
 
 const detailRef = ref<InstanceType<typeof ItemDetail> | null>(null)
 const detailRefresh = ref(0)
@@ -414,10 +416,7 @@ function treeCategoryPath(id: string): string | null {
   return `${root.category_name}${tree.pathOf(id)}`
 }
 
-/**
- * 详情里显示的路径：树上的名称链和 server 的 category_path 一致时用树上的（名称里可能有 /，比拆 category_path 准）；
- * 不一致（例如节点刚被移到收起着的节点下面，树上的父子关系还是旧的）时交给 ItemDetail 用 server 的 category_path。
- */
+/** 详情里显示的路径：树上的名称链和 server 的一致时用树上的（名称里可能有 /），否则交给 ItemDetail 用 server 的。 */
 const detailCategoryLabel = computed(() => {
   const it = detailItem.value
   if (!it) return null
@@ -425,7 +424,7 @@ const detailCategoryLabel = computed(() => {
   return treeCategoryPath(it.category_id) === it.category_path ? tree.pathText(it.category_id) : null
 })
 
-/** 树上的名称链和 server 的不一致：重新取这个节点（新的 parent_id）和它现在的上级，再展开到它。每个路径只修一次。 */
+/** 树上的名称链和 server 的不一致：重新取这个节点和它现在的上级，再展开到它。每个路径只修一次。 */
 let treeSyncedFor = ''
 function syncTreePath(it: ArchiveItem) {
   if (it.category_id === tree.rootId.value || !tree.nodes.has(it.category_id)) return
@@ -447,7 +446,7 @@ function onDetailMoved(it: ArchiveItem, from: string) {
   void tree.refreshFor([from, it.category_id])
   const to = it.category_id
   toast.success(`已移到「${tree.nodes.get(to)?.category_name ?? '目标节点'}」，现在是第 ${it.item_no} 件`, {
-    description: it.archive_no ? `档号 ${it.archive_no}` : '档号为空（原因见条目详情）',
+    description: it.archive_no ? `档号 ${it.archive_no}` : '档号为空（原因见件详情）',
     action: { label: '查看', onClick: () => void go(to, it.id) },
   })
   void go(categoryQuery.value, null, true)
@@ -456,238 +455,31 @@ function onDetailMoved(it: ArchiveItem, from: string) {
 function onDetailGone(id: string) {
   items.value = items.value.filter((x) => x.id !== id)
   if (itemQuery.value === id) {
-    toast.info('条目已不存在（可能刚被删除），已刷新')
+    toast.info('这一件已不存在（可能刚被撤销归档），已刷新')
     void go(categoryQuery.value, null, true)
   }
   void loadList()
 }
 
-/** 自己删掉了条目（M3-6）：从列表里去掉，回到节点，刷新树上的条目数。页回到"未归类"由 files.changed 刷新待归类池。 */
+/** 自己撤销了归档：从列表里去掉，回到节点，刷新树上的件数和左栏（文件夹回到未归档）。 */
 function onDetailDeleted(it: ArchiveItem) {
-  const i = items.value.findIndex((x) => x.id === it.id)
-  if (i >= 0) {
-    const old = items.value[i]!
-    items.value = items.value.filter((x) => x.id !== it.id)
-    listTotal.value = Math.max(0, listTotal.value - 1)
-    listCounts.value = { ...listCounts.value, [old.status]: Math.max(0, listCounts.value[old.status] - 1) }
-  }
-  toast.success(it.archive_no ? `已删除 ${it.archive_no}` : `已删除第 ${it.item_no} 件`, {
-    description: it.page_count ? `${it.page_count} 页已移出，回到"未归类"` : undefined,
+  items.value = items.value.filter((x) => x.id !== it.id)
+  toast.success(`已撤销归档 ${it.archive_no ?? `第 ${it.item_no} 件`}`, {
+    description: `文件夹「${it.source_folder_name}」回到"未归档"`,
   })
   void tree.refreshFor([it.category_id])
   void go(categoryQuery.value, null, true)
   void loadList()
+  paneRef.value?.refresh()
+  void loadModifying()
 }
 
 watch(itemQuery, (id) => {
-  if (!id) {
-    detailItem.value = null
-    stripState.value = null
-  } else void nextTick(() => itemListRef.value?.scrollToItem(id))
+  if (!id) detailItem.value = null
+  else void nextTick(() => itemListRef.value?.scrollToItem(id))
 })
 
-// ---------- 待归类池和挂接（M3-6） ----------
-
-const poolRef = ref<InstanceType<typeof CatalogPool> | null>(null)
-/** 页序条的状态（ItemDetail 告诉的）。 */
-const stripState = ref<StripState | null>(null)
-const linking = ref(false)
-
-const POOL_KEY = 'doclite.catalog.pool.'
-function recallPool(pid: string): string | null {
-  try {
-    return window.localStorage.getItem(POOL_KEY + pid)
-  } catch {
-    return null
-  }
-}
-function rememberPool(pid: string, id: string | null) {
-  try {
-    if (id) window.localStorage.setItem(POOL_KEY + pid, id)
-    else window.localStorage.removeItem(POOL_KEY + pid)
-  } catch {
-    // 记不住就算了。
-  }
-}
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-/**
- * 这个项目上次用的池文件夹（localStorage）。用 ref：清掉之后 poolFolderId 能重新算（M3-6 审查第 1 轮：原来池的文件夹
- * 来自 localStorage 时被删了，地址不变，池一直停在已删的文件夹上）。
- */
-const rememberedPool = ref<string | null>(null)
-watch(
-  () => project.currentId,
-  (pid) => {
-    const id = pid ? recallPool(pid) : null
-    rememberedPool.value = id && UUID_RE.test(id) ? id : null
-  },
-  { immediate: true },
-)
-
-/** 地址栏的 ?pool= 不是 UUID（手改坏了的链接）：去掉，用记住的或者回到空闲。 */
-watch(
-  poolQuery,
-  (q) => {
-    if (q && !UUID_RE.test(q)) {
-      toast.info('地址里的待归类池文件夹不对，已忽略')
-      dropPoolQuery()
-    }
-  },
-  { immediate: true },
-)
-
-/** 池里的文件夹：地址栏的，没有就是这个项目上次用的。 */
-const poolFolderId = computed(() =>
-  poolQuery.value && UUID_RE.test(poolQuery.value) ? poolQuery.value : rememberedPool.value,
-)
-
-function dropPoolQuery() {
-  if (!alive || route.query.pool === undefined) return
-  const query = { ...route.query }
-  delete query.pool
-  void router.replace({ query })
-}
-
-function setPoolFolder(id: string | null) {
-  const pid = project.currentId
-  if (pid) rememberPool(pid, id)
-  rememberedPool.value = id
-  const query = { ...route.query }
-  if (id) query.pool = id
-  else delete query.pool
-  void router.replace({ query })
-}
-
-/**
- * 池的文件夹用不了（已删除、不在这个项目里、进不了）：地址栏里是它就去掉；记住的是它才清掉记住的（地址栏带着别的
- * 项目的文件夹时，不能误删这个项目记住的）。
- */
-function onPoolInvalid(id: string) {
-  const pid = project.currentId
-  if (pid && rememberedPool.value === id) {
-    rememberPool(pid, null)
-    rememberedPool.value = null
-  }
-  if (poolQuery.value === id) dropPoolQuery()
-}
-
-const ITEM_REASON = '先在左边打开一个条目'
-const linkAction = computed<PoolAction>(() => {
-  const s = stripState.value
-  if (!s) return { label: '挂到条目末尾', reason: ITEM_REASON }
-  const label = `挂到 ${s.label} 末尾`
-  if (s.locked) return { label, reason: '条目已定稿，页序冻结' }
-  if (s.pending) return { label, reason: '先处理页序条上的冲突提示' }
-  return { label, reason: null }
-})
-const insertAction = computed<PoolAction>(() => {
-  const s = stripState.value
-  if (!s) return { label: '插到选中页之后', reason: ITEM_REASON }
-  if (s.locked) return { label: '插到选中页之后', reason: '条目已定稿，页序冻结' }
-  if (s.pending) return { label: '插到选中页之后', reason: '先处理页序条上的冲突提示' }
-  if (s.insertAfterPageNo === null) return { label: '插到选中页之后', reason: '先在页序条里选一页' }
-  return { label: `插到第 ${s.insertAfterPageNo} 页之后`, reason: null }
-})
-const createAction = computed<PoolAction>(() => {
-  if (!category.value) return { label: '用选中的文件新建条目', reason: '先在归类树里选一个节点' }
-  if (atRoot.value) return { label: '用选中的文件新建条目', reason: '顶层不新建条目，请先在归类树里选一个节点' }
-  return { label: '用选中的文件新建条目', reason: null }
-})
-const poolBusy = computed(() => linking.value || creating.value || !!stripState.value?.busy)
-
-function opFiles(files: FileEntry[]) {
-  return files.map((f) => ({
-    file_id: f.file_id,
-    file_name: f.file_name,
-    folder_id: poolFolderId.value ?? undefined,
-    review_status: f.review_status,
-    review_round: f.review_round,
-    version_no: f.version_no,
-  }))
-}
-
-async function linkFromPool(files: FileEntry[], mode: 'end' | 'after') {
-  const d = detailRef.value
-  if (!d || !files.length || linking.value) return
-  linking.value = true
-  try {
-    await d.linkFiles(opFiles(files), mode)
-  } finally {
-    linking.value = false
-  }
-}
-
-/** ItemDetail 挂接成功：池里马上标成已归类（"仅未归类"时消失），清掉池的选择。 */
-function onLinked(fileIds: string[]) {
-  poolRef.value?.markCataloged(fileIds)
-  poolRef.value?.clearSelection()
-}
-
-// 用选中的文件新建条目（POST 带 file_ids，M3-3）
-const createCataloged = reactive({
-  open: false,
-  files: [] as FileEntry[],
-  items: [] as CatalogedElsewhere[],
-  names: {} as Record<string, string>,
-})
-async function createFromPool(files: FileEntry[]) {
-  const cid = categoryQuery.value
-  if (!cid || atRoot.value || creating.value || !files.length) return
-  if (files.length > MAX_ITEM_PAGES) {
-    toast.error(`一个条目最多 ${MAX_ITEM_PAGES} 页，选中了 ${files.length} 个文件`)
-    return
-  }
-  if (!(await confirmDiscard())) return
-  creating.value = true
-  try {
-    const it = await createArchiveItem(cid, { file_ids: files.map((f) => f.file_id) }, true)
-    toast.success(`已用 ${filesText(files.map((f) => f.file_name))} 新建第 ${it.item_no} 件`, {
-      description: it.archive_no ? `档号 ${it.archive_no}，${it.page_count} 页` : `档号为空：${it.archive_no_reason?.message ?? ''}`,
-    })
-    onLinked(it.pages.map((p) => p.file_id))
-    void tree.refreshFor([cid])
-    await loadList()
-    detailRef.value?.discard()
-    await go(cid, it.id)
-    await nextTick()
-    document.querySelector<HTMLInputElement>('[data-testid=item-title]')?.focus()
-  } catch (e) {
-    if (handledGlobally(e)) return
-    if (isApiError(e, 'file_cataloged')) {
-      const d = (e as ApiError).details as FileCatalogedDetails | undefined
-      if (d?.items?.length) {
-        createCataloged.files = files
-        createCataloged.items = d.items
-        createCataloged.names = Object.fromEntries(files.map((f) => [f.file_id, f.file_name]))
-        createCataloged.open = true
-        return
-      }
-    }
-    if (isApiError(e, 'not_found') && ((e as ApiError).details as { ids?: string[] } | undefined)?.ids?.length) {
-      toast.error('有文件已不存在（可能刚被删除或移到了别的项目），没有新建条目', { description: '待归类池已刷新，请重新选择' })
-      void poolRef.value?.reload()
-      return
-    }
-    toast.error(errorMessage(e))
-  } finally {
-    creating.value = false
-  }
-}
-
-function createCatalogedRetry() {
-  createCataloged.open = false
-  void createFromPool(createCataloged.files)
-}
-function createCatalogedSkip(blocked: string[]) {
-  createCataloged.open = false
-  const bad = new Set(blocked)
-  const rest = createCataloged.files.filter((f) => !bad.has(f.file_id))
-  if (rest.length) void createFromPool(rest)
-}
-
-// 看原图（页序条、池里双击）
+// 看原图（左栏的文件、件详情的页双击）
 const viewer = reactive({ mounted: false, open: false, files: [] as FileEntry[], fileId: null as string | null })
 function openViewer(files: FileEntry[], fileId: string) {
   viewer.files = files
@@ -696,31 +488,185 @@ function openViewer(files: FileEntry[], fileId: string) {
   viewer.open = true
 }
 
+// ---------- 左栏和归档（M9） ----------
+
+const paneRef = ref<InstanceType<typeof FolderPane> | null>(null)
+/** 左栏选中的子文件夹。 */
+const leftSelected = ref<SubfolderEntry[]>([])
+
+function setPaneFolder(id: string | null) {
+  void setQuery({ folder: id })
+}
+
+/** 归档要放到的节点：右边选中的节点（不能是根）。 */
+const archiveTargetNode = computed(() => (opNode.value ? opNode.value : null))
+const midTip = computed(() => {
+  if (!leftSelected.value.length) return '左边选文件夹（只能整个文件夹）'
+  if (!archiveTargetNode.value) return '右边先选一个节点'
+  return `放到「${archiveTargetNode.value.category_name}」`
+})
+
+const archive = reactive({ open: false, categoryId: null as string | null, label: '', folderIds: [] as string[] })
+
+function openArchive(categoryId: string, folderIds: string[]) {
+  if (!folderIds.length) return
+  if (categoryId === tree.rootId.value) {
+    toast.info('不能归档到顶层，请放到一个归类节点上')
+    return
+  }
+  if (folderIds.length > MAX_ARCHIVE_FOLDERS) {
+    toast.error(`一次最多归档 ${MAX_ARCHIVE_FOLDERS} 个文件夹，选中了 ${folderIds.length} 个`)
+    return
+  }
+  archive.categoryId = categoryId
+  archive.label = tree.pathText(categoryId) || (tree.nodes.get(categoryId)?.category_name ?? '')
+  archive.folderIds = folderIds
+  archive.open = true
+}
+
+function archiveSelected() {
+  const node = archiveTargetNode.value
+  if (!node || !leftSelected.value.length) return
+  openArchive(node.id, leftSelected.value.map((f) => f.id))
+}
+
+async function onArchived(res: ArchiveResult) {
+  const cid = res.category_id
+  const name = tree.nodes.get(cid)?.category_name ?? '目标节点'
+  toast.success(`已在「${name}」新建 ${res.items.length} 件，文件夹已封存`, {
+    description: res.skipped.length ? `跳过 ${res.skipped.length} 个文件夹` : undefined,
+  })
+  paneRef.value?.clearSelection()
+  paneRef.value?.refresh()
+  void tree.refreshFor([cid])
+  if (categoryQuery.value !== cid || itemQuery.value) await go(cid)
+  else await loadList()
+}
+
+// 拖放：左栏的文件夹 → 右边树上的节点或件列表
+const dropTarget = ref<string | null>(null)
+/** 拖动经过件列表（放到当前节点）。 */
+const dropOnList = ref(false)
+
+function onTreeDragOver(ev: DragEvent) {
+  if (!isFolderDrag(ev)) return
+  const el = (ev.target as HTMLElement | null)?.closest<HTMLElement>('[data-category-id]')
+  const id = el?.dataset.categoryId ?? null
+  dropTarget.value = id
+  if (!id) return
+  ev.preventDefault()
+  if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'copy'
+}
+function onTreeDrop(ev: DragEvent) {
+  const id = dropTarget.value
+  const drag = folderDrag.value
+  dropTarget.value = null
+  if (!id || !drag || !isFolderDrag(ev)) return
+  ev.preventDefault()
+  openArchive(id, drag.ids)
+}
+function onListDragOver(ev: DragEvent) {
+  if (!isFolderDrag(ev) || !opNode.value || itemQuery.value) return
+  ev.preventDefault()
+  dropOnList.value = true
+  if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'copy'
+}
+function onListDrop(ev: DragEvent) {
+  const drag = folderDrag.value
+  dropOnList.value = false
+  if (!drag || !opNode.value || !isFolderDrag(ev)) return
+  ev.preventDefault()
+  openArchive(opNode.value.id, drag.ids)
+}
+useEventListener(window, 'dragend', () => {
+  dropTarget.value = null
+  dropOnList.value = false
+})
+
+// ---------- 解除封存、重新归档（M9） ----------
+
+const unseal = reactive({ open: false, itemId: null as string | null, label: '' })
+const reseal = reactive({ open: false, itemId: null as string | null, label: '' })
+
+function folderArchiveLabel(a: FolderArchive) {
+  return itemShortLabel(a, itemNoWidth.value)
+}
+function itemLabel(it: { category_id: string; item_no: number }) {
+  const node = tree.nodes.get(it.category_id)
+  const no = formatItemNo(it.item_no, itemNoWidth.value)
+  return node && it.category_id !== tree.rootId.value ? `${node.category_name} ${no}` : `第 ${no} 件`
+}
+
+function askUnseal(itemId: string, label: string) {
+  unseal.itemId = itemId
+  unseal.label = label
+  unseal.open = true
+}
+function askReseal(itemId: string, label: string) {
+  reseal.itemId = itemId
+  reseal.label = label
+  reseal.open = true
+}
+
+/** 解除封存、重新归档、解锁之后：更新打开的件、列表、左栏、"修改中 n 件"。 */
+function afterSealChange(it: ArchiveItem) {
+  if (detailItem.value?.id === it.id) detailRef.value?.apply(it)
+  patchRow(it)
+  paneRef.value?.refresh()
+  void loadModifying()
+}
+
+function onUnsealed(it: ArchiveItem) {
+  afterSealChange(it)
+  toast.success('已解除封存：去文件目录里修改，改完点"重新归档"', {
+    action: canFiles.value ? { label: '去文件目录', onClick: () => openFiles(it.source_folder_id) } : undefined,
+  })
+}
+function onResealed(it: ArchiveItem) {
+  afterSealChange(it)
+  toast.success(`${unsealLabelOf(it)} 已重新归档并封存`, { description: `现在 ${it.page_count} 页` })
+}
+function unsealLabelOf(it: ArchiveItem) {
+  return reseal.label || itemLabel(it)
+}
+
+function openFiles(folderId: string) {
+  void router.push({ path: '/files', query: { folder: folderId } })
+}
+
+// "修改中 n 件"
+const modifyingItems = ref<ModifyingItem[]>([])
+const modifyingOpen = ref(false)
+let modifyingSeq = 0
+async function loadModifying() {
+  const pid = project.currentId
+  if (!pid) return
+  const my = ++modifyingSeq
+  try {
+    const list = await loadModifyingItems(pid)
+    if (my === modifyingSeq && project.currentId === pid) modifyingItems.value = list
+  } catch {
+    // 取不到就保留上一次的。
+  }
+}
+function onModifyingOpenItem(it: ModifyingItem) {
+  modifyingOpen.value = false
+  void go(it.category_id, it.id)
+}
+function onModifyingReseal(it: ModifyingItem) {
+  const node = it.category_names[it.category_names.length - 1]
+  askReseal(it.id, node ? `${node} ${formatItemNo(it.item_no, itemNoWidth.value)}` : `第 ${it.item_no} 件`)
+}
+
 // ---------- 有未保存的修改时先确认 ----------
 
-const discardAsk = reactive({
-  open: false,
-  resolve: null as ((ok: boolean) => void) | null,
-  what: null as 'form' | 'pages' | 'both' | null,
-})
-const DISCARD_TEXT = {
-  form: { title: '著录还没有保存', description: '离开这个条目会放弃没有保存的修改。' },
-  pages: {
-    title: '页序还有没确认的操作',
-    description: '页序条上有一个因为冲突没保存的操作（预览），离开这个条目会放弃它。',
-  },
-  both: {
-    title: '著录还没有保存，页序也有没确认的操作',
-    description: '离开这个条目会放弃没有保存的著录修改，以及页序条上因为冲突没保存的操作。',
-  },
-} as const
+const discardAsk = reactive({ open: false, resolve: null as ((ok: boolean) => void) | null })
 
 function confirmDiscard(): Promise<boolean> {
   if (!detailRef.value?.isDirty()) return Promise.resolve(true)
   return new Promise((resolve) => {
     discardAsk.resolve?.(false)
     discardAsk.resolve = resolve
-    discardAsk.what = detailRef.value?.unsavedWhat() ?? 'form'
     discardAsk.open = true
   })
 }
@@ -753,32 +699,7 @@ useEventListener(window, 'beforeunload', (e: BeforeUnloadEvent) => {
   if (detailRef.value?.isDirty()) e.preventDefault()
 })
 
-// ---------- 新建条目、批量定稿 ----------
-
-const creating = ref(false)
-async function newItem() {
-  const cid = categoryQuery.value
-  if (!cid || creating.value) return
-  if (!(await confirmDiscard())) return
-  creating.value = true
-  try {
-    const it = await createArchiveItem(cid, {}, true)
-    toast.success(`已新建第 ${it.item_no} 件`, {
-      description: it.archive_no ? `档号 ${it.archive_no}` : `档号为空：${it.archive_no_reason?.message ?? ''}`,
-    })
-    void tree.refreshFor([cid])
-    await loadList()
-    // 已经确认过放弃修改：直接换（不再走一遍确认）。
-    detailRef.value?.discard()
-    await go(cid, it.id)
-    await nextTick()
-    document.querySelector<HTMLInputElement>('[data-testid=item-title]')?.focus()
-  } catch (e) {
-    if (!handledGlobally(e)) toast.error(errorMessage(e))
-  } finally {
-    creating.value = false
-  }
-}
+// ---------- 批量锁定 ----------
 
 const selectedIds = computed(() => [...selection.selected.value])
 const allChecked = computed(() =>
@@ -807,7 +728,7 @@ async function doBatchLock() {
     const res = await lockArchiveItems(pid, ids, true)
     confirmBatch.open = false
     blockedIds.value = new Set()
-    toast.success(`已定稿 ${res.locked} 个${res.skipped ? `，跳过 ${res.skipped} 个已定稿的` : ''}`)
+    toast.success(`已锁定 ${res.locked} 件${res.skipped ? `，跳过 ${res.skipped} 件已锁定的` : ''}`)
     selection.clear()
   } catch (e) {
     if (handledGlobally(e)) return
@@ -815,7 +736,7 @@ async function doBatchLock() {
     if (isApiError(e, 'invalid_state') && bad?.length) {
       blockedIds.value = new Set(bad)
       confirmBatch.open = false
-      toast.error('有条目不满足定稿条件，一个都没有定稿', { description: `${(e as ApiError).message}（已在列表里标红）` })
+      toast.error('有件不满足锁定条件，一件都没有锁定', { description: `${(e as ApiError).message}（已在列表里标红）` })
     } else {
       toast.error(errorMessage(e))
       if (e instanceof ApiError && e.status >= 400 && e.status < 500) confirmBatch.open = false
@@ -863,8 +784,8 @@ function askEdit(node: ArchiveCategory | null, focus: 'type' | 'code' | 'name' =
 /** 重算之后的提示：重新生成了几个档号、几个因为撞号为空。 */
 function renumberToast(head: string, renumbered: number, conflicts: number) {
   if (conflicts > 0) {
-    toast.warning(`${head}；有 ${conflicts} 个条目因为撞号档号为空`, {
-      description: `${renumbered ? `重新生成了 ${renumbered} 个档号。` : ''}撞号的条目档号为空、不能定稿，打开它们可以看到和谁撞了。`,
+    toast.warning(`${head}；有 ${conflicts} 件因为撞号档号为空`, {
+      description: `${renumbered ? `重新生成了 ${renumbered} 个档号。` : ''}撞号的件档号为空、不能锁定，打开它们可以看到和谁撞了。`,
     })
   } else toast.success(renumbered ? `${head}，重新生成了 ${renumbered} 个档号` : head)
 }
@@ -928,8 +849,8 @@ function askDelete(node: ArchiveCategory | null) {
   if (!node) return
   if (node.item_count > 0) {
     // 有条目的节点 server 会拒绝（409 category_not_empty），不用再确认一次。
-    toast.error(`「${node.category_name}」（含下级节点）下还有 ${node.item_count} 个条目，不能删除`, {
-      description: '请先把条目移到别的节点',
+    toast.error(`「${node.category_name}」（含下级节点）下还有 ${node.item_count} 件，不能删除`, {
+      description: '请先把件移到别的节点，或撤销归档',
     })
     return
   }
@@ -977,7 +898,7 @@ async function doRenumber() {
     const res = await renumberArchiveItems(pid, confirmRenumber.categoryId, true)
     confirmRenumber.open = false
     renumberToast(
-      `已按新模板重新生成${confirmRenumber.label}的档号${res.skipped_locked ? `（${res.skipped_locked} 个已定稿的没有动）` : ''}`,
+      `已按新模板重新生成${confirmRenumber.label}的档号${res.skipped_locked ? `（${res.skipped_locked} 个已锁定的没有动）` : ''}`,
       res.renumbered,
       res.archive_no_conflicts,
     )
@@ -1005,14 +926,13 @@ watch(
     if (pid !== lastProjectId) {
       const switched = lastProjectId !== null
       lastProjectId = pid
-      // 换了项目：切换器已经确认过（addSwitchGuard）；别的途径换的（例如项目被取消授权）还有没保存的修改时提示一次。
       if (switched && detailRef.value?.isDirty()) {
         detailRef.value.discard()
-        toast.warning('换了项目，条目没有保存的修改已放弃')
+        toast.warning('换了项目，没有保存的著录修改已放弃')
       }
       await resetForProject(p)
-      if (switched && (cid || itemQuery.value || poolQuery.value)) {
-        // 用户在切换器里换了项目：清掉地址里的节点、条目、池的文件夹（地址变了会再进来一次；池换成新项目记住的）。
+      if (switched && (cid || itemQuery.value || folderQuery.value)) {
+        // 用户在切换器里换了项目：清掉地址里的节点、件、左栏的文件夹（地址变了会再进来一次）。
         await router.replace({ query: {} })
         return
       }
@@ -1026,12 +946,6 @@ watch(
 )
 
 // ---------- 实时事件 ----------
-//
-// catalog.changed 的 item_ids（M3-3 起 server 一律带上）：
-// - 带了、非空：这些条目变了，category_ids 是它们所在的节点（新建、移动时当前节点的列表也要重取）；
-// - 带了、空数组：只有节点变了（新建、改名、移动、删除节点），只刷新树，不重取列表和详情；
-// - 没带：超过 500 个条目，把 category_ids 当作子树的根，当前节点在这些子树里就重取列表和详情。M3-3 合入前
-//   节点的事件也不带 item_ids，照这一条处理（多发一些请求，但结果对）。
 
 const pendingCategories = new Set<string>()
 /** 带了非空 item_ids 的事件涉及的节点。 */
@@ -1044,13 +958,10 @@ let pendingFilesAll = false
 let pendingFolders = false
 let pendingCatalog = false
 let pendingFull = false
-// 待归类池用的（M3-6）：files.changed 的 folder_ids（没带时为 null 表示不知道范围）、folders.changed 的 folder_ids、
-// catalog.changed 里 item_ids 为空或没带（只有节点变了，或者超过 500 个条目：归类路径可能变了）。
 const pendingFileFolders = new Set<string>()
 let pendingFileFoldersUnknown = false
 const pendingFolderIds = new Set<string>()
 let pendingFolderIdsUnknown = false
-let pendingCatalogStructure = false
 /** item_ids 为空或没带的事件（只有节点变了）里的 category_ids。 */
 const pendingStructCats = new Set<string>()
 let applyTimer: ReturnType<typeof setTimeout> | null = null
@@ -1079,10 +990,7 @@ function onEvent(e: ProjectEvent) {
       e.item_ids.forEach((id) => pendingItems.add(id))
       cats.forEach((id) => pendingItemCategories.add(id))
     }
-    if (!e.item_ids?.length) {
-      pendingCatalogStructure = true
-      cats.forEach((id) => pendingStructCats.add(id))
-    }
+    if (!e.item_ids?.length) cats.forEach((id) => pendingStructCats.add(id))
   } else if (e.type === 'files.changed') {
     if (e.file_ids?.length) e.file_ids.forEach((id) => pendingFiles.add(id))
     else pendingFilesAll = true
@@ -1097,7 +1005,7 @@ function onEvent(e: ProjectEvent) {
 }
 
 function hasPending(): boolean {
-  return pendingFull || pendingCatalog || pendingFilesAll || pendingFolders || pendingFiles.size > 0
+  return pendingFull || pendingCatalog || pendingFilesAll || pendingFolders || pendingFiles.size > 0 || pendingFileFolders.size > 0
 }
 
 /** 定时器到了：跑一轮；上一轮还没跑完就等它跑完再说（事件都还在 pending 里）。 */
@@ -1134,18 +1042,11 @@ async function applyOnce() {
   const fileFolders = pendingFileFoldersUnknown ? null : new Set(pendingFileFolders)
   const fileEvents = filesAll || fileIds.size > 0 || pendingFileFolders.size > 0
   const folderIds = pendingFolderIdsUnknown ? null : new Set(pendingFolderIds)
-  const structure = pendingCatalogStructure
   const structCats = new Set(pendingStructCats)
   clearPending()
 
   const tasks: Promise<unknown>[] = []
-  // 路径过期（M3-5 遗留，design §7）：节点改名、移动、改编码而档号没变时 item_ids 是 []，条目详情的 category_path
-  // 却变了。刷新树之前取打开着的条目所在节点和它的祖先（不含根）：
-  // - 祖先出现在任何一条事件的 category_ids 里 → 重取详情（条目自己的事件只带它所在的节点，不会误中祖先）；
-  // - 所在节点本身出现在"只有节点变了"的事件里（item_ids 为空或没带）→ 重取详情。所在节点里别的条目变了的事件
-  //   （item_ids 非空）不算，免得同一个节点里改一个条目就重取一次详情（M3-5 审查的事件放大）。
-  // 不依赖刷新后的树：节点被移到收起着的节点下面时，树上的父子关系还是旧的（M3-6 审查第 1 轮）。刷新树之后名称链
-  // 变了也补一次（兜底）。
+  // 路径过期：节点改名、移动、改编码而档号没变时 item_ids 是 []，打开的件的 category_path 却变了（M3-5 遗留）。
   const own = detailItem.value?.category_id ?? null
   const pathBefore = own ? tree.pathText(own) : null
   let detailQueued = false
@@ -1160,15 +1061,15 @@ async function applyOnce() {
         if (tree.pathText(own) !== pathBefore) return detailRef.value?.refresh()
       }),
     )
+    void loadModifying()
   }
   if (fileIds.size) images.invalidate(fileIds)
 
-  // 待归类池（M3-6）。
-  const pool = poolRef.value
-  if (pool) {
-    if (fileEvents) pool.onFilesChanged(fileFolders, fileIds)
-    if (folders) pool.onFoldersChanged(folderIds)
-    if (catalog) pool.onCatalogChanged(structure ? null : itemIds)
+  // 左栏（M9）。
+  const pane = paneRef.value
+  if (pane) {
+    if (folders) pane.onFoldersChanged(folderIds)
+    if (fileEvents) pane.onFilesChanged(fileFolders)
   }
 
   const cur = categoryQuery.value
@@ -1178,8 +1079,6 @@ async function applyOnce() {
   if (cur) {
     if (itemCats.has(cur)) listAffected = true
     if (items.value.some((i) => itemIds.has(i.id))) listAffected = true
-    // 没带 item_ids：当前节点在这些子树里。当前节点的祖先链由 reveal 保证都在树上，所以树上不认识的节点不可能是
-    // 它的祖先（isUnder 不知道时按不在处理）。
     for (const root of subtrees) {
       if (root === cur || tree.isUnder(cur, root) === true) {
         listAffected = true
@@ -1189,9 +1088,12 @@ async function applyOnce() {
   }
   if (selected && itemIds.has(selected)) detailAffected = true
   const detailFiles = new Set(detailItem.value?.pages.map((p) => p.file_id) ?? [])
-  if (selected && detailFiles.size) {
-    if (filesAll || folders || [...fileIds].some((f) => detailFiles.has(f))) detailAffected = true
+  if (selected && detailItem.value) {
+    if (filesAll || [...fileIds].some((f) => detailFiles.has(f))) detailAffected = true
+    // 来源文件夹改名、移动：路径显示变了。
+    if (folders && (!folderIds || folderIds.has(detailItem.value.source_folder_id))) detailAffected = true
   }
+  if (cur && folders && (!folderIds || items.value.some((i) => folderIds.has(i.source_folder_id)))) listAffected = true
   if (cur && filesAll && items.value.some((i) => i.page_count > 0)) listAffected = true
   if (detailAffected && detailRef.value && !detailQueued) {
     detailQueued = true
@@ -1202,7 +1104,7 @@ async function applyOnce() {
   await Promise.all(tasks)
 }
 
-/** 文件的审核状态变了：查这些文件在哪些条目，列表里有就重新取（"n 待审"）。 */
+/** 文件的审核状态变了：查这些文件在哪些件，列表里有就重新取（"n 待审"）。 */
 async function refreshListIfFilesShown(fileIds: Set<string>) {
   const pid = project.currentId
   if (!pid) return
@@ -1234,14 +1136,15 @@ function clearPending() {
   pendingFileFoldersUnknown = false
   pendingFolderIds.clear()
   pendingFolderIdsUnknown = false
-  pendingCatalogStructure = false
   pendingStructCats.clear()
 }
 
 /** 整体刷新：resync、断线重连之后（断开期间的事件不会补发）。树只刷新看得到的部分，收起的再展开时重新取。 */
 async function refreshAll() {
   void loadSettings()
+  void loadModifying()
   images.invalidate()
+  paneRef.value?.refresh()
   if (treeState.value !== 'ready') {
     const p = project.current
     if (p) {
@@ -1254,7 +1157,6 @@ async function refreshAll() {
     tree.refreshShown(),
     categoryQuery.value ? loadList() : null,
     detailRef.value ? detailRef.value.refresh() : null,
-    poolRef.value ? poolRef.value.refresh() : null,
   ])
 }
 
@@ -1269,7 +1171,7 @@ const stream = useProjectStream(() => project.currentId, {
       void tree.refreshShown()
       void loadList()
       detailRefresh.value++
-      void poolRef.value?.reload()
+      paneRef.value?.refresh()
     }
   },
   onStopped: (err) => {
@@ -1285,6 +1187,7 @@ onBeforeUnmount(() => {
   openSeq++
   listSeq++
   projectSeq++
+  modifyingSeq++
   if (applyTimer) clearTimeout(applyTimer)
   applyTimer = null
   discardAsk.resolve?.(false)
@@ -1302,15 +1205,27 @@ const templateError = computed(() => settings.value?.archive_no_template_error ?
     :data-list="listState"
     :data-category-id="categoryQuery ?? undefined"
     :data-dirty="detailDirty ? 'true' : undefined"
+    :data-modifying="modifyingItems.length"
   >
-    <header class="flex h-14 shrink-0 items-center gap-3 border-b px-5">
+    <header class="flex h-12 shrink-0 items-center gap-3 border-b px-4">
       <h1 class="shrink-0 text-base font-semibold tracking-tight text-foreground">归类</h1>
       <span
         v-if="settings"
-        class="min-w-0 truncate border-l pl-3 font-mono text-xs text-muted-foreground"
-        :title="`档号模板：${settings.archive_no_template}${settings.lock_requires_approved ? '；定稿要求全部页审核通过' : ''}`"
+        class="hidden min-w-0 truncate border-l pl-3 font-mono text-xs text-muted-foreground xl:inline"
+        :title="`档号模板：${settings.archive_no_template}${settings.lock_requires_approved ? '；锁定要求全部页审核通过' : ''}`"
         data-testid="catalog-template"
       >{{ settings.archive_no_template }}</span>
+      <button
+        v-if="modifyingItems.length"
+        type="button"
+        class="flex shrink-0 items-center gap-1 rounded-full border border-orange-300 bg-orange-50 px-2.5 py-0.5 text-xs text-orange-700 hover:bg-orange-100"
+        title="点开看是哪几件"
+        data-testid="modifying-chip"
+        :data-count="modifyingItems.length"
+        @click="modifyingOpen = true"
+      >
+        <PencilLineIcon class="size-3.5" />修改中 {{ modifyingItems.length }} 件，改完记得重新归档 ›
+      </button>
       <div class="flex-1" />
       <span
         v-if="project.current"
@@ -1345,298 +1260,324 @@ const templateError = computed(() => settings.value?.archive_no_template_error ?
     </div>
 
     <div v-else class="flex min-h-0 flex-1">
-      <!-- 左栏：归类树 + 条目列表 -->
-      <aside class="flex w-[300px] shrink-0 flex-col border-r bg-sidebar/60">
-        <!-- 归类树 -->
-        <div class="flex h-9 shrink-0 items-center gap-1 px-3 pt-1">
-          <span class="text-xs font-medium text-muted-foreground">归类树</span>
-          <span class="flex-1" />
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <Button variant="ghost" size="icon-xs" aria-label="新建顶层节点" data-testid="category-new-top" @click="askCreate(null)">
-                <FolderPlusIcon />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>新建顶层节点（例如全宗）</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <Button variant="ghost" size="icon-xs" aria-label="新建下级节点" :disabled="!opNode" data-testid="category-new-child" @click="askCreate(opNode)">
-                <PlusIcon />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>在选中的节点下新建</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <Button variant="ghost" size="icon-xs" aria-label="修改节点" :disabled="!opNode" data-testid="category-edit" @click="askEdit(opNode)">
-                <PencilIcon />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>改名称、编码、类型</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <Button variant="ghost" size="icon-xs" aria-label="移动节点" :disabled="!opNode" data-testid="category-move" @click="askMove(opNode)">
-                <ArrowRightLeftIcon />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>移动到…</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <Button variant="ghost" size="icon-xs" aria-label="删除节点" :disabled="!opNode" data-testid="category-delete" @click="askDelete(opNode)">
-                <Trash2Icon />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>删除（含下级节点；有条目时不能删）</TooltipContent>
-          </Tooltip>
-          <Tooltip v-if="canExport">
-            <TooltipTrigger as-child>
-              <Button variant="ghost" size="icon-xs" aria-label="导出节点" :disabled="!opNode" data-testid="category-export" @click="opNode && goExport('category', opNode.id)">
-                <FileOutputIcon />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>导出这个节点（含下级）…</TooltipContent>
-          </Tooltip>
-        </div>
-        <ContextMenu :modal="false">
-          <ContextMenuTrigger as-child>
-            <div
-              class="h-[38%] min-h-[150px] shrink-0 overflow-y-auto px-2 pb-2"
-              data-testid="category-tree-area"
-              @contextmenu.capture="onTreeContextMenu"
-            >
-              <div v-if="treeState === 'loading'" class="flex items-center gap-2 p-2 text-xs text-muted-foreground">
-                <LoaderCircleIcon class="size-3.5 animate-spin" />正在加载归类树…
-              </div>
-              <div v-else-if="treeState === 'error'" class="p-2 text-xs text-destructive">
-                归类树加载失败：{{ treeError }}
-                <button type="button" class="ml-1 underline" @click="project.current && resetForProject(project.current)">重试</button>
-              </div>
-              <template v-else>
-                <!-- 直接放在根节点下的条目（server 允许；界面上不显示根节点，这里单独给一行，能看到、能移走） -->
-                <button
-                  v-if="tree.rootDirectCount.value > 0"
-                  type="button"
-                  class="mb-px flex w-full items-center gap-1.5 rounded-md py-1 pr-2 pl-[26px] text-left text-[13px] hover:bg-muted"
-                  :class="atRoot ? 'bg-info-soft font-medium text-info hover:bg-info-soft' : 'text-sidebar-foreground'"
-                  title="直接放在顶层（没有归到任何节点下）的条目，建议移到合适的节点"
-                  data-testid="tree-root-items"
-                  :data-items="tree.rootDirectCount.value"
-                  @click="tree.rootId.value && selectCategory(tree.rootId.value)"
-                >
-                  <span class="min-w-0 flex-1 truncate">（直接放在顶层的条目）</span>
-                  <span class="shrink-0 font-mono text-[11px] text-warn tabular-nums">{{ tree.rootDirectCount.value.toLocaleString() }} 件</span>
-                </button>
-                <CategoryTree :tree="tree" :selected-id="categoryQuery" @select="selectCategory" />
-                <div v-if="!tree.topLevel.value.length" class="p-3 text-xs text-muted-foreground" data-testid="category-tree-empty">
-                  还没有归类节点。点上面的 <FolderPlusIcon class="inline size-3.5" /> 新建全宗，再逐级建门类、年度、保管期限、机构。
-                </div>
-              </template>
-            </div>
-          </ContextMenuTrigger>
-          <ContextMenuContent class="w-56" data-testid="category-menu" :data-node="menuNode?.id ?? ''">
-            <template v-if="menuNode">
-              <ContextMenuItem data-testid="menu-category-new-child" @select="askCreate(menuNode)">
-                <PlusIcon />新建下级节点
-              </ContextMenuItem>
-              <ContextMenuItem data-testid="menu-category-rename" @select="askEdit(menuNode, 'name')">
-                <PencilIcon />改名称、编码、类型
-              </ContextMenuItem>
-              <ContextMenuItem data-testid="menu-category-move" @select="askMove(menuNode)">
-                <ArrowRightLeftIcon />移动到…
-              </ContextMenuItem>
-              <ContextMenuItem data-testid="menu-category-renumber" @select="askRenumber(menuNode.id)">
-                <RefreshCwIcon />按新模板重新生成档号
-              </ContextMenuItem>
-              <ContextMenuItem v-if="canExport" data-testid="menu-category-export" @select="goExport('category', menuNode.id)">
-                <FileOutputIcon />导出…
-              </ContextMenuItem>
-              <ContextMenuSeparator />
-              <ContextMenuItem variant="destructive" data-testid="menu-category-delete" @select="askDelete(menuNode)">
-                <Trash2Icon />删除
-              </ContextMenuItem>
-            </template>
-            <ContextMenuItem v-else data-testid="menu-category-new-top" @select="askCreate(null)">
-              <FolderPlusIcon />新建顶层节点
-            </ContextMenuItem>
-          </ContextMenuContent>
-        </ContextMenu>
+      <!-- 左：文件目录 -->
+      <FolderPane
+        v-if="canBrowse"
+        ref="paneRef"
+        :project-id="project.current.id"
+        :root-folder-id="project.current.root_folder_id"
+        :project-name="project.current.project_name"
+        :folder-id="folderQuery"
+        :item-no-width="itemNoWidth"
+        :can-files="canFiles"
+        @update:folder-id="setPaneFolder"
+        @selection="(list) => (leftSelected = list)"
+        @unseal="(a) => askUnseal(a.item_id, folderArchiveLabel(a))"
+        @reseal="(a) => askReseal(a.item_id, folderArchiveLabel(a))"
+        @open-files="openFiles"
+        @open-viewer="openViewer"
+      />
+      <div
+        v-else
+        class="flex min-w-0 flex-1 items-center justify-center px-8 text-center text-xs text-muted-foreground"
+        data-testid="catalog-pane-forbidden"
+      >
+        归档要从文件目录里选文件夹（文件目录或扫描上传菜单）；你的账号没有这个菜单，请联系管理员。右边的归档目录照常可以用。
+      </div>
 
-        <!-- 条目列表 -->
-        <div class="flex min-h-0 flex-1 flex-col border-t">
-          <template v-if="category">
-            <div class="flex shrink-0 flex-col gap-1.5 px-3 pt-2 pb-2">
-              <div class="flex items-center gap-1.5 text-xs">
-                <span class="min-w-0 truncate font-medium text-foreground" :title="atRoot ? '直接放在顶层的条目' : tree.pathText(category.id)">
-                  {{ atRoot ? '直接放在顶层的条目' : category.category_name }}
-                </span>
-                <span class="shrink-0 text-muted-foreground" data-testid="item-total" :data-count="listTotal">
-                  · 直接放的 {{ listTotal.toLocaleString() }} 件
-                </span>
-              </div>
-              <div class="flex flex-wrap items-center gap-1">
-                <span class="flex shrink-0 items-center pr-1 pl-2" title="全选已加载的条目" @click="toggleAll">
+      <!-- 中间：归档 → -->
+      <div class="flex w-24 shrink-0 flex-col items-center justify-center gap-2.5 border-x bg-muted/30 px-2" data-testid="catalog-mid">
+        <Button
+          size="sm"
+          class="w-full"
+          :disabled="!leftSelected.length || !archiveTargetNode"
+          data-testid="archive-button"
+          @click="archiveSelected"
+        >
+          归档<ArrowRightIcon />
+        </Button>
+        <p class="text-center text-[11px] leading-snug text-muted-foreground" data-testid="archive-tip">{{ midTip }}</p>
+        <p v-if="leftSelected.length" class="text-center text-[11px] text-info">已选 {{ leftSelected.length }} 个</p>
+      </div>
+
+      <!-- 右：归档目录 -->
+      <section class="flex min-w-0 flex-[1.15] flex-col">
+        <div class="flex h-10 shrink-0 items-center gap-2 border-b bg-muted/30 px-3">
+          <span class="shrink-0 text-[13px] font-semibold text-foreground">归档目录</span>
+          <span class="min-w-0 truncate text-xs text-muted-foreground" data-testid="catalog-crumb">
+            <template v-if="atRoot">直接放在顶层的件</template>
+            <template v-else-if="category">
+              <button v-if="itemQuery" type="button" class="text-info hover:underline" @click="go(categoryQuery)">{{ tree.pathText(category.id) }}</button>
+              <b v-else class="font-medium text-foreground">{{ tree.pathText(category.id) }}</b>
+              <template v-if="itemQuery && detailItem"> / <b class="font-mono font-medium text-foreground">{{ formatItemNo(detailItem.item_no, itemNoWidth) }}</b></template>
+            </template>
+          </span>
+        </div>
+        <div
+          v-if="templateError"
+          class="shrink-0 border-b bg-destructive-soft px-4 py-2 text-xs text-destructive"
+          data-testid="template-error"
+        >
+          项目的档号模板解析不了：{{ templateError }}。归档、移动、改件号都会失败，请到「系统管理 › 项目」里修改。
+        </div>
+        <div class="flex min-h-0 flex-1">
+          <!-- 归类树 -->
+          <aside class="flex w-48 shrink-0 flex-col border-r bg-sidebar/60 xl:w-56">
+            <div class="flex h-8 shrink-0 items-center gap-0.5 px-2">
+              <span class="text-xs font-medium text-muted-foreground">归类树</span>
+              <span class="flex-1" />
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <Button variant="ghost" size="icon-xs" aria-label="新建顶层节点" data-testid="category-new-top" @click="askCreate(null)">
+                    <FolderPlusIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>新建顶层节点（例如全宗）</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <Button variant="ghost" size="icon-xs" aria-label="新建下级节点" :disabled="!opNode" data-testid="category-new-child" @click="askCreate(opNode)">
+                    <PlusIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>在选中的节点下新建</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <Button variant="ghost" size="icon-xs" aria-label="修改节点" :disabled="!opNode" data-testid="category-edit" @click="askEdit(opNode)">
+                    <PencilIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>改名称、编码、类型</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <Button variant="ghost" size="icon-xs" aria-label="移动节点" :disabled="!opNode" data-testid="category-move" @click="askMove(opNode)">
+                    <ArrowRightLeftIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>移动到…</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <Button variant="ghost" size="icon-xs" aria-label="删除节点" :disabled="!opNode" data-testid="category-delete" @click="askDelete(opNode)">
+                    <Trash2Icon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>删除（含下级节点；有件时不能删）</TooltipContent>
+              </Tooltip>
+              <Tooltip v-if="canExport">
+                <TooltipTrigger as-child>
+                  <Button variant="ghost" size="icon-xs" aria-label="导出节点" :disabled="!opNode" data-testid="category-export" @click="opNode && goExport('category', opNode.id)">
+                    <FileOutputIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>导出这个节点（含下级）…</TooltipContent>
+              </Tooltip>
+            </div>
+            <ContextMenu :modal="false">
+              <ContextMenuTrigger as-child>
+                <div
+                  class="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2"
+                  data-testid="category-tree-area"
+                  @contextmenu.capture="onTreeContextMenu"
+                  @dragover="onTreeDragOver"
+                  @dragleave.self="dropTarget = null"
+                  @drop="onTreeDrop"
+                >
+                  <div v-if="treeState === 'loading'" class="flex items-center gap-2 p-2 text-xs text-muted-foreground">
+                    <LoaderCircleIcon class="size-3.5 animate-spin" />正在加载归类树…
+                  </div>
+                  <div v-else-if="treeState === 'error'" class="p-2 text-xs text-destructive">
+                    归类树加载失败：{{ treeError }}
+                    <button type="button" class="ml-1 underline" @click="project.current && resetForProject(project.current)">重试</button>
+                  </div>
+                  <template v-else>
+                    <button
+                      v-if="tree.rootDirectCount.value > 0"
+                      type="button"
+                      class="mb-px flex w-full items-center gap-1.5 rounded-md py-1 pr-2 pl-[26px] text-left text-[13px] hover:bg-muted"
+                      :class="atRoot ? 'bg-info-soft font-medium text-info hover:bg-info-soft' : 'text-sidebar-foreground'"
+                      title="直接放在顶层（没有归到任何节点下）的件，建议移到合适的节点"
+                      data-testid="tree-root-items"
+                      :data-items="tree.rootDirectCount.value"
+                      @click="tree.rootId.value && selectCategory(tree.rootId.value)"
+                    >
+                      <span class="min-w-0 flex-1 truncate">（直接放在顶层的件）</span>
+                      <span class="shrink-0 font-mono text-[11px] text-warn tabular-nums">{{ tree.rootDirectCount.value.toLocaleString() }} 件</span>
+                    </button>
+                    <CategoryTree :tree="tree" :selected-id="categoryQuery" :drop-target-id="dropTarget" @select="selectCategory" />
+                    <div v-if="!tree.topLevel.value.length" class="p-3 text-xs text-muted-foreground" data-testid="category-tree-empty">
+                      还没有归类节点。点上面的 <FolderPlusIcon class="inline size-3.5" /> 新建全宗，再逐级建门类、年度、保管期限、机构。
+                    </div>
+                  </template>
+                </div>
+              </ContextMenuTrigger>
+              <ContextMenuContent class="w-56" data-testid="category-menu" :data-node="menuNode?.id ?? ''">
+                <template v-if="menuNode">
+                  <ContextMenuItem data-testid="menu-category-new-child" @select="askCreate(menuNode)">
+                    <PlusIcon />新建下级节点
+                  </ContextMenuItem>
+                  <ContextMenuItem data-testid="menu-category-rename" @select="askEdit(menuNode, 'name')">
+                    <PencilIcon />改名称、编码、类型
+                  </ContextMenuItem>
+                  <ContextMenuItem data-testid="menu-category-move" @select="askMove(menuNode)">
+                    <ArrowRightLeftIcon />移动到…
+                  </ContextMenuItem>
+                  <ContextMenuItem data-testid="menu-category-renumber" @select="askRenumber(menuNode.id)">
+                    <RefreshCwIcon />按新模板重新生成档号
+                  </ContextMenuItem>
+                  <ContextMenuItem v-if="canExport" data-testid="menu-category-export" @select="goExport('category', menuNode.id)">
+                    <FileOutputIcon />导出…
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem variant="destructive" data-testid="menu-category-delete" @select="askDelete(menuNode)">
+                    <Trash2Icon />删除
+                  </ContextMenuItem>
+                </template>
+                <ContextMenuItem v-else data-testid="menu-category-new-top" @select="askCreate(null)">
+                  <FolderPlusIcon />新建顶层节点
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
+          </aside>
+
+          <!-- 件详情 / 件列表 -->
+          <div class="relative flex min-w-0 flex-1 flex-col">
+            <ItemDetail
+              v-if="itemQuery && project.currentId"
+              :key="itemQuery"
+              ref="detailRef"
+              :item-id="itemQuery"
+              :project-id="project.currentId"
+              :settings="settings"
+              :can-export="canExport"
+              :item-no-width="itemNoWidth"
+              :refresh-token="detailRefresh"
+              :category-label="detailCategoryLabel"
+              @loaded="onDetailLoaded"
+              @changed="onDetailChanged"
+              @moved="onDetailMoved"
+              @gone="onDetailGone"
+              @open-item="(c, i) => go(c, i)"
+              @renumber="askRenumber"
+              @settings-stale="loadSettings"
+              @dirty="(d) => (detailDirty = d)"
+              @deleted="onDetailDeleted"
+              @open-viewer="openViewer"
+              @export="(id) => goExport('item', id)"
+              @back="go(categoryQuery)"
+              @unseal="(it, label) => askUnseal(it.id, label)"
+              @reseal="(it, label) => askReseal(it.id, label)"
+              @open-folder="setPaneFolder"
+            />
+            <div
+              v-else-if="category"
+              class="flex min-h-0 flex-1 flex-col"
+              :class="dropOnList && 'bg-info-soft/40 outline-2 -outline-offset-4 outline-info outline-dashed'"
+              data-testid="item-list-area"
+              @dragover="onListDragOver"
+              @dragleave.self="dropOnList = false"
+              @drop="onListDrop"
+            >
+              <div class="flex shrink-0 flex-wrap items-center gap-1.5 border-b px-3 py-1.5 text-xs">
+                <span class="flex shrink-0 items-center pr-1" title="全选已加载的件" @click="toggleAll">
                   <Checkbox
                     :model-value="allChecked"
-                    aria-label="全选已加载的条目"
+                    aria-label="全选已加载的件"
                     class="pointer-events-none"
                     :disabled="!items.length"
                     data-testid="item-check-all"
                   />
                 </span>
-                <span
-                  v-for="s in ITEM_STATUS_ORDER"
-                  :key="s"
-                  class="shrink-0 rounded-full px-1.5 text-[11px] leading-5 tabular-nums"
-                  :class="ITEM_STATUS[s].badge"
-                  :data-testid="`item-count-${s}`"
-                  :data-count="listCounts[s]"
-                >{{ ITEM_STATUS[s].label }} {{ listCounts[s].toLocaleString() }}</span>
-                <span class="ml-auto flex shrink-0 items-center gap-1">
+                <span class="shrink-0 text-muted-foreground" data-testid="item-total" :data-count="listTotal">{{ listTotal.toLocaleString() }} 件</span>
+                <span class="shrink-0 rounded-full bg-muted px-1.5 leading-5 text-muted-foreground tabular-nums" data-testid="item-count-draft" :data-count="listCounts.draft">未锁定 {{ listCounts.draft }}</span>
+                <span class="shrink-0 rounded-full bg-violet-100 px-1.5 leading-5 text-violet-700 tabular-nums" data-testid="item-count-locked" :data-count="listCounts.locked">已锁定 {{ listCounts.locked }}</span>
+                <span v-if="listCounts.modifying" class="shrink-0 rounded-full border border-orange-300 bg-orange-50 px-1.5 leading-4 text-orange-700 tabular-nums" data-testid="item-count-modifying" :data-count="listCounts.modifying">修改中 {{ listCounts.modifying }}</span>
+                <span class="flex-1" />
                 <Button
                   size="xs"
                   variant="outline"
                   :disabled="!selection.count.value || selection.count.value > MAX_LOCK_ITEMS"
-                  :title="selection.count.value > MAX_LOCK_ITEMS ? `一次最多定稿 ${MAX_LOCK_ITEMS} 个` : '把勾选的条目一起定稿'"
+                  :title="selection.count.value > MAX_LOCK_ITEMS ? `一次最多锁定 ${MAX_LOCK_ITEMS} 件` : '把勾选的件一起锁定'"
                   data-testid="batch-lock"
                   @click="askBatchLock"
                 >
-                  <LockIcon />定稿{{ selection.count.value ? `（${selection.count.value}）` : '' }}
+                  <LockIcon />锁定{{ selection.count.value ? `（${selection.count.value}）` : '' }}
                 </Button>
-                <Button
-                  size="xs"
-                  :disabled="creating || atRoot"
-                  :title="atRoot ? '顶层不新建条目，请先在归类树里选一个节点' : '在这个节点里新建条目'"
-                  data-testid="item-new"
-                  @click="newItem"
-                >
-                  <ListPlusIcon />新建
+                <Button v-if="canExport && opNode" size="xs" variant="ghost" title="导出这个节点（含下级）…" data-testid="category-export-main" @click="goExport('category', opNode.id)">
+                  <FileOutputIcon /><span class="hidden 2xl:inline">导出…</span>
                 </Button>
-                </span>
               </div>
+              <div v-if="listState === 'loading' && !items.length" class="flex flex-1 items-center justify-center gap-2 text-xs text-muted-foreground">
+                <LoaderCircleIcon class="size-3.5 animate-spin" />正在加载…
+              </div>
+              <div v-else-if="listState === 'error' && !items.length" class="flex flex-1 flex-col items-center justify-center gap-2 text-xs">
+                <p class="text-destructive">{{ listError }}</p>
+                <Button variant="outline" size="xs" @click="loadList">重试</Button>
+              </div>
+              <div
+                v-else-if="listState === 'ready' && !items.length"
+                class="flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center text-xs text-muted-foreground"
+                data-testid="item-list-empty"
+              >
+                <template v-if="atRoot">顶层没有直接放的件</template>
+                <template v-else-if="category.child_count && category.item_count">
+                  <span>「{{ category.category_name }}」下面是节点，含下级共 {{ category.item_count }} 件，在各自的节点里看</span>
+                  <span>也可以把左边的文件夹拖到这里，直接归到这个节点</span>
+                </template>
+                <template v-else>
+                  <span>「{{ category.category_name }}」里还没有件</span>
+                  <span>把左边的文件夹拖到这里（或者树上的节点），或者选好后点中间的"归档 →"</span>
+                </template>
+              </div>
+              <ItemList
+                v-else
+                ref="itemListRef"
+                :items="items"
+                :current-id="itemQuery"
+                :selection="selection"
+                :item-no-width="itemNoWidth"
+                :has-more="!!nextCursor"
+                :loading-more="loadingMore"
+                :load-more-error="loadMoreError"
+                :blocked-ids="blockedIds"
+                @activate="openItem"
+                @load-more="loadMore"
+                @retry-more="loadMore"
+              />
+              <p v-if="items.length" class="shrink-0 border-t px-3 py-1 text-[11px] text-muted-foreground">双击打开一件 · 勾选后可以批量锁定</p>
             </div>
-            <div v-if="listState === 'loading' && !items.length" class="flex flex-1 items-center justify-center gap-2 text-xs text-muted-foreground">
-              <LoaderCircleIcon class="size-3.5 animate-spin" />正在加载条目…
+            <div v-else class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground" data-testid="catalog-empty">
+              <p>在归类树里选一个节点，看它里面的件。</p>
+              <p class="text-xs">归档：把左边的文件夹拖到树上的节点。</p>
             </div>
-            <div v-else-if="listState === 'error' && !items.length" class="flex flex-1 flex-col items-center justify-center gap-2 text-xs">
-              <p class="text-destructive">{{ listError }}</p>
-              <Button variant="outline" size="xs" @click="loadList">重试</Button>
-            </div>
-            <div
-              v-else-if="listState === 'ready' && !items.length"
-              class="flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center text-xs text-muted-foreground"
-              data-testid="item-list-empty"
-            >
-              <span>这个节点里还没有条目</span>
-              <span>下级节点里的条目在各自的节点里看</span>
-            </div>
-            <ItemList
-              v-else
-              ref="itemListRef"
-              :items="items"
-              :current-id="itemQuery"
-              :selection="selection"
-              :item-no-width="itemNoWidth"
-              :has-more="!!nextCursor"
-              :loading-more="loadingMore"
-              :load-more-error="loadMoreError"
-              :blocked-ids="blockedIds"
-              @activate="openItem"
-              @load-more="loadMore"
-              @retry-more="loadMore"
-            />
-          </template>
-          <div v-else class="flex flex-1 items-center justify-center px-6 text-center text-xs text-muted-foreground">
-            在上面的归类树里选一个节点，看它里面的条目
           </div>
         </div>
-      </aside>
-
-      <!-- 右边：条目详情 -->
-      <section class="relative flex min-w-0 flex-1 flex-col">
-        <div
-          v-if="templateError"
-          class="shrink-0 border-b bg-destructive-soft px-5 py-2 text-xs text-destructive"
-          data-testid="template-error"
-        >
-          项目的档号模板解析不了：{{ templateError }}。新建条目、移动、改件号都会失败，请到「系统管理 › 项目」里修改。
-        </div>
-        <ItemDetail
-          v-if="itemQuery && project.currentId"
-          :key="itemQuery"
-          ref="detailRef"
-          :item-id="itemQuery"
-          :project-id="project.currentId"
-          :settings="settings"
-          :can-unlock="canUnlock"
-          :can-export="canExport"
-          :item-no-width="itemNoWidth"
-          :refresh-token="detailRefresh"
-          :category-label="detailCategoryLabel"
-          @loaded="onDetailLoaded"
-          @changed="onDetailChanged"
-          @moved="onDetailMoved"
-          @gone="onDetailGone"
-          @open-item="(c, i) => go(c, i)"
-          @renumber="askRenumber"
-          @settings-stale="loadSettings"
-          @dirty="(d) => (detailDirty = d)"
-          @deleted="onDetailDeleted"
-          @linked="onLinked"
-          @pool-stale="poolRef?.reload()"
-          @strip-state="(s) => (stripState = s)"
-          @open-viewer="openViewer"
-          @export="(id) => goExport('item', id)"
-        />
-        <div v-else class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground" data-testid="catalog-empty">
-          <template v-if="atRoot">
-            <div class="text-base font-medium text-foreground">直接放在顶层的条目</div>
-            <p class="mt-1">这些条目没有归到任何节点下，档号不完整；打开后用"移到别的节点…"移到合适的节点。</p>
-          </template>
-          <template v-else-if="category">
-            <div class="text-base font-medium text-foreground">{{ category.category_name }}</div>
-            <div class="font-mono text-xs">{{ categoryTypeLabel(category.category_type) }} · {{ category.category_code }} · 含下级 {{ category.item_count }} 件</div>
-            <p class="mt-1">在左边选一个条目著录，或者新建条目。</p>
-            <Button v-if="canExport" size="sm" variant="outline" class="mt-2" data-testid="category-export-main" @click="goExport('category', category.id)">
-              <FileOutputIcon />导出这个节点（含下级 {{ category.item_count }} 件）…
-            </Button>
-          </template>
-          <p v-else>在左边的归类树里选一个节点。</p>
-        </div>
       </section>
-
-      <!-- 第三栏：待归类池（M3-6） -->
-      <CatalogPool
-        v-if="canBrowse && project.current"
-        ref="poolRef"
-        :project-id="project.current.id"
-        :root-folder-id="project.current.root_folder_id"
-        :project-name="project.current.project_name"
-        :folder-id="poolFolderId"
-        :current-item-id="itemQuery"
-        :item-no-width="itemNoWidth"
-        :link-action="linkAction"
-        :insert-action="insertAction"
-        :create-action="createAction"
-        :busy="poolBusy"
-        @update:folder-id="setPoolFolder"
-        @invalid="onPoolInvalid"
-        @link="linkFromPool"
-        @create="createFromPool"
-        @open="openViewer"
-      />
-      <aside
-        v-else-if="project.current"
-        class="flex w-[300px] shrink-0 items-center justify-center border-l px-6 text-center text-xs text-muted-foreground"
-        data-testid="catalog-pool-forbidden"
-      >
-        待归类池要浏览文件目录（文件目录菜单）；你的账号没有这个菜单，请联系管理员。
-      </aside>
     </div>
 
     <!-- 对话框 -->
+    <ArchiveDialog
+      v-model:open="archive.open"
+      :category-id="archive.categoryId"
+      :category-label="archive.label"
+      :folder-ids="archive.folderIds"
+      :item-no-width="itemNoWidth"
+      @archived="onArchived"
+      @stale="paneRef?.refresh()"
+    />
+    <UnsealDialog v-model:open="unseal.open" :item-id="unseal.itemId" :label="unseal.label" @unsealed="onUnsealed" @changed="afterSealChange" />
+    <ResealDialog v-model:open="reseal.open" :item-id="reseal.itemId" :label="reseal.label" @resealed="onResealed" />
+    <ModifyingDialog
+      v-model:open="modifyingOpen"
+      :items="modifyingItems"
+      :item-no-width="itemNoWidth"
+      :can-files="canFiles"
+      @open-files="openFiles"
+      @open-item="onModifyingOpenItem"
+      @reseal="onModifyingReseal"
+    />
     <CategoryFormDialog
       v-if="project.currentId"
       v-model:open="formOpen"
@@ -1658,7 +1599,7 @@ const templateError = computed(() => settings.value?.archive_no_template_error ?
       :disabled-ids="[movePicker.node?.parent_id ?? null]"
       allow-top
       :title="`移动「${movePicker.node?.category_name ?? ''}」到…`"
-      description="连同下级节点和里面的条目一起移动；未定稿条目的档号按新位置重新生成。子树里有已定稿的条目时不能移动。"
+      description="连同下级节点和里面的件一起移动；未锁定的件的档号按新位置重新生成。子树里有已锁定的件时不能移动。"
       confirm-text="移到这里"
       @confirm="doMove"
     />
@@ -1673,37 +1614,27 @@ const templateError = computed(() => settings.value?.archive_no_template_error ?
     />
     <ConfirmDialog
       v-model:open="confirmBatch.open"
-      :title="`定稿选中的 ${confirmBatch.ids.length} 个条目？`"
-      description="一起定稿：任何一个不满足定稿条件（已完成、至少 1 页、档号不为空、项目要求时全部页审核通过）就一个都不定稿，并标出不满足的条目。已定稿的会跳过。"
-      confirm-text="定稿"
+      :title="`锁定选中的 ${confirmBatch.ids.length} 件？`"
+      description="一起锁定：任何一件不满足锁定条件（不在修改中、必填著录项已填、至少 1 页、档号不为空、项目要求时全部页审核通过）就一件都不锁定，并标出不满足的。已锁定的会跳过。"
+      confirm-text="锁定"
       :loading="confirmBatch.loading"
       @confirm="doBatchLock"
     />
     <ConfirmDialog
       v-model:open="confirmRenumber.open"
       :title="`按新模板重新生成${confirmRenumber.label}的档号？`"
-      description="按项目现在的档号模板，重新生成范围内所有未定稿条目的档号（已定稿的不动）。生成出来的档号和别的条目重复时，那个条目的档号为空。"
+      description="按项目现在的档号模板，重新生成范围内所有未锁定的件的档号（已锁定的不动）。生成出来的档号和别的件重复时，那一件的档号为空。"
       confirm-text="重新生成"
       :loading="confirmRenumber.loading"
       @confirm="doRenumber"
     />
     <ConfirmDialog
       v-model:open="discardAsk.open"
-      :title="DISCARD_TEXT[discardAsk.what ?? 'form'].title"
-      :description="DISCARD_TEXT[discardAsk.what ?? 'form'].description"
+      title="著录还没有保存"
+      description="离开这一件会放弃没有保存的修改。"
       confirm-text="放弃修改"
       destructive
       @confirm="resolveDiscard(true)"
-    />
-    <FileCatalogedDialog
-      v-model:open="createCataloged.open"
-      :items="createCataloged.items"
-      :names="createCataloged.names"
-      :total="createCataloged.files.length"
-      action="新建条目"
-      :item-no-width="itemNoWidth"
-      @retry="createCatalogedRetry"
-      @skip="createCatalogedSkip"
     />
     <OriginalViewerDialog
       v-if="viewer.mounted"

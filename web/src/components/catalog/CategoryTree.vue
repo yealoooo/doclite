@@ -7,7 +7,7 @@
 // - 双击一行：`activate` 事件（CategoryPicker 用来直接确认）；双击箭头、双击禁用的行不发；
 // - 键盘：上下移动，左右收起、展开，Enter / 空格选中（reka-ui 自带）；
 // - `isDisabled`：不能选的节点（例如移动节点时它自己和它的子树），显示为灰色；
-// - 插槽 `suffix`（`{node, selected}`）：行尾的附加信息。
+// - 插槽 `suffix`（`{node, selected}`）：行尾的附加信息；`dropTargetId`：拖动经过的节点画虚线框（M9 归档）。
 // - 截图脚本用的属性：每行 data-testid=tree-category、data-category-id、data-code、data-items。
 import { ChevronRightIcon, LibraryBigIcon, LoaderCircleIcon } from '@lucide/vue'
 import { TreeItem, TreeRoot } from 'reka-ui'
@@ -26,8 +26,10 @@ const props = withDefaults(
     isDisabled?: (node: ArchiveCategory) => boolean
     /** 显示子树里的条目数（默认显示）。 */
     showCounts?: boolean
+    /** 拖动文件夹经过的节点（M9：归类页把文件夹拖到节点上归档），画虚线框。 */
+    dropTargetId?: string | null
   }>(),
-  { isDisabled: undefined, showCounts: true },
+  { isDisabled: undefined, showCounts: true, dropTargetId: null },
 )
 
 const emit = defineEmits<{ select: [id: string]; activate: [id: string] }>()
@@ -100,6 +102,7 @@ function rowTitle(n: ArchiveCategory): string {
           'group flex cursor-pointer items-center gap-1 rounded-md py-1 pr-2 text-sidebar-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50',
           'data-disabled:cursor-not-allowed data-disabled:opacity-45 data-disabled:hover:bg-transparent',
           item.value.id === props.selectedId && 'bg-info-soft hover:bg-info-soft',
+          item.value.id === props.dropTargetId && 'bg-info-soft outline-2 outline-info outline-dashed',
         )
       "
       :style="{ paddingLeft: `${(item.level - 1) * 14 + 4}px` }"

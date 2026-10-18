@@ -1,5 +1,5 @@
 // 文件目录整理操作的错误文案（M1-12）。server 的 message 已经说明了原因，这里按错误码补上"该怎么办"，
-// 让重名、成环、操作根文件夹、已归类、编号用完、名字不合法（含 Windows 保留名）都有明确的提示。
+// 让重名、成环、操作根文件夹、已归档、已封存、编号用完、名字不合法（含 Windows 保留名）都有明确的提示。
 
 import { ApiError, errorMessage } from '@/api/http'
 
@@ -30,9 +30,12 @@ export function opError(e: unknown, ctx: OpContext): OpError {
       return { title: '根文件夹不能改名、移动或删除', detail: '根文件夹的名称跟着项目名称走（在「系统管理 › 项目」里改），备注可以改。' }
     case 'file_cataloged':
       return {
-        title: ctx.kind === 'folder' ? '文件夹里有已归类的文件，不能删除' : '有已归类的文件，不能删除',
-        detail: `${e.message}。请先到「归类」里把它们从档案条目中移出，再回来删除`,
+        title: ctx.kind === 'folder' ? '文件夹里有已归档的文件，不能删除' : '有已归档的文件，不能删除',
+        detail: `${e.message}。不要这一件了请先到「归类」里撤销归档，再回来删除`,
       }
+    case 'folder_archived':
+      // M9：碰到了封存的文件夹，server 的 message 写明了是哪个文件夹、归档成了哪一件、该怎么办。
+      return { title: e.message }
     case 'tree_full':
       return {
         title: '这一层的子文件夹数量已到上限',

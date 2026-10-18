@@ -15,13 +15,15 @@ import { toast } from 'vue-sonner'
 import { batchFiles } from '@/api/files'
 import { copyFolderFile, deleteFolderFile, deleteFolderFiles, MAX_BULK_IDS, moveFolderFiles } from '@/api/folder-files'
 import { deleteFolder, updateFolder } from '@/api/folders'
-import type { FileEntry, FileImageItem, FolderItem, MyProject, SubfolderEntry } from '@/api/types'
+import { ApiError, isApiError } from '@/api/http'
+import type { FileEntry, FileImageItem, FolderArchivedDetails, FolderItem, MyProject, SubfolderEntry } from '@/api/types'
 import type { PickedFolder } from '@/components/files/FolderPicker.vue'
 import type { Selection } from '@/composables/useSelection'
 import { CLIENT_TOO_OLD, isShell, shellHas } from '@/lib/client'
 import { openExternal, shellErrorMessage } from '@/lib/shell'
 import { pickAndEnqueueUpload, type PickMode } from '@/lib/shell-upload'
 import { useImageInfoStore } from '@/stores/image-info'
+import { useSessionStore } from '@/stores/session'
 import { useUploadsStore } from '@/stores/uploads'
 
 import { type Entry, fileKey } from './entries'
@@ -46,10 +48,6 @@ interface Options {
 /** URL 剩不到这么久就重新取再打开。 */
 const URL_MARGIN_MS = 10 * 60 * 1000
 
-function showError(e: unknown, ctx: OpContext) {
-  const r = opError(e, ctx)
-  toast.error(r.title, { description: r.detail })
-}
 
 function chunks<T>(list: T[], size: number): T[][] {
   const out: T[][] = []
@@ -61,6 +59,33 @@ export function useFileActions(opts: Options) {
   const router = useRouter()
   const images = useImageInfoStore()
   const uploads = useUploadsStore()
+  const session = useSessionStore()
+
+  /**
+   * 操作失败的提示。409 `folder_archived`（M9：碰到了封存的文件夹）给 server 的说明（写明是哪个文件夹、归档成了哪一件、
+   * 怎么办），有 catalog 菜单时带"去归类页查看"（打开那一件），没有时说明请归类员解除封存。
+   */
+  function showError(e: unknown, ctx: OpContext) {
+    if (isApiError(e, 'folder_archived')) {
+      const d = (e as ApiError).details as FolderArchivedDetails | undefined
+      const canCatalog = session.menuCodes.has('catalog')
+      toast.error((e as ApiError).message, {
+        description: canCatalog ? '已封存的文件夹要先解除封存才能修改（重扫、改备注不受影响）' : '已封存的文件夹要先由归类员解除封存才能修改',
+        action:
+          canCatalog && d?.item_id
+            ? {
+                label: '去归类页查看',
+                onClick: () =>
+                  void router.push({ path: '/catalog', query: { folder: d.folder_id, category: d.category_id, item: d.item_id } }),
+              }
+            : undefined,
+        duration: 10000,
+      })
+      return
+    }
+    const r = opError(e, ctx)
+    toast.error(r.title, { description: r.detail })
+  }
 
   const files = computed(() =>
     opts.selected().filter((e): e is Extract<Entry, { kind: 'file' }> => e.kind === 'file').map((e) => e.file),
@@ -120,7 +145,7 @@ export function useFileActions(opts: Options) {
     Object.assign(folderForm, {
       open: true,
       parent: null,
-      folder: { id: f.id, folder_name: f.folder_name, remark: f.remark, isRoot: false },
+      folder: { id: f.id, folder_name: f.folder_name, remark: f.remark, isRoot: false, sealed: f.archive?.source_status === 'sealed' },
       focus,
     })
   }
@@ -131,7 +156,13 @@ export function useFileActions(opts: Options) {
     Object.assign(folderForm, {
       open: true,
       parent: null,
-      folder: { id: cur.id, folder_name: cur.folder_name, remark: cur.remark, isRoot: cur.parent_id === null },
+      folder: {
+        id: cur.id,
+        folder_name: cur.folder_name,
+        remark: cur.remark,
+        isRoot: cur.parent_id === null,
+        sealed: cur.archive?.source_status === 'sealed',
+      },
       focus: cur.parent_id === null ? 'remark' : 'name',
     })
   }
@@ -257,7 +288,7 @@ export function useFileActions(opts: Options) {
         done++
       }
       toast.success(list.length === 1 ? `已复制为「${names[0]}」` : `已复制 ${done} 个文件到当前文件夹`, {
-        description: '副本是新的文件（新的 file_id），需要单独审核和归类；不占用额外的存储空间。',
+        description: '副本是新的文件（新的 file_id），需要单独审核和归档；不占用额外的存储空间。',
       })
     } catch (e) {
       showError(e, { kind: 'file' })
@@ -280,7 +311,7 @@ export function useFileActions(opts: Options) {
         folder: null,
         title: list.length === 1 ? `删除「${list[0]!.file_name}」？` : `删除选中的 ${list.length} 个文件？`,
         description:
-          '删除后文件从文件目录里消失，进行中的审核分配会取消，操作记进文件日志。已归类的文件不能删除，要先从档案条目里移出。',
+          '删除后文件从文件目录里消失，进行中的审核分配会取消，操作记进文件日志。已归档的文件不能删除（已封存的文件夹要先解除封存）。',
       })
     } else if (kind.value === 'folder') {
       const f = folders.value[0]!
@@ -295,7 +326,7 @@ export function useFileActions(opts: Options) {
         title: `删除文件夹「${f.folder_name}」？`,
         description: `${
           parts.length ? `它里面的 ${parts.join('、')}（以及更深的各层）会一起删除。` : '这是一个空文件夹。'
-        }子树里有已归类的文件时不能删除，要先从档案条目里移出。`,
+        }子树里有已归档的文件时不能删除，要先到归类页撤销归档。`,
       })
     } else if (kind.value === 'folders') {
       toast.info('文件夹一次只能删除一个，请只选一个文件夹')

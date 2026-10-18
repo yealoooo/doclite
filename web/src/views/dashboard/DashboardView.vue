@@ -374,7 +374,7 @@ function timeText(d: Date | null): string {
           <StatusMatrix :counts="counts" :require-locked="requireLocked" />
           <p class="mt-3 text-[11.5px] leading-relaxed text-muted-foreground">
             审核和归类互不限制，可以先归类再审。可导出按项目设置算：{{
-              requireLocked ? '只算已定稿的条目里的文件' : '已归类的文件都算'
+              requireLocked ? '只算已锁定的件里的文件' : '已归档的文件都算'
             }}；绿框是"通过且可导出"，导出时默认只导出审核通过的。
           </p>
         </div>
@@ -399,7 +399,7 @@ function timeText(d: Date | null): string {
           <div>
             <div class="mb-2 flex items-baseline gap-2">
               <h2 class="text-sm font-semibold text-foreground">归类进度</h2>
-              <span class="text-xs text-muted-foreground">已归类 {{ percentText(counts.catalog.cataloged, counts.total) }}</span>
+              <span class="text-xs text-muted-foreground">已归档 {{ percentText(counts.catalog.cataloged, counts.total) }}</span>
             </div>
             <StackedBar :segments="catalogSegments(counts)" :total="counts.total" :height="12" />
             <ul class="mt-2.5 grid grid-cols-2 gap-x-6 gap-y-1 text-xs">

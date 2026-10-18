@@ -266,7 +266,7 @@ const problems = computed(() => props.draft.fields.map((f) => fieldProblems(f, p
             }}
           </div>
           <div class="text-muted-foreground">
-            层级：{{ parsed.template.types.map(categoryTypeLabel).join(' → ') || '（不用归类节点的编码）' }}。条目往上找不到某一级时档号留空（可以建条目，不能定稿）。
+            层级：{{ parsed.template.types.map(categoryTypeLabel).join(' → ') || '（不用归类节点的编码）' }}。件往上找不到某一级时档号留空（可以归档，不能锁定）。
           </div>
           <div class="text-muted-foreground">
             分隔符：<span class="font-mono text-foreground">{{ parsed.template.separators.join(' ') || '—' }}</span>（归类编码里不能有）
@@ -285,7 +285,7 @@ const problems = computed(() => props.draft.fields.map((f) => fieldProblems(f, p
       >
         <TriangleAlertIcon class="mt-0.5 size-3.5 shrink-0 text-warn" />
         <div class="min-w-0">
-          <p>改模板后，已有条目的档号不会自动改；要按新模板重新生成，到归类页用"按新模板重新生成档号"（只改未定稿的）。</p>
+          <p>改模板后，已有条目的档号不会自动改；要按新模板重新生成，到归类页用"按新模板重新生成档号"（只改未锁定的）。</p>
           <p v-if="codesState === 'loading'" class="text-muted-foreground">正在检查已有的归类编码…</p>
           <template v-else-if="(codesState === 'ready' || codesState === 'partial') && conflicts.length">
             <p class="font-medium text-warn">
@@ -312,19 +312,19 @@ const problems = computed(() => props.draft.fields.map((f) => fieldProblems(f, p
       </div>
     </section>
 
-    <!-- ===== 定稿 ===== -->
+    <!-- ===== 锁定 ===== -->
     <section class="flex flex-col gap-1.5">
-      <h3 class="text-sm font-semibold text-foreground">定稿</h3>
+      <h3 class="text-sm font-semibold text-foreground">锁定</h3>
       <label class="flex w-fit cursor-pointer items-center gap-2 text-sm text-foreground">
         <Checkbox
           :model-value="props.draft.lockRequiresApproved"
           data-testid="lock-requires-approved"
           @update:model-value="(v) => (props.draft.lockRequiresApproved = v === true)"
         />
-        定稿前要求条目的全部页审核通过
+        锁定前要求件的全部页审核通过
       </label>
       <p class="pl-6 text-xs text-muted-foreground">
-        定稿还要求：已"标记完成"、至少 1 页、档号不为空。关掉后，没审完的页也能定稿（导出时仍可以只导出审核通过的）。
+        锁定还要求：不在修改中、必填著录项已填、至少 1 页、档号不为空。关掉后，没审完的页也能锁定（导出时仍可以只导出审核通过的）。
       </p>
     </section>
 
@@ -502,7 +502,7 @@ const problems = computed(() => props.draft.fields.map((f) => fieldProblems(f, p
         </li>
       </ol>
       <p v-if="props.draft.fields.length" class="text-xs text-muted-foreground">
-        删掉著录项或改 key，不会删已有条目里存的内容。必填在"标记完成"和定稿时检查，草稿只检查类型和格式。
+        删掉著录项或改 key，不会删已有条目里存的内容。必填在锁定时检查，未锁定时只检查类型和格式。
       </p>
     </section>
   </div>

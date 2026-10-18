@@ -73,13 +73,14 @@ export function formatLabel(format: string): string {
 
 /** 不就绪原因的短名（预检的汇总标签）。 */
 export const NOT_READY_LABEL: Record<string, string> = {
-  not_locked: '没有定稿',
+  source_modifying: '来源文件夹修改中',
+  not_locked: '没有锁定',
   no_archive_no: '没有档号',
   no_pages: '没有页',
   pages_not_approved: '有页不是审核通过',
 }
 
-export const NOT_READY_ORDER = ['not_locked', 'no_archive_no', 'no_pages', 'pages_not_approved'] as const
+export const NOT_READY_ORDER = ['source_modifying', 'not_locked', 'no_archive_no', 'no_pages', 'pages_not_approved'] as const
 
 /** 交付后变更原因的短名（design §6"交付后变更"的 8 种）。 */
 export const CHANGE_LABEL: Record<string, string> = {

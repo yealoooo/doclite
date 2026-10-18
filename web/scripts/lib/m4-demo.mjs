@@ -239,15 +239,13 @@ export async function ensureM45Demo({ origin, admin, demoPassword = 'demo123456'
   for (const s of specs) {
     // 按题名找（件号不回收：删掉重建的条目件号会往后排，s.no 只是第一次建时的件号）。
     let it = (await itemsIn(cat, s.category.id)).find((x) => x.title === s.title)
-    const fileIds = s.big ? bigFiles.slice(s.big[0], s.big[1]).map((f) => f.file_id) : s.pages.map((n) => page(n).file_id)
     if (!it) {
-      it = await cat('POST', `/api/archive-categories/${s.category.id}/items`, { title: s.title, extra_fields: s.fields, file_ids: fileIds })
+      // M9-2：带 file_ids 新建、mark-done 的接口去掉了（只能整个文件夹归档），缺的条目不再补建；演示数据在 M9-3 重写。
+      console.warn(`  「${s.category.category_name}」没有「${s.title}」（M9 起不再按页补建，演示数据待 M9-3 重写）`)
+      continue
     }
     let detail = await cat('GET', `/api/archive-items/${it.id}`)
-    if (s.status !== 'draft' && detail.status === 'draft') {
-      detail = await cat('POST', `/api/archive-items/${it.id}/mark-done`, { row_version: detail.row_version })
-    }
-    if (s.status === 'locked' && detail.status === 'done') {
+    if (s.status === 'locked' && detail.status === 'draft') {
       detail = await cat('POST', `/api/archive-items/${it.id}/lock`, { row_version: detail.row_version })
     }
     items.push({ ...detail, spec: s })

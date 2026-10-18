@@ -426,7 +426,7 @@ const scopeHint = computed(() => {
   >
     <div class="flex h-11 shrink-0 items-center gap-2 border-b px-4">
       <span class="text-sm font-semibold text-foreground">新建导出</span>
-      <span class="text-[11px] text-muted-foreground">只包含已归类的文件</span>
+      <span class="text-[11px] text-muted-foreground">只包含已归档的文件</span>
       <span class="flex-1" />
       <Button variant="ghost" size="icon-xs" aria-label="关闭" data-testid="export-new-close" @click="emit('close')"><XIcon /></Button>
     </div>
@@ -571,11 +571,11 @@ const scopeHint = computed(() => {
         <label class="flex cursor-pointer items-center gap-2 text-xs text-foreground" data-testid="export-only-approved" :data-checked="onlyApproved ? 'true' : 'false'">
           <Checkbox :model-value="onlyApproved" @update:model-value="(v) => (onlyApproved = v === true)" />
           只导出审核通过的文件
-          <span class="text-[11px] text-muted-foreground">（不勾选就包含所有已归类的文件）</span>
+          <span class="text-[11px] text-muted-foreground">（不勾选就包含所有已归档的文件）</span>
         </label>
         <p class="mt-1 text-[11px] text-muted-foreground">
           每页用建任务那一刻的最新版本，明细里记下用的是哪一版；之后的重扫、改页序不影响这次导出，会出现在"交付后变更"里。
-          <template v-if="precheck?.require_locked_item">项目设置要求导出的条目已定稿。</template>
+          <template v-if="precheck?.require_locked_item">项目设置要求导出的件已锁定。</template>
         </p>
       </section>
 

@@ -4,7 +4,7 @@
 // - 编码 1–32 个字符，不能有空白、控制字符、花括号、`\ / : * ? " < > |` 和当前档号模板的分隔符（catalog-settings 给出
 //   不能用的字符），同一层不能重复（区分大小写）；
 // - 名称去掉首尾空白后 1–100 个字符，同一层可以重名；
-// - 改编码、改类型会重算子树里未定稿条目的档号；子树里有已定稿的条目时 409 `item_locked`（server 的 message 写明了）。
+// - 改编码、改类型会重算子树里未锁定的件的档号；子树里有已锁定的件时 409 `item_locked`（server 的 message 写明了）。
 // 先在本地校验，接口错误显示在对话框里。保存成功后由页面提示"重算了 n 个档号""n 个条目因为撞号档号为空"。
 import { computed, ref, watch } from 'vue'
 
@@ -190,7 +190,7 @@ async function submit() {
           data-testid="category-form-renumber-hint"
         >
           改{{ codeChanged && typeChanged ? '编码和类型' : codeChanged ? '编码' : '类型' }}会重新生成这个节点（含下级）里
-          未定稿条目的档号；有已定稿的条目时不能改。
+          未锁定的件的档号；有已锁定的件时不能改。
         </p>
         <p
           v-if="error"

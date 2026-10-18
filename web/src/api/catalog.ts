@@ -3,8 +3,8 @@
 // - 归类树 `GET /api/projects/{pid}/archive-categories?parent_id=`（catalog 菜单，按需加载一层）；
 // - 看板矩阵 `GET /api/projects/{pid}/catalog-summary?folder_id=`（dashboard 菜单）；
 // - 文件挂在哪个条目 `GET /api/files/{fid}/catalog`、`POST /api/projects/{pid}/catalog-placements`（能进项目即可）；
-// - M3-5：归类节点的新建、修改、删除（M3-1）和档案条目的读写、状态动作、批量定稿、按新模板重新生成档号（M3-2）。
-// - M3-6：挂接和页序（PUT 整份有序列表）、带 file_ids 新建、删除条目（M3-3）。
+// - M3-5：归类节点的新建、修改、删除（M3-1）和档案条目的读写、锁定解锁、批量锁定、按新模板重新生成档号（M3-2）。
+// - M9-1：整个文件夹归档（items:from-folders）、解除封存、重新归档（先给对比）、撤销归档（DELETE）。
 // 都不返回图片地址。每个函数的最后一个参数可以传 `handle`（见 http.ts）。
 //
 // 注意 403 `forbidden`（菜单不对或进不了项目）走全局处理（刷新会话、跳无权提示页），`handle` 拦不住：调用前先确认
@@ -16,19 +16,21 @@ import type {
   ArchiveCategoryList,
   ArchiveItem,
   ArchiveItemList,
+  ArchiveResult,
   CatalogPlacements,
   CatalogSettings,
   CatalogSummary,
   FileCatalog,
   LockItemsResult,
   RenumberResult,
+  ResealPreview,
   UpdateArchiveItemBody,
   UpdatedArchiveCategory,
 } from './types'
 
 type Handle = RequestOptions['handle']
 
-/** 归类要用的项目设置（补上了默认值）：档号模板、著录项、定稿和导出的开关、归类编码的规则。 */
+/** 归类要用的项目设置（补上了默认值）：档号模板、著录项、锁定和导出的开关、归类编码的规则。 */
 export function getCatalogSettings(projectId: string, handle?: Handle) {
   return request<CatalogSettings>(`/api/projects/${projectId}/catalog-settings`, { handle })
 }
@@ -52,7 +54,7 @@ export function getCatalogSummary(projectId: string, folderId?: string | null, h
   })
 }
 
-/** 一个文件挂在哪个条目（没挂接时 placement 为 null）。文件或所在文件夹已删除、不存在 404。 */
+/** 一个文件归在哪个条目（没归档时 placement 为 null）。文件或所在文件夹已删除、不存在 404。 */
 export function getFileCatalog(fileId: string, handle?: Handle) {
   return request<FileCatalog>(`/api/files/${fileId}/catalog`, { handle })
 }
@@ -68,7 +70,7 @@ export function getCatalogPlacements(projectId: string, fileIds: string[], handl
 
 // ---------- 归类节点的写接口（M3-1，catalog 菜单；M3-5 用） ----------
 // 错误：400 `invalid_input`（类型、编码、名称）；404（节点、父节点）；409 `conflict`（同一层编码重复）、`tree_full`、
-// `tree_cycle`（移进自己的子树）、`item_locked`（子树里有定稿的条目时移动、改编码、改类型）、`category_not_empty`
+// `tree_cycle`（移进自己的子树）、`item_locked`（子树里有已锁定的条目时移动、改编码、改类型）、`category_not_empty`
 // （删除时子树里还有条目）、`invalid_state`（根节点；模板解析不了又要重算档号）。
 
 export interface CategoryInput {
@@ -88,7 +90,7 @@ export function createArchiveCategory(
 
 /**
  * 改名、改编码、改类型、移动（`parent_id`，移到顶层传根节点的 id）。不传的字段不改；和现在一样的当作没传。
- * 改编码、改类型、移动会重算子树里未定稿条目的档号（`renumbered`），撞号的留空（`archive_no_conflicts`）。
+ * 改编码、改类型、移动会重算子树里未锁定条目的档号（`renumbered`），撞号的留空（`archive_no_conflicts`）。
  */
 export function updateArchiveCategory(
   projectId: string,
@@ -108,14 +110,22 @@ export function deleteArchiveCategory(projectId: string, id: string, handle?: Ha
   return request<void>(`/api/projects/${projectId}/archive-categories/${id}`, { method: 'DELETE', handle })
 }
 
-// ---------- 档案条目（M3-2，catalog 菜单；解锁要 catalog 和 review_assign；M3-5 用） ----------
+// ---------- 档案条目（M3-2；M9-1 起只能整个文件夹归档，catalog 菜单 + 能进项目，含解锁） ----------
 // 检查顺序：404 → 状态（409 `item_locked` / `invalid_state`）→ row_version（409 `conflict`）→ 著录（400 `invalid_input`，
-// `details.fields [{key, message}]`，题名的 key 是 `title`）→ 定稿的前置条件（409 `invalid_state`）。
+// `details.fields [{key, message}]`，题名的 key 是 `title`）→ 锁定的前置条件（409 `invalid_state`）。
+// 去掉的接口（M9-1）：`POST archive-categories/{id}/items`（新建空条目）、`PUT archive-items/{id}/files`（按页挂接）、
+// `mark-done`、`back-to-draft`。
 
 /** 列表每页最多多少个（server 1–2000）。 */
 export const MAX_ITEMS_PAGE = 2000
-/** 批量定稿一次最多多少个。 */
+/** 批量锁定一次最多多少个。 */
 export const MAX_LOCK_ITEMS = 500
+/** 一次归档最多选多少个文件夹（展开子文件夹后也不能超过）。 */
+export const MAX_ARCHIVE_FOLDERS = 500
+/** 一件最多多少页。 */
+export const MAX_ITEM_PAGES = 2000
+/** 解除封存的原因最长多少字。 */
+export const MAX_UNSEAL_REASON_CHARS = 200
 
 /** 直接放在这个节点里的条目（不含下级节点），按件号排，keyset 分页。 */
 export function listArchiveItems(
@@ -134,16 +144,17 @@ export function getArchiveItem(id: string, handle?: Handle) {
 }
 
 /**
- * 新建条目（draft）；请求里没提到的著录项用设置里的默认值。档号撞号时不报错，档号留空。
- * M3-3：带 `file_ids`（0–2000 个，不能重复）时建条目并按顺序挂上，一个事务；有不存在的 404（`details.ids`）、已经挂在
- * 别的条目里的 409 `file_cataloged`（`details.items`），整个回滚、条目也不建。
+ * 整个文件夹归档（M9-1）：每个选中的文件夹自己成一件，有子文件夹的（盒子）它的直接子文件夹各成一件。`dry_run` 只给
+ * 预览（不写库，200）；不带时同一事务建全部件（201），新件未锁定、已封存。不合格的跳过并给原因（`skipped`）。
+ * 错误：400（0 个或超过 500 个、`titles` 不合规 details.fields）、404（details.ids）、409 `invalid_state`（根节点、
+ * 模板不对、一件都建不出——details 是预览）、409 `file_cataloged`（{ids, items}）。
  */
-export function createArchiveItem(
+export function archiveFolders(
   categoryId: string,
-  body: { title?: string; extra_fields?: Record<string, string | null>; file_ids?: string[] } = {},
+  body: { folder_ids: string[]; titles?: Record<string, string>; dry_run?: boolean },
   handle?: Handle,
 ) {
-  return request<ArchiveItem>(`/api/archive-categories/${categoryId}/items`, { method: 'POST', body, handle })
+  return request<ArchiveResult>(`/api/archive-categories/${categoryId}/items:from-folders`, { method: 'POST', body, handle })
 }
 
 /** 改题名、著录（按 key 合并）、移到别的节点（`category_id`）、改件号（`item_no`）。 */
@@ -151,8 +162,8 @@ export function updateArchiveItem(id: string, body: UpdateArchiveItemBody, handl
   return request<ArchiveItem>(`/api/archive-items/${id}`, { method: 'PATCH', body, handle })
 }
 
-/** 单个条目的状态动作：标记完成、退回草稿、定稿、解锁（解锁要 catalog 和 review_assign 两个菜单）。 */
-export type ItemAction = 'mark-done' | 'back-to-draft' | 'lock' | 'unlock'
+/** 锁定、解锁。锁定：修改中 409 `invalid_state`，必填项没填 400 `invalid_input`（details.fields），其他前置条件 409。 */
+export type ItemAction = 'lock' | 'unlock'
 
 export function itemAction(id: string, action: ItemAction, rowVersion: number, handle?: Handle) {
   return request<ArchiveItem>(`/api/archive-items/${id}/${action}`, {
@@ -162,9 +173,35 @@ export function itemAction(id: string, action: ItemAction, rowVersion: number, h
   })
 }
 
+/** 解除封存（M9-1）：未锁定、已封存的 → 修改中；件号、档号、著录、页都不变。原因选填（≤ 200 字）。 */
+export function unsealArchiveItem(id: string, rowVersion: number, reason?: string | null, handle?: Handle) {
+  return request<ArchiveItem>(`/api/archive-items/${id}/unseal`, {
+    method: 'POST',
+    body: reason ? { row_version: rowVersion, reason } : { row_version: rowVersion },
+    handle,
+  })
+}
+
+/** 重新归档的对比（M9-1）：原页数 → 现页数，新增、去掉、调序；`problem` 是现在不能重新归档的原因。 */
+export function getResealPreview(id: string, handle?: Handle) {
+  return request<ResealPreview>(`/api/archive-items/${id}/reseal-preview`, { handle })
+}
+
 /**
- * 批量定稿（1–500 个，一个事务）：已定稿的跳过；任何一个不满足定稿条件就整体不做，409 `invalid_state`
- * （`details.ids` 是不满足的全部条目）；不存在、已删除的 404（`details.ids`）。
+ * 重新归档（M9-1）：修改中的 → 页换成来源文件夹现在的样子，再次封存。错误：409 `item_locked`、`invalid_state`（不在
+ * 修改中，或者文件夹已经不能成为一件——message 写明原因）、`conflict`（row_version）、`file_cataloged`（{ids, items}）。
+ */
+export function resealArchiveItem(id: string, rowVersion: number, handle?: Handle) {
+  return request<ArchiveItem>(`/api/archive-items/${id}/reseal`, {
+    method: 'POST',
+    body: { row_version: rowVersion },
+    handle,
+  })
+}
+
+/**
+ * 批量锁定（1–500 个，一个事务）：已锁定的跳过；任何一个不满足锁定条件就整体不做，409 `invalid_state`
+ * （`details.ids` 是不满足的全部条目，message 按原因计数）；不存在、已删除的 404（`details.ids`）。
  */
 export function lockArchiveItems(projectId: string, itemIds: string[], handle?: Handle) {
   return request<LockItemsResult>(`/api/projects/${projectId}/archive-items:lock`, {
@@ -174,27 +211,10 @@ export function lockArchiveItems(projectId: string, itemIds: string[], handle?: 
   })
 }
 
-// ---------- 挂接、页序和删除条目（M3-3，catalog 菜单；M3-6 用） ----------
-// 检查顺序：404（条目）→ 400（参数）→ 409 `item_locked` → 409 `conflict`（row_version）→ 404 `not_found` + `details.ids`
-// （要新挂上的文件不存在、已删除、不在这个项目里，都是 file_id）→ 409 `file_cataloged` + `details {ids, items}`（已经
-// 挂在别的条目里）。任何一个错误都整体不做。
-
-/** 一个条目最多多少页（M3-3）。 */
-export const MAX_ITEM_PAGES = 2000
-
 /**
- * 整体替换条目的页（`fileIds` 是全部页、按页序，空列表是清空），页号重排成 1..n：新挂上的记 link、移出的记 unlink，
- * 留下的页相对顺序变了记一条 reorder 审计。响应是新的详情（含新的 row_version）。
+ * 撤销归档（删除条目，204）：页一并移出（每页一条 unlink，带 `item_deleted: true`），文件夹回到未归档，件号不回收；
+ * 已锁定的 409 `item_locked`。修改中的也可以。
  */
-export function putArchiveItemFiles(id: string, rowVersion: number, fileIds: string[], handle?: Handle) {
-  return request<ArchiveItem>(`/api/archive-items/${id}/files`, {
-    method: 'PUT',
-    body: { row_version: rowVersion, file_ids: fileIds },
-    handle,
-  })
-}
-
-/** 删除条目（软删除，204）：有页时一并移出（每页一条 unlink，带 `item_deleted: true`），文件本身不动；定稿的 409 `item_locked`。 */
 export function deleteArchiveItem(id: string, rowVersion: number, handle?: Handle) {
   return request<void>(`/api/archive-items/${id}`, { method: 'DELETE', query: { row_version: rowVersion }, handle })
 }
@@ -207,7 +227,7 @@ export function probeArchiveItem(id: string, handle?: Handle) {
   return requestQuiet<ArchiveItem>(`/api/archive-items/${id}`, { handle })
 }
 
-/** 按项目现在的模板重新生成 `categoryId` 子树（不传是整个项目）里未定稿条目的档号。 */
+/** 按项目现在的模板重新生成 `categoryId` 子树（不传是整个项目）里未锁定条目的档号。 */
 export function renumberArchiveItems(projectId: string, categoryId?: string | null, handle?: Handle) {
   return request<RenumberResult>(`/api/projects/${projectId}/archive-items:renumber`, {
     method: 'POST',

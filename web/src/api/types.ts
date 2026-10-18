@@ -325,6 +325,47 @@ export interface FolderItem {
   updated_at: string
   /** 从根文件夹到父文件夹，不含自己；根文件夹的为空数组。 */
   ancestors: FolderAncestor[]
+  /** 文件夹自己的归档信息（M9：是某个未删除条目的来源时才有）。 */
+  archive?: FolderArchive | null
+}
+
+/** 封存状态（M9）：sealed 已封存（不能改结构，可以重扫）、modifying 修改中（解除了封存，改完要重新归档）。 */
+export type SourceStatus = 'sealed' | 'modifying'
+
+/**
+ * 文件夹的归档信息（M9，requirements 5.5、5.9）：这个文件夹是哪个未删除条目的来源。`GET folders/{id}`、children 的
+ * 每个子文件夹、新建和修改文件夹的响应都带；不是来源时为 null。
+ */
+export interface FolderArchive {
+  item_id: string
+  item_no: number
+  archive_no: string | null
+  title: string
+  category_id: string
+  /** 条目所在节点的名称链（不含根）。 */
+  category_names: string[]
+  status: ItemStatus
+  locked: boolean
+  source_status: SourceStatus
+  /** 修改中时：谁、何时解除的封存，原因（选填）；sealed 时都是 null。 */
+  unsealed_by: string | null
+  unsealed_by_name: string | null
+  unsealed_at: string | null
+  unseal_reason: string | null
+}
+
+/** 409 `folder_archived` 的 details（M9）：第一个封存的文件夹和它的条目，folder_ids 是这次碰到的全部封存的文件夹。 */
+export interface FolderArchivedDetails {
+  folder_id: string
+  folder_name: string
+  item_id: string
+  item_no: number
+  archive_no: string | null
+  title: string
+  category_id: string
+  category_names: string[]
+  locked: boolean
+  folder_ids: string[]
 }
 
 /** children 里的一个子文件夹。 */
@@ -337,6 +378,8 @@ export interface SubfolderEntry {
   folder_count: number
   /** 未删除的直接文件数。 */
   file_count: number
+  /** 归档信息（M9）：是某个未删除条目的来源时才有。 */
+  archive?: FolderArchive | null
 }
 
 /** children 里的一个文件（`folder_files` 的一行）。 */
@@ -883,8 +926,8 @@ export interface ReviewSettings {
 
 // ---------- 归类：设置、看板矩阵、文件挂在哪个条目（M3-1、M3-4 的接口；M3-7 用） ----------
 
-/** 档案条目的状态（design §2.3）：draft 著录中、done 著录完成、locked 定稿。 */
-export type ItemStatus = 'draft' | 'done' | 'locked'
+/** 档案条目的状态（M9 起只有两种）：draft 未锁定、locked 已锁定。 */
+export type ItemStatus = 'draft' | 'locked'
 
 /** 著录项的类型（用户决定 Q1）。 */
 export type ItemFieldType = 'text' | 'date' | 'enum'
@@ -947,11 +990,11 @@ export interface ArchiveCategoryList {
 
 /** 矩阵的一行（一种审核状态）：按归类状态分的文件数。 */
 export interface CatalogRowCounts {
-  /** 未归类。 */
+  /** 未归档。 */
   uncataloged: number
-  /** 已归类未定稿（条目是 draft 或 done）。 */
+  /** 已归档未锁定（含修改中）。 */
   unlocked: number
-  /** 已定稿。 */
+  /** 已锁定。 */
   locked: number
   total: number
 }
@@ -980,7 +1023,7 @@ export interface CatalogCounts {
   review: ReviewStatusCounts
   catalog: CatalogColumnCounts
   matrix: CatalogMatrix
-  /** 可导出的文件数（按 `export.require_locked_item`：true 只算已定稿的，false 算已归类的），按审核状态分开。 */
+  /** 可导出的文件数（按 `export.require_locked_item`：true 只算已锁定的，false 算已归档的），按审核状态分开。 */
   exportable: ReviewStatusCounts
 }
 
@@ -1025,7 +1068,7 @@ export interface CatalogPlacement {
 export interface FileCatalog {
   file_id: string
   project_id: string
-  /** 没挂接时为 null。 */
+  /** 没归档时为 null。 */
   placement: CatalogPlacement | null
 }
 
@@ -1086,7 +1129,7 @@ export interface ArchiveItemPage {
   review_round: number
   /** 当前版本号。 */
   version_no: number
-  /** 条目已定稿，而且这一页的当前版本是定稿之后出的。 */
+  /** 条目已锁定，而且这一页的当前版本是锁定之后出的。 */
   new_version_after_lock: boolean
 }
 
@@ -1105,6 +1148,17 @@ export interface ArchiveItemSummary {
   locked_at: string | null
   new_version_after_lock: boolean
   updated_at: string
+  /** 来源文件夹（M9）：名称、从项目根起用 / 连接的路径、是否已被删除（修改中删掉了）。 */
+  source_folder_id: string
+  source_folder_name: string
+  source_folder_path: string
+  source_folder_deleted: boolean
+  source_status: SourceStatus
+  /** 修改中时：谁、何时解除的封存，原因；sealed 时都是 null。 */
+  unsealed_by: string | null
+  unsealed_by_name: string | null
+  unsealed_at: string | null
+  unseal_reason: string | null
 }
 
 /** `GET /api/archive-categories/{id}/items` 的响应（keyset 分页，`total`、`counts` 不受分页影响）。 */
@@ -1112,7 +1166,8 @@ export interface ArchiveItemList {
   category_id: string
   /** 直接放在这个节点里的未删除条目数。 */
   total: number
-  counts: { draft: number; done: number; locked: number }
+  /** draft 未锁定（其中 modifying 个修改中）、locked 已锁定。 */
+  counts: { draft: number; locked: number; modifying: number }
   items: ArchiveItemSummary[]
   next_cursor: string | null
 }
@@ -1146,7 +1201,7 @@ export interface UpdateArchiveItemBody {
 /** `POST /api/projects/{pid}/archive-items:lock` 的响应。 */
 export interface LockItemsResult {
   locked: number
-  /** 原来就定稿了、跳过的个数。 */
+  /** 原来就锁定了、跳过的个数。 */
   skipped: number
   item_ids: string[]
 }
@@ -1160,7 +1215,97 @@ export interface RenumberResult {
   archive_no_conflicts: number
 }
 
-// ---------- 挂接、页序和删除条目（M3-3 的接口；M3-6 用） ----------
+// ---------- 整个文件夹归档、解除封存、重新归档（M9-1 的接口） ----------
+
+/** 归档预览（或归档结果）里的一件。 */
+export interface ArchivePlanItem {
+  folder_id: string
+  folder_name: string
+  /** 从项目根起用 / 连接。 */
+  folder_path: string
+  title: string
+  page_count: number
+  item_no: number
+  /** 预览按模板算（不查撞号）；缺级时 null。 */
+  archive_no: string | null
+  /** 归档后新建的条目（预览时 null）。 */
+  item_id: string | null
+}
+
+/**
+ * 跳过的原因：archived 已归档、has_subfolders 含下级文件夹、empty 空文件夹、too_many_pages 超过 2000 页、file_cataloged
+ * 文件夹里有文件还在别的条目里（item 是那一件）。
+ */
+export type ArchiveSkipReason = 'archived' | 'has_subfolders' | 'empty' | 'too_many_pages' | 'file_cataloged'
+
+export interface ArchiveSkip {
+  folder_id: string
+  folder_name: string
+  folder_path: string
+  reason: ArchiveSkipReason
+  message: string
+  page_count: number
+  subfolder_count: number
+  /** archived：已经归档成的那一件；file_cataloged：文件所在的那一件。 */
+  item: {
+    item_id: string
+    item_no: number
+    archive_no: string | null
+    title: string
+    category_id: string
+    category_names: string[]
+  } | null
+}
+
+/** `POST archive-categories/{id}/items:from-folders` 的响应（dry_run 是预览）；409 `invalid_state` 的 details 也是它。 */
+export interface ArchiveResult {
+  category_id: string
+  dry_run: boolean
+  items: ArchivePlanItem[]
+  skipped: ArchiveSkip[]
+  /** 被当成上级的文件夹（盒子）自己直接放的文件：不会归档（提示用）。 */
+  loose_files?: { folder_id: string; folder_name: string; folder_path: string; file_count: number }[]
+}
+
+/** 重新归档对比里的一页（added 是在现在的第几页，removed 是原来的第几页）。 */
+export interface ResealPage {
+  file_id: string
+  file_name: string
+  page_no: number
+  folder_path: string
+  deleted: boolean
+  review_status: ReviewStatus
+  version_no: number
+}
+
+export interface ResealMove {
+  file_id: string
+  file_name: string
+  from_page: number
+  to_page: number
+}
+
+/** `GET archive-items/{id}/reseal-preview`：原页数、现页数，新增、去掉、调序；problem 是现在不能重新归档的原因。 */
+export interface ResealPreview {
+  item_id: string
+  row_version: number
+  status: ItemStatus
+  source_status: SourceStatus
+  folder_id: string
+  folder_name: string
+  folder_path: string
+  old_page_count: number
+  new_page_count: number
+  changed: boolean
+  added: ResealPage[]
+  removed: ResealPage[]
+  moved: ResealMove[]
+  problem: {
+    code: 'folder_deleted' | 'has_subfolders' | 'empty' | 'too_many_pages' | 'file_cataloged'
+    message: string
+    items?: CatalogedElsewhere[]
+  } | null
+}
 
 /**
  * 409 `file_cataloged` 的 details 里的一项：要挂的文件已经挂在别的条目里（一个文件只能在一个条目里，Q3）。
@@ -1179,7 +1324,7 @@ export interface CatalogedElsewhere {
   item_status: ItemStatus
 }
 
-/** 409 `file_cataloged`（PUT 页序、带 file_ids 新建）的 details：`ids` 是 file_id。 */
+/** 409 `file_cataloged`（归档、重新归档时新增的文件已在别的条目里）的 details：`ids` 是 file_id。 */
 export interface FileCatalogedDetails {
   ids: string[]
   items: CatalogedElsewhere[]
@@ -1222,7 +1367,7 @@ export interface ExportPageRef {
   review_status: ReviewStatus
 }
 
-/** 一个条目不能导出的原因：not_locked、no_archive_no、no_pages、pages_not_approved。 */
+/** 一个条目不能导出的原因：source_modifying（M9）、not_locked、no_archive_no、no_pages、pages_not_approved。 */
 export interface ExportNotReadyReason {
   code: string
   /** 给人看的说明，例如"有 2 页不是审核通过（第 2 页：待审；第 3 页：驳回）"。 */
@@ -1251,6 +1396,8 @@ export interface ExportNotReadyItem {
 
 /** 各原因涉及的件数（一件可以有几种原因）。 */
 export interface ExportReasonCounts {
+  /** 来源文件夹修改中（M9）。 */
+  source_modifying: number
   not_locked: number
   no_archive_no: number
   no_pages: number

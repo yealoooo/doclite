@@ -77,7 +77,7 @@ const LOG_ACTION: Record<string, string> = {
   approve: '审核通过',
   reject: '驳回',
   reopen: '撤回通过',
-  link: '挂接',
+  link: '归档',
   unlink: '移出条目',
   export: '导出',
   edit: '编辑',

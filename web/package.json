@@ -10,8 +10,7 @@
     "preview": "vite preview",
     "screenshots": "node scripts/screenshots.mjs",
     "seed:demo": "node scripts/seed-demo.mjs",
-    "seed:files": "node scripts/seed-files.mjs",
-    "check:page-ops": "node scripts/check-page-ops.mjs"
+    "seed:files": "node scripts/seed-files.mjs"
   },
   "dependencies": {
     "@lucide/vue": "^1.48.0",
