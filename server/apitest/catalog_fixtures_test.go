@@ -170,6 +170,12 @@ type archiveResult struct {
 			CategoryNames []string  `json:"category_names"`
 		} `json:"item"`
 	} `json:"skipped"`
+	LooseFiles []struct {
+		FolderID   uuid.UUID `json:"folder_id"`
+		FolderName string    `json:"folder_name"`
+		FolderPath string    `json:"folder_path"`
+		FileCount  int       `json:"file_count"`
+	} `json:"loose_files"`
 }
 
 // mkFolder 在 parent（uuid.Nil 是项目根文件夹）下建文件夹，造 statuses 个文件（直接写库），返回文件夹和文件。

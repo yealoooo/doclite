@@ -139,6 +139,26 @@ WHERE f.id = ANY($1)`, ids)
 	return out, nil
 }
 
+// liveFileCounts 是这些文件夹里直接放的未删除文件数。
+func liveFileCounts(ctx context.Context, q db.Querier, folderIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	rows, err := q.Query(ctx, `SELECT folder_id, count(*) FROM folder_files
+WHERE folder_id = ANY($1) AND deleted_at IS NULL GROUP BY folder_id`, folderIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]int{}
+	for rows.Next() {
+		var id uuid.UUID
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
 // folderFile 是来源文件夹里的一个未删除文件。
 type folderFile struct {
 	FileID       uuid.UUID

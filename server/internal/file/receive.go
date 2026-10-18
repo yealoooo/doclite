@@ -52,6 +52,8 @@ const (
 	CodeInvalidImage     = "invalid_image"
 	CodeInvalidCover     = "invalid_cover"
 	CodeDuplicateContent = "duplicate_content"
+	// CodeFolderArchived 是文件夹已封存（catalog.SealedCheck 返回，这里只用来认它）。
+	CodeFolderArchived = "folder_archived"
 )
 
 func coverError(format string, args ...any) *httpx.Error {

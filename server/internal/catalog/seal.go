@@ -56,6 +56,7 @@ type SealedDetails struct {
 // SealedCheck：folderIDs 里有封存的文件夹时返回 409 `folder_archived`（what 是被挡住的操作，如"上传文件"），否则 nil。
 // 在调用方的事务里、锁住这些文件夹行之后调用（文件目录、上传用）。
 func SealedCheck(ctx context.Context, q db.Querier, what string, folderIDs ...uuid.UUID) error {
+	folderIDs = dedupKeepOrder(folderIDs)
 	if len(folderIDs) == 0 {
 		return nil
 	}

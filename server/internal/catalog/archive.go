@@ -1,11 +1,11 @@
 package catalog
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -23,12 +23,15 @@ import (
 //   - **件文件夹**：不是根、没有未删除的子文件夹、有 1–2000 个未删除文件、还不是别的未删除条目的来源；
 //   - folder_ids 1–500 个，每个是件文件夹（自己成一件）或上级文件夹（有未删除的子文件夹：它的直接子文件夹各成一件，
 //     它自己直接放的文件不算；根文件夹总是当上级文件夹）；展开后去重 ≤ 500 个文件夹；
-//   - 不合格的跳过并给原因：archived（已归档为某件，带那一件）、has_subfolders、empty、too_many_pages；
+//   - 不合格的跳过并给原因：archived（已归档为某件，带那一件）、has_subfolders、empty、too_many_pages、
+//     file_cataloged（里面有文件还在别的条目里——从修改中的文件夹移过来的，带那一件，要先重新归档那一件）；
+//   - 选中的文件夹当上级展开、而它自己直接放了文件时，loose_files 列出来（这些文件不归档，只是提示）；
+//   - 要建的件的页数合计 ≤ 50000（MaxArchivePages），超过 400（预览也是）；
 //   - dry_run 只返回预览（将新建的件：来源文件夹、题名、页数、件号、按模板算的档号——预览不查撞号），不写库；
 //     不带时一个事务建全部件，一件都建不出 409 `invalid_state`（details 即预览）；
 //   - 题名默认 = 文件夹名，titles {folder_id: 题名} 可改（只查格式，必填在锁定时查）；没给的著录项用设置里的 default；
-//   - 页 = 文件夹里未删除的文件按 sort_no、名称排，页号 1..n；文件已经在别的条目里（从修改中的文件夹移过来的）
-//     409 `file_cataloged`（预览也是）；新件 draft、sealed，件号按节点 max+1 依次领，档号照常生成（撞号留空）。
+//   - 页 = 文件夹里未删除的文件按 sort_no、名称排，页号 1..n；新件 draft、sealed，件号按节点 max+1 依次领，档号照常
+//     生成（撞号留空）。
 //
 // 加锁（requirements 3.6）：归类树锁（共享）→ 目标节点行（件号）→ 文件树锁（共享）→ 展开出来的文件夹行（id 升序，
 // 和文件目录的写操作锁同一行：封存检查和读文件清单互斥，见 seal.go）→ 锁后读文件夹的状态和文件清单 → 新条目的档号
@@ -38,8 +41,11 @@ import (
 // 审计 archive_item / archive（每件一条：节点、件号、档号、题名、著录、来源文件夹和路径、页数）；每页一条 file_logs
 // link。事件（提交后）：files.changed（来源文件夹、挂上的文件）→ folders.changed（来源文件夹）→ catalog.changed。
 
-// MaxArchiveFolders 是一次归档的 folder_ids 和展开后的文件夹数的上限。
-const MaxArchiveFolders = 500
+// MaxArchiveFolders 是一次归档的 folder_ids 和展开后的文件夹数的上限；MaxArchivePages 是一次要建的件的页数合计的上限。
+const (
+	MaxArchiveFolders = 500
+	MaxArchivePages   = 50000
+)
 
 // 跳过的原因。
 const (
@@ -47,6 +53,7 @@ const (
 	skipHasSubfolders = "has_subfolders"
 	skipEmpty         = "empty"
 	skipTooManyPages  = "too_many_pages"
+	skipFileCataloged = "file_cataloged"
 )
 
 // ArchiveInput 是 `POST /api/archive-categories/{id}/items:from-folders` 的输入。
@@ -82,8 +89,16 @@ type ArchiveSkip struct {
 	// PageCount、SubfolderCount 是文件夹里未删除的文件数、子文件夹数。
 	PageCount      int `json:"page_count"`
 	SubfolderCount int `json:"subfolder_count"`
-	// Item：reason 为 archived 时是已经归档成的那一件，否则为 null。
+	// Item：reason 为 archived 时是已经归档成的那一件，为 file_cataloged 时是文件还在的那一件，否则为 null。
 	Item *archivedAs `json:"item"`
+}
+
+// LooseFiles 是当上级展开的选中文件夹里直接放的文件（不归档，只提示）。
+type LooseFiles struct {
+	FolderID   uuid.UUID `json:"folder_id"`
+	FolderName string    `json:"folder_name"`
+	FolderPath string    `json:"folder_path"`
+	FileCount  int       `json:"file_count"`
 }
 
 // ArchiveResult 是归档的响应（预览 200，新建 201；一件都建不出时 409 的 details 也是它）。
@@ -92,6 +107,7 @@ type ArchiveResult struct {
 	DryRun     bool              `json:"dry_run"`
 	Items      []ArchivePlanItem `json:"items"`
 	Skipped    []ArchiveSkip     `json:"skipped"`
+	LooseFiles []LooseFiles      `json:"loose_files"`
 }
 
 // ArchiveFolders 把文件夹整个归档到节点 categoryID（dry_run 时只预览）。
@@ -132,7 +148,7 @@ func (s *Service) ArchiveFolders(ctx context.Context, operatorID, projectID, cat
 				return err
 			}
 		}
-		list, err := expandFolders(ctx, tx, projectID, selected)
+		list, parents, err := expandFolders(ctx, tx, projectID, selected)
 		if err != nil {
 			return err
 		}
@@ -160,19 +176,51 @@ func (s *Service) ArchiveFolders(ctx context.Context, operatorID, projectID, cat
 		if err != nil {
 			return err
 		}
-		out = &ArchiveResult{CategoryID: cat.ID, DryRun: in.DryRun, Items: []ArchivePlanItem{}, Skipped: []ArchiveSkip{}}
+		out = &ArchiveResult{CategoryID: cat.ID, DryRun: in.DryRun, Items: []ArchivePlanItem{}, Skipped: []ArchiveSkip{},
+			LooseFiles: []LooseFiles{}}
+		if out.LooseFiles, err = looseFiles(ctx, tx, parents); err != nil {
+			return err
+		}
+		// 合格的文件夹里的文件（就是页）；有文件还在别的条目里的跳过 file_cataloged。
+		var eligible []uuid.UUID
+		for _, f := range list {
+			if skipReason(states[f.ID]) == "" {
+				eligible = append(eligible, f.ID)
+			}
+		}
+		pageFiles, err := folderFiles(ctx, tx, eligible)
+		if err != nil {
+			return err
+		}
+		elsewhere, err := filesElsewhere(ctx, tx, pageFiles)
+		if err != nil {
+			return err
+		}
 		var cands []*folderNode
+		pages := 0
 		for _, f := range list {
 			fs := states[f.ID]
-			if skip := skipReason(fs); skip != "" {
+			skip := skipReason(fs)
+			msg := skipMessage(skip, fs)
+			item := fs.SourceOf
+			if e := elsewhere[f.ID]; skip == "" && e != nil {
+				skip, item = skipFileCataloged, &e.archivedAs
+				msg = fmt.Sprintf("里面的「%s」还在%s里（从修改中的文件夹移过来的），先重新归档那一件", e.FileName,
+					strings.TrimSpace(itemLabel(e.ItemNo, e.ArchiveNo)))
+			}
+			if skip != "" {
 				out.Skipped = append(out.Skipped, ArchiveSkip{FolderID: f.ID, FolderName: f.Name,
-					FolderPath: paths[f.ID], Reason: skip, Message: skipMessage(skip, fs), PageCount: fs.Files,
-					SubfolderCount: fs.Subfolders, Item: fs.SourceOf})
+					FolderPath: paths[f.ID], Reason: skip, Message: msg, PageCount: fs.Files,
+					SubfolderCount: fs.Subfolders, Item: item})
 				continue
 			}
 			cands = append(cands, f)
+			pages += fs.Files
 			out.Items = append(out.Items, ArchivePlanItem{FolderID: f.ID, FolderName: f.Name,
 				FolderPath: paths[f.ID], Title: f.Name, PageCount: fs.Files})
+		}
+		if pages > MaxArchivePages {
+			return httpx.Invalid("这次要归档 %d 件、合计 %d 页，一次最多 %d 页，请分几次归档", len(cands), pages, MaxArchivePages)
 		}
 
 		// 题名、著录（没给的用 default）。
@@ -201,18 +249,7 @@ func (s *Service) ArchiveFolders(ctx context.Context, operatorID, projectID, cat
 		}
 
 		// 件号、档号（预览按模板算，不查撞号）。
-		var pageFiles map[uuid.UUID][]folderFile
 		if len(cands) > 0 {
-			candIDs := make([]uuid.UUID, len(cands))
-			for i, c := range cands {
-				candIDs[i] = c.ID
-			}
-			if pageFiles, err = folderFiles(ctx, tx, candIDs); err != nil {
-				return err
-			}
-			if err := checkFilesFree(ctx, tx, pageFiles); err != nil {
-				return err
-			}
 			first, err := nextItemNo(ctx, tx, cat.ID)
 			if err != nil {
 				return err
@@ -247,11 +284,12 @@ func (s *Service) ArchiveFolders(ctx context.Context, operatorID, projectID, cat
 }
 
 // expandFolders 读选中的文件夹并展开：不存在、已删除、不在这个项目里的整体 404（details.ids）；有未删除子文件夹的
-// （和根文件夹）换成它的直接子文件夹。结果按选中的顺序、子文件夹按 sort_no、名称排，去重，≤ 500 个。
-func expandFolders(ctx context.Context, q db.Querier, projectID uuid.UUID, selected []uuid.UUID) ([]*folderNode, error) {
+// （和根文件夹）换成它的直接子文件夹。结果按选中的顺序、子文件夹按 sort_no、名称排，去重，≤ 500 个；parents 是当
+// 上级展开了的选中文件夹。
+func expandFolders(ctx context.Context, q db.Querier, projectID uuid.UUID, selected []uuid.UUID) (list, parents []*folderNode, err error) {
 	nodes, err := folderNodes(ctx, q, selected)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var missing []uuid.UUID
 	for _, id := range selected {
@@ -260,12 +298,12 @@ func expandFolders(ctx context.Context, q db.Querier, projectID uuid.UUID, selec
 		}
 	}
 	if len(missing) > 0 {
-		return nil, httpx.NewError(http.StatusNotFound, httpx.CodeNotFound,
+		return nil, nil, httpx.NewError(http.StatusNotFound, httpx.CodeNotFound,
 			fmt.Sprintf("有 %d 个文件夹不存在、已删除或不在这个项目里", len(missing))).WithDetails(map[string]any{"ids": missing})
 	}
 	children, err := liveChildren(ctx, q, selected)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var out []*folderNode
 	seen := map[uuid.UUID]bool{}
@@ -278,6 +316,7 @@ func expandFolders(ctx context.Context, q db.Querier, projectID uuid.UUID, selec
 	for _, id := range selected {
 		n := nodes[id]
 		if kids := children[id]; len(kids) > 0 || n.ParentID == nil {
+			parents = append(parents, n)
 			for _, k := range kids {
 				add(k)
 			}
@@ -286,7 +325,33 @@ func expandFolders(ctx context.Context, q db.Querier, projectID uuid.UUID, selec
 		add(n)
 	}
 	if len(out) > MaxArchiveFolders {
-		return nil, httpx.Invalid("一次最多归档 %d 个文件夹，展开子文件夹后有 %d 个，请分几次归档", MaxArchiveFolders, len(out))
+		return nil, nil, httpx.Invalid("一次最多归档 %d 个文件夹，展开子文件夹后有 %d 个，请分几次归档", MaxArchiveFolders, len(out))
+	}
+	return out, parents, nil
+}
+
+// looseFiles 是这些（当上级展开的）文件夹里直接放的未删除文件数，没有的不列。
+func looseFiles(ctx context.Context, q db.Querier, parents []*folderNode) ([]LooseFiles, error) {
+	out := []LooseFiles{}
+	if len(parents) == 0 {
+		return out, nil
+	}
+	ids := make([]uuid.UUID, len(parents))
+	for i, p := range parents {
+		ids[i] = p.ID
+	}
+	counts, err := liveFileCounts(ctx, q, ids)
+	if err != nil {
+		return nil, err
+	}
+	paths, err := folderPaths(ctx, q, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range parents {
+		if n := counts[p.ID]; n > 0 {
+			out = append(out, LooseFiles{FolderID: p.ID, FolderName: p.Name, FolderPath: paths[p.ID], FileCount: n})
+		}
 	}
 	return out, nil
 }
@@ -320,18 +385,44 @@ func skipMessage(reason string, s *folderState) string {
 	return ""
 }
 
-// checkFilesFree：要挂上的文件已经在别的条目里（从修改中的文件夹移过来的）409 `file_cataloged`。
-func checkFilesFree(ctx context.Context, q db.Querier, files map[uuid.UUID][]folderFile) error {
+// fileElsewhere 是文件夹里第一个还在别的条目里的文件和那一件。
+type fileElsewhere struct {
+	FileName string
+	archivedAs
+}
+
+// filesElsewhere 是这些文件夹里有文件还在别的条目里的（从修改中的文件夹移过来的）：文件夹 → 页序最前的那个文件。
+func filesElsewhere(ctx context.Context, q db.Querier, files map[uuid.UUID][]folderFile) (map[uuid.UUID]*fileElsewhere, error) {
+	out := map[uuid.UUID]*fileElsewhere{}
 	var ids []uuid.UUID
-	names := map[uuid.UUID]*pageFile{}
 	for _, fs := range files {
 		for _, f := range fs {
 			ids = append(ids, f.FileID)
-			names[f.FileID] = &pageFile{FileName: f.FileName}
 		}
 	}
-	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
-	return checkNotElsewhere(ctx, q, uuid.Nil, ids, names)
+	where, err := placementsOf(ctx, q, ids, uuid.Nil)
+	if err != nil || len(where) == 0 {
+		return out, err
+	}
+	var cats []uuid.UUID
+	for folderID, fs := range files {
+		for _, f := range fs {
+			if p := where[f.FileID]; p != nil {
+				out[folderID] = &fileElsewhere{FileName: f.FileName, archivedAs: archivedAs{ItemID: p.ItemID, ItemNo: p.ItemNo,
+					ArchiveNo: p.ArchiveNo, Title: p.Title, CategoryID: p.CategoryID}}
+				cats = append(cats, p.CategoryID)
+				break
+			}
+		}
+	}
+	names, err := categoryNames(ctx, q, cats)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range out {
+		e.CategoryNames = names[e.CategoryID]
+	}
+	return out, nil
 }
 
 // createArchived 写归档：条目、页、日志、审计、事件（锁和检查都已经做了）。

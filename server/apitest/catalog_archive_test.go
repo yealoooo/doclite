@@ -77,6 +77,8 @@ func TestCatalogArchive(t *testing.T) {
 	nested, _ := c.mkFolder(box, "有下级", "approved")
 	c.mkFolder(nested, "下级", "approved")
 	fc, _ := c.mkFolder(uuid.Nil, "件 C", "approved", "approved")
+	c.mkFile(box, "approved") // 盒子里直接放的两个文件：不归档，loose_files 提示
+	c.mkFile(box, "pending")
 	path := "/api/archive-categories/" + org.ID.String() + "/items:from-folders"
 	const prefix = "Z109-WS·2025-Y-BGS-"
 
@@ -92,8 +94,15 @@ func TestCatalogArchive(t *testing.T) {
 		"件 A:关于 A 的通知:"+prefix+"0001:3 件 B:件 B:"+prefix+"0002:1 件 C:件 C:"+prefix+"0003:2" ||
 		pv.Items[0].ItemID != nil || pv.Items[0].FolderPath != "AR 项目/盒 1/件 A" || len(pv.Skipped) != 2 ||
 		pv.Skipped[0].FolderID != empty || pv.Skipped[0].Reason != "empty" ||
-		pv.Skipped[1].FolderID != nested || pv.Skipped[1].Reason != "has_subfolders" || pv.Skipped[1].SubfolderCount != 1 {
+		pv.Skipped[1].FolderID != nested || pv.Skipped[1].Reason != "has_subfolders" || pv.Skipped[1].SubfolderCount != 1 ||
+		len(pv.LooseFiles) != 1 || pv.LooseFiles[0].FolderID != box || pv.LooseFiles[0].FileCount != 2 ||
+		pv.LooseFiles[0].FolderPath != "AR 项目/盒 1" {
 		t.Fatalf("预览：%v %+v", got, pv)
+	}
+	// 选中的是件文件夹本身（没有当上级展开）：loose_files 为空数组。
+	if one := Decode[archiveResult](admin.Post(path, map[string]any{"folder_ids": []uuid.UUID{fc}, "dry_run": true}).
+		Expect(http.StatusOK)); one.LooseFiles == nil || len(one.LooseFiles) != 0 {
+		t.Fatalf("loose_files：%+v", one.LooseFiles)
 	}
 	if n := QueryValue[int](c.Env, `SELECT count(*) FROM archive_items WHERE project_id = $1`, c.pid); n != 0 {
 		t.Fatalf("预览写了库：%d", n)
@@ -155,6 +164,27 @@ FROM f, users u WHERE u.username = 'admin'`, c.pid, big)
 	pv = Decode[archiveResult](admin.Post(path, map[string]any{"folder_ids": []uuid.UUID{big}, "dry_run": true}).Expect(http.StatusOK))
 	if len(pv.Items) != 0 || len(pv.Skipped) != 1 || pv.Skipped[0].Reason != "too_many_pages" || pv.Skipped[0].PageCount != 2001 {
 		t.Fatalf("超过 2000 页：%+v", pv)
+	}
+
+	// 一次要建的件合计超过 5 万页：400（预览也是）。大盒里 26 个件文件夹：1 + 25 × 2000 = 50001 页（直接写库）。
+	bigBox, _ := c.mkFolder(uuid.Nil, "大盒")
+	var parts []uuid.UUID
+	for i := range 26 {
+		f, _ := c.mkFolder(bigBox, "卷 "+string(rune('A'+i)))
+		parts = append(parts, f)
+	}
+	c.Exec(`WITH t AS (SELECT gen_random_uuid() AS fid, f.id AS folder_id, g
+  FROM unnest($2::uuid[]) WITH ORDINALITY AS f(id, i)
+  CROSS JOIN LATERAL generate_series(1, CASE WHEN f.i = 1 THEN 1 ELSE 2000 END) g),
+ins AS (INSERT INTO files (id) SELECT fid FROM t)
+INSERT INTO folder_files (id, project_id, folder_id, file_id, file_name, sort_no, created_by)
+SELECT gen_random_uuid(), $1, t.folder_id, t.fid, 'p' || t.g || '.jpg', t.g, u.id FROM t, users u WHERE u.username = 'admin'`,
+		c.pid, parts)
+	for _, dry := range []bool{true, false} {
+		if m := errOf(admin.Post(path, map[string]any{"folder_ids": []uuid.UUID{bigBox}, "dry_run": dry}).
+			ExpectError(http.StatusBadRequest, "invalid_input")).Message; !strings.Contains(m, "合计 50001 页") || !strings.Contains(m, "50000") {
+			t.Fatalf("页数上限：%s", m)
+		}
 	}
 
 	// 错误码：参数 400；文件夹不存在、别的项目的 404（details.ids）；节点不存在 404；根节点 409；题名不合法 400。
@@ -231,7 +261,8 @@ func TestCatalogSeal(t *testing.T) {
 			return admin.Post("/api/folder-files:move", map[string]any{"ids": []uuid.UUID{o1.FolderFileID}, "folder_id": fa})
 		}},
 		{"批量移出", func() *Response {
-			return admin.Post("/api/folder-files:move", map[string]any{"ids": []uuid.UUID{a1.FolderFileID}, "folder_id": other})
+			return admin.Post("/api/folder-files:move", map[string]any{"ids": []uuid.UUID{a1.FolderFileID, a2.FolderFileID},
+				"folder_id": other})
 		}},
 		{"复制进去", func() *Response { return admin.Post(ff(o1.FolderFileID)+"/copy", map[string]any{"folder_id": fa}) }},
 		{"在里面复制", func() *Response { return admin.Post(ff(a1.FolderFileID)+"/copy", map[string]any{}) }},
@@ -258,7 +289,7 @@ func TestCatalogSeal(t *testing.T) {
 		}
 		d := Decode[sealedError](r).Details
 		if d.FolderID != fa || d.ItemID != it.ID || d.ItemNo != 1 || d.Title != "件 A" || d.Locked || len(d.CategoryNames) != 5 ||
-			!slices.Contains(d.FolderIDs, fa) {
+			!slices.Equal(d.FolderIDs, []uuid.UUID{fa}) {
 			t.Errorf("%s 的 details：%+v", b.name, d)
 		}
 	}
@@ -358,11 +389,22 @@ func TestCatalogReseal(t *testing.T) {
 		t.Fatalf("对比：%+v", p)
 	}
 
-	// 从另一件（修改中）的文件夹移过来的文件还在那一件里：对比给 problem，重新归档 409 file_cataloged；归档别的文件夹也是。
+	// 从另一件（修改中）的文件夹移过来的文件还在那一件里：对比给 problem，重新归档 409 file_cataloged；归档别的
+	// 文件夹时跳过 file_cataloged（带那一件），一件都建不出 409 invalid_state，预览照常 200。
 	c.unseal(y.ID).Expect(http.StatusOK)
 	fz, _ := c.mkFolder(uuid.Nil, "件 Z")
 	c.moveFiles(fz, ys[0])
-	c.archive(org.ID, map[string]any{"folder_ids": []uuid.UUID{fz}}).ExpectError(http.StatusConflict, "file_cataloged")
+	var zr struct {
+		Details archiveResult `json:"details"`
+	}
+	c.archive(org.ID, map[string]any{"folder_ids": []uuid.UUID{fz}}).ExpectError(http.StatusConflict, "invalid_state").JSON(&zr)
+	zp := Decode[archiveResult](c.archive(org.ID, map[string]any{"folder_ids": []uuid.UUID{fz}, "dry_run": true}).Expect(http.StatusOK))
+	for _, r := range []archiveResult{zr.Details, zp} {
+		if len(r.Items) != 0 || len(r.Skipped) != 1 || r.Skipped[0].Reason != "file_cataloged" || r.Skipped[0].Item == nil ||
+			r.Skipped[0].Item.ItemID != y.ID || len(r.Skipped[0].Item.CategoryNames) != 5 {
+			t.Fatalf("file_cataloged 跳过：%+v", r)
+		}
+	}
 	c.moveFiles(fx, ys[0])
 	if p := preview(x.ID); p.Problem == nil || p.Problem.Code != "file_cataloged" || len(p.Problem.Items) != 1 || p.Problem.Items[0].ItemID != y.ID {
 		t.Fatalf("对比的 file_cataloged：%+v", p.Problem)

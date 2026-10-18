@@ -141,6 +141,14 @@ func (s *Service) Ingest(ctx context.Context, projectID, folderID, userID uuid.U
 		}
 		slot, err := s.folders.ClaimSlot(ctx, tx, projectID, folderID, u.FileName)
 		if err != nil {
+			// 文件夹刚被归档（封存）：ClaimSlot 已经锁住了文件夹行，锁内先看是不是断网重试（同一文件夹里 upload_name 和
+			// sha 都相同 → 200 返回已有文件），不是才报 folder_archived。重叠的重试请求在文件夹刚归档时仍得到 200。
+			if e, ok := httpx.AsError(err); ok && e.Code == CodeFolderArchived {
+				if r, rerr := s.retried(ctx, tx, folderID, u); rerr != nil || r != nil {
+					out = r
+					return rerr
+				}
+			}
 			return err
 		}
 		if err := s.storage.LockForSnapshot(ctx, tx, target.ProfileID); err != nil {
@@ -208,22 +216,27 @@ func colorOf(info imagehdr.Info) *string {
 // precheck 按顺序查重（预判和锁内复查都用它）：先看断网重试（同一文件夹里 upload_name 和 sha 都相同 → 返回已有文件），
 // 再看项目范围（当前版本 sha 相同 → 409 duplicate_content）。都没有时返回 nil, nil。
 func (s *Service) precheck(ctx context.Context, q db.Querier, projectID, folderID uuid.UUID, u *Upload) (*IngestResponse, error) {
-	ffID, err := findRetry(ctx, q, folderID, u.FileName, u.SHA256)
-	if err != nil {
-		return nil, err
-	}
-	if ffID != nil {
-		r, err := ingested(ctx, q, *ffID)
-		if err != nil {
-			return nil, err
-		}
-		r.Renamed = r.FileName != u.FileName
-		return r, nil
+	if r, err := s.retried(ctx, q, folderID, u); r != nil || err != nil {
+		return r, err
 	}
 	if err := s.FindDuplicate(ctx, q, projectID, u.SHA256, nil); err != nil {
 		return nil, err
 	}
 	return nil, nil
+}
+
+// retried 是断网重试的判断：同一文件夹里 upload_name 和 sha 都相同的已有文件（现在的信息），没有为 nil。
+func (s *Service) retried(ctx context.Context, q db.Querier, folderID uuid.UUID, u *Upload) (*IngestResponse, error) {
+	ffID, err := findRetry(ctx, q, folderID, u.FileName, u.SHA256)
+	if err != nil || ffID == nil {
+		return nil, err
+	}
+	r, err := ingested(ctx, q, *ffID)
+	if err != nil {
+		return nil, err
+	}
+	r.Renamed = r.FileName != u.FileName
+	return r, nil
 }
 
 // FindDuplicate：项目里未删除的文件当前版本的 sha 和 sha 相同时返回 409 duplicate_content（details 是那个文件的位置），
