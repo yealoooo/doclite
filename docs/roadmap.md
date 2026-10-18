@@ -334,18 +334,25 @@
 
 **已定**（requirements 2 节规则 3、4，5.5，5.9，9 节 2026-10-18、19；Mockup `doclite-project/doclite-catalog-redesign.html` v3.1）：只能整个文件夹归档，选盒子时每个直接子文件夹一件；归档后文件夹封存（可重扫）；要改走"解除封存 → 修改 → 重新归档"，绑定不断；条目只有未锁定 / 已锁定；归类全部操作只要 catalog。旧数据不管，开发库重建；演示数据精简到够功能测试。
 
-### [ ] M9-1 server：迁移 0004、归档和封存
+### [x] M9-1 server：迁移 0004、归档和封存（commit 0163a81、5814a8f）
+- **结果：** 全套测试通过（API 526 秒）；独立审查没有发现封存漏洞、死锁、状态表问题，提的 5 处小问题在 5814a8f 修好（folder_ids 去重、`file_cataloged` 改为跳过原因、断网重试先于封存检查、单次归档 ≤ 5 万页、`loose_files` 提示）。加锁做法写进 requirements 3.6。
+- **须知：** 迁移 0004 把旧的未删除条目软删除、移出页（任何库都能执行）；修改中的件的页可以在文件目录里删，重新归档时移出；选中的文件夹有子文件夹就按上级处理，自己直接放的文件不归档。
+- **遗留：** 客户端热文件夹往封存文件夹上传会得到 409 `folder_archived`（显示服务器的说明，按永久失败）；`files:check` 预检不报封存；`perf_test.go` 的造数据只改到满足新约束、没跑。
 - 迁移 0004（加 `source_folder_id`、`source_status`、解除封存的人 / 时间 / 原因；done → draft、CHECK 改 draft / locked）。
 - 新接口：`items:from-folders`（dry_run 预览）、`unseal`、`reseal-preview`、`reseal`；`DELETE` 即撤销归档；锁定前置加"不在修改中"、必填在锁定时查；解锁只要 catalog；批量锁定。去掉 `POST archive-categories/{id}/items`、`mark-done`、`back-to-draft`、`PUT archive-items/{id}/files`。
 - 文件目录的封存检查（409 `folder_archived`，覆盖 5.5 列的全部写操作，重扫、审核、改备注放行）；children 和 `GET folders/{id}` 带归档信息；导出预检 `source_modifying`；看板归档状态；事件（folders.changed 带来源文件夹）。
 - 测试：重写归类的 API 测试（归档预览和确认、跳过原因、封存挡住各写操作、解除和重新归档的对比、锁定解锁、权限表）；并发测试"同一文件夹同时归档和上传"。属于风险较高的服务端改动，合并前做一轮独立审查。
 
-### [ ] M9-2 web：归类页双栏、文件目录的封存提示
+### [x] M9-2 web：归类页双栏、文件目录的封存提示（commit 12e0d79、8c8b0e2）
+- **结果：** 按 Mockup v3.1 实现；和 Mockup 的差别：修改统一在 /files 做（归类页左栏只浏览）、可以归档到任何非根节点、件列表双击打开（单击勾选）。新加 `GET projects/{pid}/archive-items:modifying` 给"修改中 n 件"用。m9-catalog 截图 13/13，web build、release、客户端 make build 过。
+- **遗留：** smoke-flow 新流程没跑过客户端 `--smoke`；横条步骤编号 ①②③ 在 Windows 字体下要看一眼；1366 宽能用但偏挤（树的节点名会截断）。
 - /catalog 按 requirements 5.9 界面一节重写（左文件目录、右归档目录、归档预览、解除封存、重新归档对比、"修改中 n 件"）；去掉待归类池、页序条、按页挂接。
 - /files：封存和修改中的横条、按钮置灰、拖入时的说明；/review、看板、导出预检的文字跟着改（锁定、未归档、来源修改中）。
 - web build、release，客户端重新编译；改写归类的截图脚本（一个主流程即可），删掉不再适用的。
 
-### [ ] M9-3 开发库重建、精简演示数据
+### [ ] M9-3 开发库重建、精简演示数据（脚本 commit 80105b0；重建开发库待做）
+- **结果（脚本）：** `npm run seed` 一个脚本造全部：9 个演示账号和授权、DEMO-A 44 页（盒 001 17 页、盒 002 19 页、格式样本 8 个）、审核（通过 10、驳回 2、待审 5）、归类树、盒 001 前 3 件已归档（0001 已锁定）；DEMO-B 空。临时库上跑两次，第二次不重复。删掉 seed-demo、m3-demo、m4-demo、m1-files、m4-export；改了 m3-dashboard、m3-catalog-info、m1-organize。
+- **遗留：** m2-viewer、m2-viewer-lan、m2-accept 依赖旧的手工数据（200 MB TIFF 等），新库上跑不了；m1-accept 可能因没有 demo_reviewer 进不了的项目而失败。
 - 用户同意删掉重建 `doclite_dev`（只动这个库；动手前告诉用户，用户的 9080 要停一下再起）。
 - 一个脚本造全部演示数据（取代 seed:demo + m3/m4 演示 + seed:files 的大数据），总共约 40 页：
   - 账号同现在（admin + demo_*），授权全部在脚本里做（不再手工补 demo_reviewer2 等）；
@@ -355,5 +362,6 @@
   - DEMO-B：空项目（权限演示）。
 - 不再造 2000 页的文件夹、200 MB 的 TIFF、1200 件的归类（不做性能测试）。README"可以拿来试的数据"和"演示账号"按新数据改。
 
-### [ ] M9-4 验收清单
+### [x] M9-4 验收清单（commit 3774c76）
+- **结果：** 第 10 节重写为 CAT-01…CAT-26，其他节的挂接、定稿、旧数据跟着改；共 183 条，结果表同步。数字是按清单推的，没在客户端里点过。
 - `docs/acceptance-checklist.md` 归类一节按新流程重写（归档、封存挡住整理、解除封存、重新归档、锁定、导出），其他节里"挂接""定稿"的说法跟着改，数据改用 M9-3 的。
