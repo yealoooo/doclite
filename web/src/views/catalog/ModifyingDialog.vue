@@ -16,6 +16,8 @@ const open = defineModel<boolean>('open', { required: true })
 
 const props = defineProps<{
   items: ModifyingItem[]
+  /** 真实件数（清单最多 500 件）。 */
+  total: number
   itemNoWidth: number
   canFiles: boolean
 }>()
@@ -35,10 +37,12 @@ function label(it: ModifyingItem) {
 
 <template>
   <Dialog v-model:open="open">
-    <DialogContent class="sm:max-w-3xl" data-testid="modifying-dialog" :data-count="props.items.length">
+    <DialogContent class="sm:max-w-3xl" data-testid="modifying-dialog" :data-count="props.total">
       <DialogHeader>
-        <DialogTitle>修改中 {{ props.items.length }} 件</DialogTitle>
-        <DialogDescription>这些件的来源文件夹已解除封存，改完要重新归档，否则不能锁定、导出。</DialogDescription>
+        <DialogTitle>修改中 {{ props.total }} 件</DialogTitle>
+        <DialogDescription>
+          这些件的来源文件夹已解除封存，改完要重新归档，否则不能锁定、导出。<template v-if="props.total > props.items.length">这里列出最近解除的 {{ props.items.length }} 件。</template>
+        </DialogDescription>
       </DialogHeader>
       <div class="max-h-[55vh] overflow-y-auto">
         <table class="w-full border-collapse text-[13px]">
@@ -51,7 +55,7 @@ function label(it: ModifyingItem) {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="it in props.items" :key="it.id" class="border-b align-top" data-testid="modifying-row" :data-item-id="it.id">
+            <tr v-for="it in props.items" :key="it.item_id" class="border-b align-top" data-testid="modifying-row" :data-item-id="it.item_id">
               <td class="px-2 py-1.5">
                 <button type="button" class="text-left hover:underline" :title="[...it.category_names, it.archive_no ?? ''].join(' / ')" @click="emit('openItem', it)">
                   <span class="font-mono text-xs font-medium">{{ label(it) }}</span>
@@ -60,7 +64,6 @@ function label(it: ModifyingItem) {
               </td>
               <td class="max-w-52 px-2 py-1.5">
                 <span class="block truncate" :title="it.source_folder_path">{{ it.source_folder_name }}</span>
-                <span v-if="it.source_folder_deleted" class="text-[11px] text-destructive">文件夹已删除</span>
               </td>
               <td class="px-2 py-1.5 text-xs">
                 {{ it.unsealed_by_name ?? '—' }} {{ formatDateTime(it.unsealed_at) }}
@@ -68,7 +71,7 @@ function label(it: ModifyingItem) {
               </td>
               <td class="px-2 py-1.5">
                 <div class="flex flex-wrap justify-end gap-1">
-                  <Button v-if="props.canFiles && !it.source_folder_deleted" size="xs" variant="outline" @click="emit('openFiles', it.source_folder_id)">
+                  <Button v-if="props.canFiles" size="xs" variant="outline" @click="emit('openFiles', it.source_folder_id)">
                     <ExternalLinkIcon />去修改
                   </Button>
                   <Button size="xs" class="bg-orange-600 text-white hover:bg-orange-700" data-testid="modifying-reseal" @click="emit('reseal', it)">

@@ -27,6 +27,7 @@
 // 11. m9-batch-lock：回到列表，勾选另外 3 件批量锁定 → 4 件都已锁定。
 // 12. m9-catalog-1366、m9-catalog-1920：两种宽度下打开一件看布局（截图人工看）。
 
+import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 
 import { apiLogin, stamp, uploadPage } from '../lib/m3-demo.mjs'
@@ -48,6 +49,14 @@ const SUBS = [
   ['关于调整值班安排的通知', 2],
   ['2025年第一季度会议纪要', 3],
 ]
+
+/** 流程中途补截一张（和清单的截图放在同一个目录：命令行的 --out，没有时用 OUT）。 */
+async function extraShot(page, name) {
+  const i = process.argv.indexOf('--out')
+  const dir = path.resolve(i > 0 ? process.argv[i + 1] : OUT)
+  mkdirSync(dir, { recursive: true })
+  await page.screenshot({ path: path.join(dir, `${name}.png`) })
+}
 
 function assert(cond, message) {
   if (!cond) throw new Error(`断言失败：${message}`)
@@ -286,7 +295,7 @@ export default {
         assert(toast.includes('已归档为') && toast.includes('去归类页查看'), `提示应是 server 的说明并带"去归类页查看"：${toast}`)
         console.log(`  页面提示：${toast.slice(0, 60)}…`)
         await sleep(800)
-        await page.screenshot({ path: path.resolve(OUT, 'm9-files-archived-error.png') })
+        await extraShot(page, 'm9-files-archived-error')
         // 打开封存的文件夹：横条、按钮置灰。
         await openFilesPage(page, ctx.subs[0].id)
         const b = await bannerState(page, '[data-testid=files-page]')
@@ -326,7 +335,7 @@ export default {
         await page.waitForSelector('[data-testid=modifying-chip][data-count="1"]', { timeout: 15000 })
         const b = await bannerState(page)
         assert(b.text.includes('漏扫了页') && b.text.includes('重新归档'), `修改中的横条不对：${b.text}`)
-        await page.screenshot({ path: path.resolve(OUT, 'm9-catalog-modifying.png') })
+        await extraShot(page, 'm9-catalog-modifying')
         console.log('  已解除封存：左栏橙色横条（三步进度），顶部"修改中 1 件"（另存 m9-catalog-modifying.png）')
       },
     },

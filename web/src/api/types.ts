@@ -1267,6 +1267,32 @@ export interface ArchiveResult {
   loose_files?: { folder_id: string; folder_name: string; folder_path: string; file_count: number }[]
 }
 
+/** 项目里一件修改中的条目（`GET /api/projects/{pid}/archive-items:modifying`，M9-2）。 */
+export interface ModifyingItem {
+  item_id: string
+  item_no: number
+  archive_no: string | null
+  title: string
+  category_id: string
+  /** 所在节点的名称链（不含根）。 */
+  category_names: string[]
+  source_folder_id: string
+  source_folder_name: string
+  /** 从项目根起用 / 连接。 */
+  source_folder_path: string
+  unsealed_by: string | null
+  unsealed_by_name: string | null
+  unsealed_at: string | null
+  unseal_reason: string | null
+  row_version: number
+}
+
+/** `GET /api/projects/{pid}/archive-items:modifying`：最多 500 件（按解除封存的时间倒序），total 是真实总数。 */
+export interface ModifyingList {
+  items: ModifyingItem[]
+  total: number
+}
+
 /** 重新归档对比里的一页（added 是在现在的第几页，removed 是原来的第几页）。 */
 export interface ResealPage {
   file_id: string

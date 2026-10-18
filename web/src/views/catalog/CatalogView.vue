@@ -10,7 +10,7 @@
 //   "‹ 返回"回到列表）。根下直接放的件单列一行。
 // - **解除封存**（components/catalog/UnsealDialog）、**重新归档**（ResealDialog，先给对比）从左栏横条、件详情、
 //   "修改中 n 件"清单打开。
-// - **不让人忘**：顶部常驻"✎ 修改中 n 件"（modifying.ts 走一遍归类树凑出来——server 没有这个接口，见那个文件），
+// - **不让人忘**：顶部常驻"✎ 修改中 n 件"（modifying.ts，`GET archive-items:modifying`），
 //   点开列出件、文件夹、谁、原因（ModifyingDialog）。
 // - 导出入口（M4-5）：节点（工具栏、右键、节点的空白页）和件详情上的"导出"，带着范围跳到 /export；只有 export 菜单的人看得到。
 // - **地址栏**：`?folder=<左栏的文件夹>&category=<节点>&item=<件>`。
@@ -19,10 +19,10 @@
 // - **实时**（useProjectStream，去抖：最后一条事件后 300 ms、最多等 1 秒；同时最多跑一轮）：
 //   - `catalog.changed {category_ids?, item_ids?}`：树按节点刷新它自己和祖先；item_ids 非空时当前节点在 category_ids 里或
 //     列表里有这些件就重取列表，打开的件在里面就重取详情；空数组只有节点变了；没带时把 category_ids 当子树的根。
-//     顺带重算"修改中 n 件"。
 //   - `files.changed`：打开的件的页在里面就重取详情；列表里有页的件可能变了（"n 待审"）；左栏按 folder_ids 刷新。
 //   - `folders.changed`：左栏（归档状态、名字、文件夹没了）；打开的件的来源路径可能变了。
 //   - `resync`、断线重连：整体刷新。
+//   catalog.changed、folders.changed 之后重取"修改中 n 件"（modifying.ts，专门的接口）。
 import {
   ArrowRightIcon,
   ArrowRightLeftIcon,
@@ -173,6 +173,7 @@ async function resetForProject(p: MyProject) {
   selection.clear()
   blockedIds.value = new Set()
   modifyingItems.value = []
+  modifyingTotal.value = 0
   treeState.value = 'loading'
   void loadSettings()
   try {
@@ -636,6 +637,8 @@ function openFiles(folderId: string) {
 
 // "修改中 n 件"
 const modifyingItems = ref<ModifyingItem[]>([])
+/** 修改中的真实件数（清单最多 500 件）。 */
+const modifyingTotal = ref(0)
 const modifyingOpen = ref(false)
 let modifyingSeq = 0
 async function loadModifying() {
@@ -644,18 +647,21 @@ async function loadModifying() {
   const my = ++modifyingSeq
   try {
     const list = await loadModifyingItems(pid)
-    if (my === modifyingSeq && project.currentId === pid) modifyingItems.value = list
+    if (my === modifyingSeq && project.currentId === pid) {
+      modifyingItems.value = list.items
+      modifyingTotal.value = list.total
+    }
   } catch {
     // 取不到就保留上一次的。
   }
 }
 function onModifyingOpenItem(it: ModifyingItem) {
   modifyingOpen.value = false
-  void go(it.category_id, it.id)
+  void go(it.category_id, it.item_id)
 }
 function onModifyingReseal(it: ModifyingItem) {
   const node = it.category_names[it.category_names.length - 1]
-  askReseal(it.id, node ? `${node} ${formatItemNo(it.item_no, itemNoWidth.value)}` : `第 ${it.item_no} 件`)
+  askReseal(it.item_id, node ? `${node} ${formatItemNo(it.item_no, itemNoWidth.value)}` : `第 ${it.item_no} 件`)
 }
 
 // ---------- 有未保存的修改时先确认 ----------
@@ -1054,6 +1060,8 @@ async function applyOnce() {
     detailQueued = true
     if (detailRef.value) tasks.push(detailRef.value.refresh())
   }
+  // "修改中 n 件"：解除封存、重新归档、撤销归档都发 folders.changed 和 catalog.changed。
+  if (catalog || folders) void loadModifying()
   if (catalog) {
     tasks.push(
       tree.refreshFor(cats).then(() => {
@@ -1061,7 +1069,6 @@ async function applyOnce() {
         if (tree.pathText(own) !== pathBefore) return detailRef.value?.refresh()
       }),
     )
-    void loadModifying()
   }
   if (fileIds.size) images.invalidate(fileIds)
 
@@ -1205,7 +1212,7 @@ const templateError = computed(() => settings.value?.archive_no_template_error ?
     :data-list="listState"
     :data-category-id="categoryQuery ?? undefined"
     :data-dirty="detailDirty ? 'true' : undefined"
-    :data-modifying="modifyingItems.length"
+    :data-modifying="modifyingTotal"
   >
     <header class="flex h-12 shrink-0 items-center gap-3 border-b px-4">
       <h1 class="shrink-0 text-base font-semibold tracking-tight text-foreground">归类</h1>
@@ -1216,15 +1223,15 @@ const templateError = computed(() => settings.value?.archive_no_template_error ?
         data-testid="catalog-template"
       >{{ settings.archive_no_template }}</span>
       <button
-        v-if="modifyingItems.length"
+        v-if="modifyingTotal"
         type="button"
         class="flex shrink-0 items-center gap-1 rounded-full border border-orange-300 bg-orange-50 px-2.5 py-0.5 text-xs text-orange-700 hover:bg-orange-100"
         title="点开看是哪几件"
         data-testid="modifying-chip"
-        :data-count="modifyingItems.length"
+        :data-count="modifyingTotal"
         @click="modifyingOpen = true"
       >
-        <PencilLineIcon class="size-3.5" />修改中 {{ modifyingItems.length }} 件，改完记得重新归档 ›
+        <PencilLineIcon class="size-3.5" />修改中 {{ modifyingTotal }} 件，改完记得重新归档 ›
       </button>
       <div class="flex-1" />
       <span
@@ -1572,6 +1579,7 @@ const templateError = computed(() => settings.value?.archive_no_template_error ?
     <ModifyingDialog
       v-model:open="modifyingOpen"
       :items="modifyingItems"
+      :total="modifyingTotal"
       :item-no-width="itemNoWidth"
       :can-files="canFiles"
       @open-files="openFiles"

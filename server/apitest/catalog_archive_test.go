@@ -3,6 +3,7 @@ package apitest
 import (
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -497,4 +498,81 @@ type resealPreview struct {
 			ItemID uuid.UUID `json:"item_id"`
 		} `json:"items"`
 	} `json:"problem"`
+}
+
+// TestCatalogModifying：项目里修改中的件（GET archive-items:modifying，M9-2）：没有时空清单；解除封存后列出（名称链、
+// 来源路径、谁、原因、row_version），按解除封存的时间倒序；重新归档、撤销归档后不再列出；别的项目的不列；进不了项目 403。
+func TestCatalogModifying(t *testing.T) {
+	t.Parallel()
+	c := newCatalogEnv(t, "MD")
+	_, _, _, _, org := c.mkChain()
+	path := "/api/projects/" + c.pid.String() + "/archive-items:modifying"
+	type modItem struct {
+		ItemID           uuid.UUID `json:"item_id"`
+		ItemNo           int       `json:"item_no"`
+		ArchiveNo        *string   `json:"archive_no"`
+		Title            string    `json:"title"`
+		CategoryID       uuid.UUID `json:"category_id"`
+		CategoryNames    []string  `json:"category_names"`
+		SourceFolderID   uuid.UUID `json:"source_folder_id"`
+		SourceFolderName string    `json:"source_folder_name"`
+		SourceFolderPath string    `json:"source_folder_path"`
+		UnsealedBy       *string   `json:"unsealed_by"`
+		UnsealedByName   *string   `json:"unsealed_by_name"`
+		UnsealedAt       *string   `json:"unsealed_at"`
+		UnsealReason     *string   `json:"unseal_reason"`
+		RowVersion       int       `json:"row_version"`
+	}
+	type modList struct {
+		Items []modItem `json:"items"`
+		Total int       `json:"total"`
+	}
+	list := func() modList {
+		t.Helper()
+		return Decode[modList](c.admin.Get(path).Expect(http.StatusOK))
+	}
+
+	// 没有修改中的：空清单（items 是 [] 不是 null）。
+	x := c.mkItem(org.ID, map[string]any{"title": "甲"})
+	y := c.mkItem(org.ID, map[string]any{"title": "乙"})
+	if r := c.admin.Get(path).Expect(http.StatusOK); !strings.Contains(string(r.Body), `"items":[]`) || list().Total != 0 {
+		t.Fatalf("没有修改中的：%s", r.Body)
+	}
+
+	// 解除封存两件（x 带原因），后解除的在前。
+	c.admin.Post("/api/archive-items/"+x.ID.String()+"/unseal", map[string]any{"row_version": x.RowVersion, "reason": "漏扫"}).Expect(http.StatusOK)
+	c.unseal(y.ID).Expect(http.StatusOK)
+	got := list()
+	if got.Total != 2 || len(got.Items) != 2 || got.Items[0].ItemID != y.ID || got.Items[1].ItemID != x.ID {
+		t.Fatalf("两件修改中：%+v", got)
+	}
+	m := got.Items[1]
+	xi := c.item(x.ID)
+	if m.ItemNo != 1 || str(m.ArchiveNo) != "Z109-WS·2025-Y-BGS-0001" || m.Title != "甲" || m.CategoryID != org.ID ||
+		strings.Join(m.CategoryNames, "/") != "全宗/文书/2025 年/永久/办公室" || m.SourceFolderName != "件 001" ||
+		!strings.HasSuffix(m.SourceFolderPath, "/件 001") || str(m.UnsealReason) != "漏扫" || m.UnsealedByName == nil ||
+		m.UnsealedAt == nil || m.UnsealedBy == nil || m.RowVersion != xi.RowVersion {
+		t.Fatalf("修改中的件：%+v", m)
+	}
+
+	// 重新归档、撤销归档后不再列出。
+	c.reseal(x.ID).Expect(http.StatusOK)
+	c.admin.Delete("/api/archive-items/" + y.ID.String() + "?row_version=" + strconv.Itoa(c.item(y.ID).RowVersion)).Expect(http.StatusNoContent)
+	if got := list(); got.Total != 0 || len(got.Items) != 0 {
+		t.Fatalf("重新归档、撤销归档之后：%+v", got)
+	}
+
+	// 别的项目的不列；进不了项目 403。
+	d := c.CreateProject("ME")
+	other := &catalogEnv{Env: c.Env, t: t, pid: d.ID, rootID: d.CategoryRootID, folder: d.RootFolderID, adminID: c.adminID, admin: c.admin}
+	_, _, _, _, org2 := other.mkChain()
+	z := other.mkItem(org2.ID, nil)
+	other.unseal(z.ID).Expect(http.StatusOK)
+	if got := list(); got.Total != 0 {
+		t.Fatalf("别的项目的修改中的件不该列出：%+v", got)
+	}
+	cat := c.As("cataloger")
+	cat.Get(path).ExpectError(http.StatusForbidden, "forbidden")
+	c.GrantProject(c.pid, c.PersonaID("cataloger"))
+	cat.Get(path).Expect(http.StatusOK)
 }

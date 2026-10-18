@@ -327,3 +327,31 @@ ORDER BY t.i`, folderIDs)
 		return s, err
 	})
 }
+
+// listModifying 读项目里修改中（source_status = modifying）的未删除条目，按解除封存的时间倒序，最多 limit 个；
+// 第二个返回值是真实总数。
+func listModifying(ctx context.Context, q db.Querier, projectID uuid.UUID, limit int) ([]ModifyingItem, int, error) {
+	rows, err := q.Query(ctx, `SELECT a.id, a.item_no, a.archive_no, a.title, a.category_id, a.source_folder_id, sf.folder_name,
+  a.unsealed_by, u.display_name, a.unsealed_at, a.unseal_reason, a.row_version, count(*) OVER ()
+FROM archive_items a
+JOIN folders sf ON sf.id = a.source_folder_id
+LEFT JOIN users u ON u.id = a.unsealed_by
+WHERE a.project_id = $1 AND a.deleted_at IS NULL AND a.source_status = 'modifying'
+ORDER BY a.unsealed_at DESC NULLS LAST, a.id
+LIMIT $2`, projectID, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []ModifyingItem{}
+	total := 0
+	for rows.Next() {
+		var m ModifyingItem
+		if err := rows.Scan(&m.ItemID, &m.ItemNo, &m.ArchiveNo, &m.Title, &m.CategoryID, &m.SourceFolderID, &m.SourceFolderName,
+			&m.UnsealedBy, &m.UnsealedByName, &m.UnsealedAt, &m.UnsealReason, &m.RowVersion, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, m)
+	}
+	return out, total, rows.Err()
+}

@@ -42,6 +42,7 @@ import (
 //	POST   /api/archive-items/{id}/reseal  {row_version}                → 200 Item（重新归档）
 //	POST   /api/projects/{pid}/archive-items:lock  {item_ids}           → 200 LockResult
 //	POST   /api/projects/{pid}/archive-items:renumber  {category_id?}   → 200 RenumberResult（可以没有请求体）
+//	GET    /api/projects/{pid}/archive-items:modifying                  → 200 ModifyingList（修改中的件，≤ 500 件）
 //
 // 归类的全部操作（含解锁）只要 catalog + 能进项目（用户 2026-10-19）。
 type Handler struct {
@@ -81,6 +82,7 @@ func (h *Handler) Routes(r *httpx.Router, g *auth.Gate) {
 
 	r.Handle("POST /api/projects/{pid}/archive-items:lock", g.InProject(cat, inProject), h.lockItems)
 	r.Handle("POST /api/projects/{pid}/archive-items:renumber", g.InProject(cat, inProject), h.renumber)
+	r.Handle("GET /api/projects/{pid}/archive-items:modifying", g.InProject(cat, inProject), h.modifying)
 }
 
 func (h *Handler) categoryProject(r *http.Request) (uuid.UUID, error) {
@@ -393,6 +395,15 @@ func (h *Handler) unseal(w http.ResponseWriter, r *http.Request) error {
 		return errMissingRowVersion
 	}
 	out, err := h.svc.Unseal(r.Context(), auth.Current(r.Context()).UserID, id, *req.RowVersion, req.Reason)
+	if err != nil {
+		return err
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+	return nil
+}
+
+func (h *Handler) modifying(w http.ResponseWriter, r *http.Request) error {
+	out, err := h.svc.Modifying(r.Context(), auth.ProjectID(r.Context()))
 	if err != nil {
 		return err
 	}

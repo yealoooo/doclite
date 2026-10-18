@@ -22,6 +22,7 @@ import type {
   CatalogSummary,
   FileCatalog,
   LockItemsResult,
+  ModifyingList,
   RenumberResult,
   ResealPreview,
   UpdateArchiveItemBody,
@@ -209,6 +210,11 @@ export function lockArchiveItems(projectId: string, itemIds: string[], handle?: 
     body: { item_ids: itemIds },
     handle,
   })
+}
+
+/** 项目里修改中的件（M9-2，归类页顶部"修改中 n 件"）：最多 500 件，按解除封存的时间倒序；`total` 是真实总数。 */
+export function listModifyingItems(projectId: string, handle?: Handle) {
+  return request<ModifyingList>(`/api/projects/${projectId}/archive-items:modifying`, { handle })
 }
 
 /**

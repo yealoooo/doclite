@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -440,4 +441,65 @@ func (s *Service) Reseal(ctx context.Context, operatorID, id uuid.UUID, rowVersi
 		return nil, err
 	}
 	return out, nil
+}
+
+// MaxModifyingItems 是"修改中的件"一次最多返回多少件。
+const MaxModifyingItems = 500
+
+// ModifyingItem 是项目里一件修改中的条目（归类页顶部"修改中 n 件"的清单，M9-2）。
+type ModifyingItem struct {
+	ItemID     uuid.UUID `json:"item_id"`
+	ItemNo     int       `json:"item_no"`
+	ArchiveNo  *string   `json:"archive_no"`
+	Title      string    `json:"title"`
+	CategoryID uuid.UUID `json:"category_id"`
+	// CategoryNames 是所在节点的名称链（不含根）。
+	CategoryNames    []string  `json:"category_names"`
+	SourceFolderID   uuid.UUID `json:"source_folder_id"`
+	SourceFolderName string    `json:"source_folder_name"`
+	// SourceFolderPath 从项目根文件夹起用 / 连接。
+	SourceFolderPath string     `json:"source_folder_path"`
+	UnsealedBy       *uuid.UUID `json:"unsealed_by"`
+	UnsealedByName   *string    `json:"unsealed_by_name"`
+	UnsealedAt       *time.Time `json:"unsealed_at"`
+	UnsealReason     *string    `json:"unseal_reason"`
+	RowVersion       int        `json:"row_version"`
+}
+
+// ModifyingList 是 `GET /api/projects/{pid}/archive-items:modifying` 的响应：最多 500 件（按解除封存的时间倒序），
+// total 是真实总数。
+type ModifyingList struct {
+	Items []ModifyingItem `json:"items"`
+	Total int             `json:"total"`
+}
+
+// Modifying 列出项目里修改中的条目。
+func (s *Service) Modifying(ctx context.Context, projectID uuid.UUID) (*ModifyingList, error) {
+	var out *ModifyingList
+	err := readSnapshot(ctx, s.pool, func(tx pgx.Tx) error {
+		items, total, err := listModifying(ctx, tx, projectID, MaxModifyingItems)
+		if err != nil {
+			return err
+		}
+		cats := make([]uuid.UUID, len(items))
+		folders := make([]uuid.UUID, len(items))
+		for i, m := range items {
+			cats[i], folders[i] = m.CategoryID, m.SourceFolderID
+		}
+		names, err := categoryNames(ctx, tx, cats)
+		if err != nil {
+			return err
+		}
+		paths, err := folderPaths(ctx, tx, folders)
+		if err != nil {
+			return err
+		}
+		for i := range items {
+			items[i].CategoryNames = names[items[i].CategoryID]
+			items[i].SourceFolderPath = paths[items[i].SourceFolderID]
+		}
+		out = &ModifyingList{Items: items, Total: total}
+		return nil
+	})
+	return out, err
 }

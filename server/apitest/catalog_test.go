@@ -37,6 +37,7 @@ func TestPermsCatalog(t *testing.T) {
 	POST   /api/archive-items/{id}/reseal                Y      Y         Y           -             -        -          -
 	POST   /api/projects/{pid}/archive-items:lock        Y      Y         Y           -             -        -          -
 	POST   /api/projects/{pid}/archive-items:renumber    Y      Y         Y           -             -        -          -
+	GET    /api/projects/{pid}/archive-items:modifying   Y      Y         Y           -             -        -          -
 	`)
 
 	// 去掉的接口：405 / 404（不再有新建空条目、按页挂接、标记完成、退回草稿）。
