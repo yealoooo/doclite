@@ -15,6 +15,8 @@
 | `tiff-lzw-rgb.tif` | LZW，8 位 RGB | m1-accept、m1-organize |
 | `tiff-g4-1bit.tif` | CCITT G4，1 位 | m1-accept、m1-organize |
 
+`npm run seed`（`scripts/seed.mjs`，M9-3）把上表 8 个原样（不加注释）传进 DEMO-A 的「格式样本」文件夹。
+
 `encoding/` 是上传时被拒的罕见编码（从 server 的 `internal/platform/imagehdr/testdata/encoding` 复制）：`reject-jpeg-arith.jpg`（算术编码的 JPEG）、`reject-tiff-jpeg2000.tif`（JPEG 2000 压缩的 TIFF），m7-audit 用来看上传面板里服务器给的提示。
 
 脚本要新的样本时从 server 那边复制过来，补进上表。

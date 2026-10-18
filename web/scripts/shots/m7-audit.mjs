@@ -3,7 +3,7 @@
 //   INIT_ADMIN_PASSWORD=admin123456 npm run screenshots -- --spec scripts/shots/m7-audit.mjs --base <前端地址>
 //
 // 前端地址是 vite preview 或 dev（/api 代理到 server）。脚本在页面之外调接口时也走这个地址。
-// 数据：seed:demo 的 DEMO-A，库里已有几百条以上的审计（截图脚本跑过一遍就有）。脚本先用 admin 在 DEMO-A 根目录下
+// 数据：npm run seed 的 DEMO-A，库里已有几百条以上的审计（截图脚本跑过一遍就有）。脚本先用 admin 在 DEMO-A 根目录下
 // 建一个"截图验证 M7-3 审计 <时间>"文件夹、改备注、再删掉（留下 3 条审计：新建、修改、删除；文件夹是软删除）。
 //
 // 断言（失败时这一张算失败，脚本退出码 1）：
@@ -71,7 +71,7 @@ function context(page) {
     const me = await api(origin, 'POST', '/api/auth/login', { username: admin, password: adminPassword })
     const projects = await api(origin, 'GET', '/api/projects')
     const project = projects.find((p) => p.project_code === PROJECT)
-    if (!project) throw new Error(`找不到项目 ${PROJECT}，先跑 seed:demo`)
+    if (!project) throw new Error(`找不到项目 ${PROJECT}，先跑 npm run seed`)
     const name = `截图验证 M7-3 审计 ${stamp()}`
     const folder = await api(origin, 'POST', '/api/folders', { parent_id: project.root_folder_id, folder_name: name })
     await api(origin, 'PATCH', `/api/folders/${folder.id}`, { remark: '审计页截图：改了备注' })

@@ -17,7 +17,7 @@
 
 **最简单的用法**：`cd server && make run`（编译并运行 server，Ctrl+C 退出）；另开一个终端 `cd client && make run`（编译并运行客户端，服务器地址填 `http://127.0.0.1:9080`）。只编译不运行用 `make build`。下面是分开的写法和说明。
 
-**交付只有客户端**（界面在客户端里，不提供网页服务和浏览器访问）。在这台 Mac 上试就是两样：server（9080，只提供接口，连远程服务器上的 `doclite_dev`，已经有演示账号和演示数据）和客户端。PostgreSQL 在远程服务器上，S3（SeaweedFS）在本机 Docker 里（Docker Desktop 开着就行，见[本机开发](#本机开发)）；`server/.env` 已经配好（不要改里面的 `MASTER_KEY`）。数据库在远程，翻页等操作比本机慢一些。
+**交付只有客户端**（界面在客户端里，不提供网页服务和浏览器访问）。在这台 Mac 上试就是两样：server（9080，只提供接口，连远程服务器上的 `doclite_dev`，已经有 `npm run seed` 建的演示账号和演示数据，重建见[演示数据和重建开发库](#演示数据和重建开发库)）和客户端。PostgreSQL 在远程服务器上，S3（SeaweedFS）在本机 Docker 里（Docker Desktop 开着就行，见[本机开发](#本机开发)）；`server/.env` 已经配好（不要改里面的 `MASTER_KEY`）。数据库在远程，翻页等操作比本机慢一些。
 
 1. **server**（要在 `server/` 下运行，它读当前目录的 `.env`；启动时自动执行迁移）：
 
@@ -41,19 +41,20 @@
 
 **账号**：`admin` / `admin123456`（系统管理员，什么都能做）；演示账号的密码都是 `demo123456`，常用的有 `demo_scanner`（扫描上传、重扫）、`demo_manager`（审核分配、看板、导出）、`demo_reviewer`（审核）、`demo_cataloger`（归类），全部见[演示账号](#演示账号)。
 
-**可以拿来试的数据**（都在项目 DEMO-A；会改东西的操作最好在自己新建的文件夹里做）：
+**可以拿来试的数据**（`npm run seed` 建的，都在项目 DEMO-A，一共 44 页；DEMO-B 是空项目。会改东西的操作随便试，数据不够了就[重建](#演示数据和重建开发库)）：
 
 | 想试 | 用哪里 |
 |---|---|
-| 上传 | 文件目录里新建一个文件夹，用"上传文件 / 上传文件夹"（浏览器、客户端都行）；客户端的"扫描上传"页选一个本机目录当热文件夹，往里放 JPEG、PNG、TIFF。样本在 `server/testdata/samples/`（`tiff-multipage-2p.tif` 是故意会被拒的多页 TIFF）；同样内容的图在项目里只入库一次 |
-| 浏览、看原图 | 「2025 文书档案/盒 WS-2025-001」2000 页；「M2-3 分块实测」有 200 MB 的 TIFF（客户端里切块看，浏览器里会慢或只显示封面）；「M6-3 切块自检」是各种压缩的 TIFF |
-| 审核分配 | demo_manager → 审核分配：「M2-5 分配演示」40 页待分配 |
-| 审核 | demo_reviewer → 我的审核：「M2-6 审核演示」还有 29 页待审（键盘 A 通过、R 驳回、C 对比上一轮） |
-| 重扫 | demo_scanner → 扫描上传，右边"待重扫"：「M2 验收演示 2026-10-16 M6-4/盒 04/IMG_0003」是特意留着的已驳回页，「M2-7 重扫演示」里也还有几页。重扫件要选一张内容不同的图 |
-| 归类挂接 | demo_cataloger → 归类：全宗 Z206「M3-6 挂接演示」（文件池选文件夹「M3-6 挂接演示」）；Z201「M3-5 归类演示」有 1200 多件 |
-| 看板 | demo_manager → 项目看板：全宗 Z109「M3-7 看板演示」 |
-| 导出 | demo_manager → 导出，或在归类树上右键"导出…"：全宗 Z405「M4-5 导出演示」的 BGS 有 3 件就绪；客户端里的下载交给系统浏览器 |
-| 存储迁移 | admin → 系统管理 → 存储配置：「M7-2 迁移演示·源」已经迁到「·目标」并停用，可以看结果和失败详情 |
+| 上传 | 文件目录里新建一个文件夹，用"上传文件 / 上传文件夹"；客户端的"扫描上传"页选一个本机目录当热文件夹，往里放 JPEG、PNG、TIFF。样本在 `server/testdata/samples/`（`tiff-multipage-2p.tif` 是故意会被拒的多页 TIFF）；同样内容的图在项目里只入库一次 |
+| 浏览、看原图 | 「2025 文书档案」下的盒 WS-2025-001（5 个子文件夹 17 页）、盒 WS-2025-002（3 个子文件夹、「附件（含下级）」和盒里直接放的「盒内目录.png」，19 页）：合成的 A4 扫描页，「2025年第一季度办公会议纪要」第 4 页 DPI 不足，「差旅费报销管理办法」第 2 页没有封面。「格式样本」：JPEG（彩色、灰度、EXIF 方向 6）、PNG（1 位、带透明）、TIFF（G4、LZW、无压缩）各一张，没有封面 |
+| 审核分配 | demo_manager → 审核分配：盒 002 和「格式样本」共 27 页待分配 |
+| 审核 | demo_reviewer → 我的审核：盒 001 还有 5 页待审（「2025年第一季度办公会议纪要」2 页、「关于申请购置档案密集架的请示」3 页）；键盘 A 通过、R 驳回 |
+| 重扫 | demo_scanner → 扫描上传，右边"待重扫"有 2 页：「办公室2024年度工作总结/IMG_0003」（模糊；所在文件夹已归档封存，重扫照常）、「2025年第一季度办公会议纪要/IMG_0002」（歪斜）。重扫件要选一张内容不同的图；重扫后回到 demo_reviewer，C 对比上一轮 |
+| 归档 | demo_cataloger → 归类：左边文件目录，右边归类树 Z001 文书档案 › WS 文书 › 2025 › 永久、30 年 › 办公室、财务科。永久 › 办公室已有 3 件（盒 001 的前 3 个子文件夹，已封存）：0001 已锁定，0002 有 1 页驳回（锁不了），0003 可以锁定。盒 001 剩下的 2 个子文件夹、盒 002 还没归档：把盒 002 拖到"财务科"上看归档预览（「附件（含下级）」被跳过，「盒内目录.png」提示不会归档）。解除封存 → 在文件目录里改 → 重新归档、撤销归档、移到别的节点都可以拿这几件试。著录项"责任者"必填（锁定时查） |
+| 看板 | demo_manager → 项目看板 |
+| 导出 | demo_manager → 导出，或在归类树「办公室」上右键"导出…"：0001 就绪，0002、0003 不就绪（没锁定、有页驳回）；客户端里的下载交给系统浏览器 |
+| 权限 | demo_noproject 没有能进的项目；demo_useradmin 只能管用户和角色；demo_disabled 登录不了；demo_scanner 打开封存的文件夹只看到"联系归类员" |
+| 存储配置 | admin → 系统管理 → 存储配置：新库只有默认存储（不再造存储迁移的演示） |
 | 审计日志、许可证 | admin → 系统管理 → 审计日志（筛选、展开看前后差异）；许可证页在开发版只显示 install_id，不能导入 |
 
 ## 本机开发
@@ -83,6 +84,23 @@ docker compose -f server/dev/compose.yml up -d     # 127.0.0.1:8333，密钥 doc
 - `MASTER_KEY`：`openssl rand -base64 32` 生成一次，**之后不要改**；
 - `INIT_ADMIN_USERNAME`、`INIT_ADMIN_PASSWORD`：库里一个用户都没有时用它们建管理员；
 - `S3_*`：库里一条存储配置都没有时用它们登记默认存储；`TEST_S3_*` 是测试用的（可以和 `S3_*` 同一个桶，测试只用 `apitest/` 前缀）。
+
+### 演示数据和重建开发库
+
+**演示数据**（`web/scripts/seed.mjs`，M9-3）：在刚迁移好的空库上一次建好演示账号（含全部项目授权）、DEMO-A、DEMO-B 和 DEMO-A 里约 40 页的文件、审核、归类树、归档的条目（内容见上面的"可以拿来试的数据"和[演示账号](#演示账号)）。只调接口，`--base` 是 server 本身或 web 的入口；已有的跳过，可以重跑；连远程库约 2 分钟。
+
+```sh
+cd web && INIT_ADMIN_PASSWORD=<管理员密码> npm run seed -- --base http://127.0.0.1:9080
+```
+
+**重建开发库**（旧数据不要了的时候；只动 `doclite_dev`）：
+
+1. 停掉连着 `doclite_dev` 的 server（9080）；
+2. 用超级管理员连 `postgres` 库（连接参数在 `server/.env.remote`，不要打印），删库重建：`DROP DATABASE doclite_dev WITH (FORCE);`、`CREATE DATABASE doclite_dev;`；
+3. 启动 server（自动执行迁移、按 `S3_*` 登记默认存储）。`server/.env` 里没写初始管理员，第一次启动要带上：`INIT_ADMIN_USERNAME=admin INIT_ADMIN_PASSWORD=admin123456 ./bin/doclite-server`（库里有用户之后就不用了）；
+4. `cd web && INIT_ADMIN_PASSWORD=admin123456 npm run seed`。
+
+S3 桶里旧库留下的对象没人引用（key 按 file_id 生成，不会撞），不清也不影响。
 
 **分别启动 server 和 web**（三个模块各自独立，见 `CLAUDE.md` 的"三个模块"）：
 
@@ -158,23 +176,20 @@ cd web && INIT_ADMIN_PASSWORD=<管理员密码> npm run screenshots -- --spec sc
 - `INIT_ADMIN_PASSWORD`（`INIT_ADMIN_USERNAME`）是管理员的密码，和启动 server 用同一组变量；演示账号的密码 `demo123456`（`DEMO_PASSWORD` 可改）。`SHOTS_TMP` 是脚本的临时目录（默认系统临时目录）。
 - 几个较早的脚本直接 `psql` 读审计（M7-3 之后有 `GET /api/system/audit-logs`，新脚本用接口）：要 `psql` 在 PATH 里，`DATABASE_URL` 指向同一个库（远程的 `doclite_dev`，连接串在 `server/.env`）。
 
-**准备数据**（新库；已有的会跳过；seed 脚本只调接口，`--base` 是 server 本身或 web 的入口都行，默认 `http://127.0.0.1:9080`）：
+**准备数据**：先有 `npm run seed` 的演示数据（见[演示数据和重建开发库](#演示数据和重建开发库)）；m1-organize、m1-scan、m3-dashboard、m3-catalog-info 直接用它。另有几个较早的脚本要自己的文件夹（M1 验收、M2-5 到 M2-7、M2 验收……），脚本开头写了 `seed:files` 命令（那里的 `$S`、`$U` 是 bash 写法，zsh 里要把参数写全）：
 
 ```sh
-INIT_ADMIN_PASSWORD=<管理员密码> npm run seed:demo -- --base http://127.0.0.1:9080   # 演示账号、DEMO-A、DEMO-B、授权
-npm run seed:files -- --base http://127.0.0.1:9080 --user demo_scanner:demo123456 --project DEMO-A \
-  --folder "2025 文书档案/盒 WS-2025-001" --count 2000 --low-dpi 3 --no-cover 3
+npm run seed:files -- --base http://127.0.0.1:9080 --user demo_scanner:demo123456 --project DEMO-A --folder "M2-5 分配演示" --count 12
 ```
 
-`seed:files` 往一个文件夹里传 N 张合成的扫描页（PNG + 客户端规格的封面，路径不存在就逐层建，按页码顺序上传，可以重跑；`--remark` 写原件位置）。每个脚本开头写了它要的演示数据和 `seed:files` 命令（M1-10、M2-5 到 M2-7、M2 验收……；那里的 `$S`、`$U` 是 bash 写法，zsh 里要把参数写全）；归类、看板、导出的演示数据由脚本第一次运行时自己建（`scripts/lib/m3-demo.mjs`、`m4-demo.mjs`）。
+`seed:files` 往一个文件夹里传 N 张合成的扫描页（PNG + 客户端规格的封面，路径不存在就逐层建，按页码顺序上传，可以重跑；`--remark` 写原件位置）。m2-viewer、m2-viewer-lan、m2-accept 还要「M1 验收演示」「M2-3 分块冒烟」「M2-3 分块实测」（200 MB 的 TIFF）这些不再造的数据，新库上跑不了。M9-3 删掉了依赖旧演示数据的 m1-files（2000 页的文件夹）和 m4-export（M4-5 的导出演示数据）。
 
 **几个特别的脚本**：
 
 - `m1-upload-lan`、`m2-viewer-lan`：要用局域网地址打开（非安全上下文）。只在跑这一步时开 `DOCLITE_SERVER=http://127.0.0.1:9080 npx vite preview --host --port 24173 --strictPort`，`--base http://$(ipconfig getifaddr en0):24173`。
 - `m1-accept`：`ACCEPT_DEMO` 指定热文件夹演示的文件夹（5 个盒 × 100 页，没有时用 `seed:files` 造）。
 - `m2-accept`：要先建「M2 验收演示 <日期>」（脚本开头有命令）；只能走一遍，再跑换一个文件夹（`M2_ACCEPT_FOLDER`）。
-- `m9-catalog`（M9-2，归类页的主流程）：每跑一次在 DEMO-A 建一套新的「M9 归档演示 <时间>」文件夹和全宗 Z<时间>，走一遍归档（拖放、预览）→ 文件目录的封存提示 → 解除封存 → 在文件目录里改 → 重新归档（对比）→ 锁定、批量锁定；要 seed:demo 的 DEMO-A 和 demo_scanner。M3 的归类脚本（m3-catalog、m3-workbench、m3-accept）随待归类池、按页挂接一起删了。
-- `m4-export`：server 要在执行导出（见[后台任务](#后台任务导出存储迁移)）。
+- `m9-catalog`（M9-2，归类页的主流程）：每跑一次在 DEMO-A 建一套新的「M9 归档演示 <时间>」文件夹和全宗 Z<时间>，走一遍归档（拖放、预览）→ 文件目录的封存提示 → 解除封存 → 在文件目录里改 → 重新归档（对比）→ 锁定、批量锁定；要 `npm run seed` 的 DEMO-A 和 demo_scanner（必填的著录项脚本自己填）。M3 的归类脚本（m3-catalog、m3-workbench、m3-accept）随待归类池、按页挂接一起删了。
 - `m7-storage-migrate`：server 要在执行后台任务（迁移在它里面执行）；要有第二个桶 `doclite-migrate-test`（本机 S3 里已经建好）。脚本自己起一个转发到 SeaweedFS 的慢速代理当"源"存储的 server 地址（让迁移持续几秒），每跑一次在 DEMO-A 的「M7-2 迁移演示」下传一批文件，迁到「M7-2 迁移演示·目标」，跑完"源"迁空并停用。
 - 壳的部分（`m1-shell`、`m1-scan`、`m1-cache` 和 `m1-organize`、`m2-rescan`、`m2-viewer`、`m2-review`、`m2-accept` 里名字带 `shell` 的几张）：`--base` 要指向 **devshell**（见下面）。这几张用 `http://wails.localhost:<端口>` 打开页面（`lib/client.ts` 的 `isShell()` 认 Windows 上 WebView2 的这个地址，Chrome 把 `*.localhost` 解析到本机），在页面脚本运行前注入 Wails 桥的模拟（`scripts/lib/wails-mock.mjs`：拦下 `/wails/runtime` 的命令调用、`_wails.dispatchWailsEvent` 推事件、`_wails.streamFactory` 给实时通道），正式前端代码不改。
 - `m2-accept`：`M2_ACCEPT_SHELL_MOCK=1` 时壳模式审核那两步用上面的模拟（否则改在浏览器里做）；`M2_ACCEPT_SHELL=client/bin/Doclite.app/Contents/MacOS/Doclite`、`M2_ACCEPT_SERVER=<网页的入口>`（vite 的地址；不设时用 `--base`）时壳重扫、壳的大图两步跑打包的客户端 `--smoke`（隔离的数据目录、后台模式），不设时壳重扫改用接口模拟。
@@ -258,22 +273,20 @@ DOCLITE_BACKGROUND=1 client/bin/Doclite.app/Contents/MacOS/Doclite --smoke
 
 ## 演示账号
 
-`npm run seed:demo` 建的，密码都是 `demo123456`；管理员 `admin` 的密码是建库时的 `INIT_ADMIN_PASSWORD`（开发库 `doclite_dev` 是 `admin123456`）。
+`npm run seed` 建的（账号、角色、项目授权都由它做好，不用手工补），密码都是 `demo123456`；管理员 `admin` 的密码是建库时的 `INIT_ADMIN_PASSWORD`（开发库 `doclite_dev` 是 `admin123456`）。
 
 | 账号 | 角色 | 能进的项目 | 用途 |
 |---|---|---|---|
 | `admin` | 系统管理员 | 全部 | 初始管理员 |
 | `demo_admin` | 系统管理员 | 全部 | |
-| `demo_manager` | 项目负责人 | DEMO-A、DEMO-B | 分配审核、看板、导出、解锁 |
-| `demo_scanner` | 扫描员 | DEMO-A | 上传、重扫 |
-| `demo_reviewer` | 审核员 | DEMO-B（角色授权）、DEMO-A（个人授权，M2 起） | 审核 |
-| `demo_reviewer2` | 审核员 | DEMO-A（个人授权） | 改派、停用审核人的演示（M2 起手工建） |
-| `demo_cataloger` | 归类员 | DEMO-A（个人授权，`m3-demo.mjs` 第一次运行时加） | 归类挂接 |
+| `demo_manager` | 项目负责人 | DEMO-A、DEMO-B（个人授权） | 分配审核、看板、导出（也有归类菜单） |
+| `demo_scanner` | 扫描员 | DEMO-A（个人授权） | 上传、重扫、整理文件目录；没有归类菜单（封存的文件夹只能"联系归类员"） |
+| `demo_reviewer` | 审核员 | DEMO-A（个人授权）、DEMO-B（角色授权） | 审核（盒 001 分给了他） |
+| `demo_reviewer2` | 审核员 | DEMO-A（个人授权）、DEMO-B（角色授权） | 改派、停用审核人的演示 |
+| `demo_cataloger` | 归类员 | DEMO-A（个人授权） | 归档、解除封存、重新归档、著录、锁定和解锁 |
 | `demo_noproject` | 归类员 | 没有 | "没有能进的项目" |
-| `demo_useradmin` | 用户管理员（自建：用户、角色） | 没有 | 非 admin 的系统管理 |
-| `demo_disabled` | 审核员（已停用） | DEMO-B | 授权对话框里的"已停用"，登录不了 |
-
-新库上 `demo_reviewer2` 和 DEMO-A 里 `demo_reviewer`、`demo_reviewer2` 的个人授权要手工补（系统管理 → 用户、项目 → 授权），M2 的截图脚本要用。
+| `demo_useradmin` | 用户管理员（自建角色 user_admin：用户、角色） | 没有 | 非 admin 的系统管理 |
+| `demo_disabled` | 审核员（已停用） | DEMO-B（角色授权） | 授权对话框里的"已停用"，登录不了 |
 
 ## 许可证
 

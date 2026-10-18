@@ -3,7 +3,7 @@
 //   npm run screenshots -- --spec scripts/shots/m1-accept.mjs --base http://127.0.0.1:<web 端口>
 //
 // --base 是 web 的入口（vite preview 或 dev，/api 代理到 server；M7-5 起 server 不托管界面）。
-// 账号来自 seed:demo：demo_scanner（个人授权 DEMO-A）、demo_reviewer（审核员角色授权 DEMO-B；M2-5 起另有 DEMO-A 的个人
+// 账号来自 npm run seed：demo_scanner（个人授权 DEMO-A）、demo_reviewer（审核员角色授权 DEMO-B；M2-5 起另有 DEMO-A 的个人
 // 授权）、demo_noproject（归类员角色、没有授权；M3-5 起 demo_cataloger 授权进了 DEMO-A，改用它）。accept-perm-reviewer
 // 要用 admin 读各项目的授权（INIT_ADMIN_PASSWORD，默认 change-me-now）。
 //
@@ -26,7 +26,7 @@
 // 样本原来每次现场调上一版的 gen-samples（Rust）生成；M5-3 起读提交的样本（M7-5 起是 web 自己的 scripts/samples，见
 // scripts/lib/upload-samples.mjs），不再依赖 Rust 工具链。
 
-import { apiLogin } from '../lib/m3-demo.mjs'
+import { apiLogin } from '../lib/api.mjs'
 import { checkCovers, injectFiles, sampleVariant, waitUploadDone } from '../lib/upload-samples.mjs'
 
 const demo = 'demo123456'
@@ -332,7 +332,7 @@ export default {
         const got = list.map((p) => p.project_code).sort()
         assert(JSON.stringify(got) === JSON.stringify(want.sort()), `demo_reviewer 能进的项目应正好是授权给他的 ${want}：${got}`)
         assert(want.includes('DEMO-B'), 'demo_reviewer 应经审核员角色能进 DEMO-B')
-        assert(outside, '应至少有一个没授权给 demo_reviewer 的项目（seed:demo 之外的，例如 M37-SET）')
+        assert(outside, '应至少有一个没授权给 demo_reviewer 的项目（npm run seed 之外的，例如 M37-SET）')
         const r = await call(page, 'GET', `/api/folders/${outside.root_folder_id}/children`, undefined, [403])
         assert(r.status === 403, `demo_reviewer 读没授权的 ${outside.project_code} 的根文件夹应 403：${r.status}`)
         await openSwitcher(page)

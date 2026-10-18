@@ -2,7 +2,7 @@
 //
 //   INIT_ADMIN_PASSWORD=admin123456 npm run screenshots -- --spec scripts/shots/m7-license.mjs --base http://127.0.0.1:5173
 //
-// 要一个开发构建的 server（没有编进许可证公钥，不检查许可证）和 seed:demo 的演示账号。开发构建里许可证不会挡人，
+// 要一个开发构建的 server（没有编进许可证公钥，不检查许可证）和 npm run seed 的演示账号。开发构建里许可证不会挡人，
 // 所以登录页的三种错误、快到期的提醒条、导入出错、到期后被退回登录页都用请求拦截模拟服务器的响应（页面代码不改）：
 //   - license-dev：许可证页的真实状态（开发版，不检查；install_id 可复制，没有导入区）；
 //   - login-seats-full、login-expired、login-missing：登录页对三个错误码的中文说明；

@@ -10,8 +10,7 @@
 // 登录：脚本在页面之外登录，把会话 Cookie 放进浏览器上下文（壳模式的地址），直接打开 /scan。
 // 账号：demo_scanner / demo123456（只能进 DEMO-A）；新建文件夹那张用 admin（INIT_ADMIN_USERNAME / INIT_ADMIN_PASSWORD），
 // 在 DEMO-B 里建一个临时文件夹（上一版用 M1-9 的 HOTFOLDER-TEST 项目，Go 版的库里没有），截图后删掉。
-// 目标文件夹用 DEMO-A 的 /2025 文书档案/盒 WS-2025-004（只读），备注要是"3 号库 A 架 14 层"（新库上先补：
-// npm run seed:files -- --user admin:<密码> --project DEMO-A --folder "2025 文书档案/盒 WS-2025-004" --count 0 --remark "3 号库 A 架 14 层"）。
+// 目标文件夹用 DEMO-A 的 /2025 文书档案/盒 WS-2025-002（只读，npm run seed 建的，备注"3 号库 A 架 12 层"）。
 //
 // 截图：
 // - scan-shell-uploading：热文件夹运行中，上传中（进度 64%），含内容重复、低 DPI、无封面、失败的行；之后点失败行的
@@ -43,7 +42,7 @@ const BASE = (() => {
 })()
 const SERVER = 'http://127.0.0.1:9080'
 const WATCH = 'D:\\Scan\\Out'
-const TARGET_PATH = ['2025 文书档案', '盒 WS-2025-004']
+const TARGET_PATH = ['2025 文书档案', '盒 WS-2025-002']
 /** 新建文件夹那张在哪个项目里建临时文件夹（要和 DEMO-A 不同，用来看换项目）。 */
 const NEW_FOLDER_PROJECT = 'DEMO-B'
 const IDLE = 'networkidle2'
@@ -101,7 +100,7 @@ function scannerContext() {
     const { cookie } = await login(scanner, scannerPassword)
     const projects = await api(cookie, 'GET', '/api/projects')
     const project = projects.find((p) => p.project_code === 'DEMO-A')
-    if (!project) throw new Error('demo_scanner 进不了 DEMO-A（先跑 seed:demo）')
+    if (!project) throw new Error('demo_scanner 进不了 DEMO-A（先跑 npm run seed）')
     const target = await findFolder(cookie, project.root_folder_id, TARGET_PATH)
     return { cookie, project, target }
   })()
@@ -146,7 +145,7 @@ function item(id, over) {
   }
 }
 
-/** 上传中的队列：两个分组（根目录 → 盒 WS-2025-004，子文件夹"附件（信封）"）在并行上传。 */
+/** 上传中的队列：两个分组（根目录 → 盒 WS-2025-002，子文件夹"附件（信封）"）在并行上传。 */
 function uploadingItems(target) {
   const t = { target }
   const list = [
@@ -162,7 +161,7 @@ function uploadingItems(target) {
       cover_status: null,
       server_file_name: null,
       size: Math.round(2.0 * MB),
-      duplicate_of: { file_id: '01a107f5-0000-7000-8000-000000000001', folder_path: '演示项目 A · 文书档案/2025 文书档案/盒 WS-2025-004', file_name: 'IMG_0140.jpg' },
+      duplicate_of: { file_id: '01a107f5-0000-7000-8000-000000000001', folder_path: '演示项目 A · 文书档案/2025 文书档案/盒 WS-2025-002', file_name: 'IMG_0140.jpg' },
     }),
     item(155, {
       ...t,
@@ -405,7 +404,7 @@ export default {
         expect((await texts(page, '[data-testid=badge-low-dpi]')).length === 1, '应该有 1 个"DPI 低于 200"')
         expect((await texts(page, '[data-testid=badge-no-cover]')).length === 1, '应该有 1 个"无封面"')
         const dup = await texts(page, '[data-testid=queue-row][data-status=duplicate] [data-testid=duplicate-of]')
-        expect(dup[0]?.includes('盒 WS-2025-004/IMG_0140.jpg'), `重复行要写出已有文件：${dup}`)
+        expect(dup[0]?.includes('盒 WS-2025-002/IMG_0140.jpg'), `重复行要写出已有文件：${dup}`)
         const failed = await texts(page, '[data-testid=queue-row][data-status=failed] [data-testid=queue-status]')
         expect(failed[0]?.includes('JPEG 文件头损坏'), `失败行要写出原因：${failed}`)
         expect(await page.$('[data-testid=queue-row][data-status=failed] [data-testid=queue-retry]'), '失败行要有"重试"')
@@ -416,7 +415,7 @@ export default {
         // M7-11：头部不再有本机图片缓存的摘要（缓存只在设置页看）。
         expect(!(await page.$('[data-testid=image-cache-summary]')), '扫描上传页头部不该再有缓存摘要')
         const remark = await texts(page, '[data-testid=hotfolder-remark]')
-        expect(remark[0]?.includes('3 号库 A 架 14 层'), `要显示目标文件夹的备注：${remark}`)
+        expect(remark[0]?.includes('3 号库 A 架 12 层'), `要显示目标文件夹的备注：${remark}`)
         const headline = await texts(page, '[data-testid=hotfolder-headline]')
         expect(headline[0]?.includes(TARGET_PATH.join('/')), `标题要写出目标：${headline}`)
       },
@@ -643,7 +642,7 @@ export default {
         const { cookie, me } = await login(admin, adminPassword)
         const projects = await api(cookie, 'GET', '/api/projects')
         const project = projects.find((p) => p.project_code === NEW_FOLDER_PROJECT)
-        if (!project) throw new Error(`找不到项目 ${NEW_FOLDER_PROJECT}（先跑 seed:demo）`)
+        if (!project) throw new Error(`找不到项目 ${NEW_FOLDER_PROJECT}（先跑 npm run seed）`)
         newFolderCtx = { cookie, project, name: `M1-13 截图 ${Date.now()}` }
         await useSession(page, cookie)
         // 项目切换器选中 DEMO-B（stores/project.ts 记在 localStorage 的上次所选项目）。

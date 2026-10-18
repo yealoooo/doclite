@@ -38,7 +38,7 @@
 
 import { mkdirSync } from 'node:fs'
 
-import { apiLogin, interceptRequests } from '../lib/m3-demo.mjs'
+import { apiLogin, interceptRequests } from '../lib/api.mjs'
 
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
 const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'

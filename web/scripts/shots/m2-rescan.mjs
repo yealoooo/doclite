@@ -103,7 +103,7 @@ function context() {
     const adminApi = await login(admin, adminPassword)
     const projects = await adminApi('GET', '/api/projects')
     const project = projects.find((p) => p.project_code === PROJECT)
-    if (!project) throw new Error(`找不到项目 ${PROJECT}，先跑 seed:demo`)
+    if (!project) throw new Error(`找不到项目 ${PROJECT}，先跑 npm run seed`)
     const root = await adminApi('GET', `/api/folders/${project.root_folder_id}/children`)
     const demoFolder = root.folders.find((f) => f.folder_name === DEMO_FOLDER)
     if (!demoFolder) throw new Error(`找不到 ${PROJECT}/${DEMO_FOLDER}，先按 roadmap M2-7 的须知建好`)

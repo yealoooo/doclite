@@ -36,7 +36,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { mkdirSync } from 'node:fs'
 
-import { apiLogin, stamp, uploadPage } from '../lib/m3-demo.mjs'
+import { apiLogin, stamp, uploadPage } from '../lib/api.mjs'
 
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
 const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
@@ -140,7 +140,7 @@ function context(page) {
 
     // 往"源"里放 24 页 + 1 个复制：临时把它设为默认，传完设回去。
     const project = (await api('GET', '/api/projects')).find((p) => p.project_code === 'DEMO-A')
-    assert(project, '要有演示项目 DEMO-A（npm run seed:demo）')
+    assert(project, '要有演示项目 DEMO-A（npm run seed）')
     const top = await api('POST', '/api/folders', {
       parent_id: project.root_folder_id, folder_name: 'M7-2 迁移演示', if_exists: 'return',
       remark: 'M7-2 截图脚本：每次跑一个子文件夹，文件先传到"M7-2 迁移演示·源"再迁到"·目标"',

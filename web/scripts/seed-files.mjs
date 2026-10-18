@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// 演示数据：往某个项目的某个文件夹里上传 N 张合成的扫描页（M1-10）。
+// 往某个项目的某个文件夹里上传 N 张合成的扫描页（M1-10）。M9-3 起演示数据由 scripts/seed.mjs 建，这个脚本只给几个
+// 较早的截图脚本造它们自己的文件夹（各脚本开头写了命令），不再往演示的盒子里造大数据。
 //
-//   npm run seed:files -- --project DEMO-A --folder "2025 文书档案/盒 WS-2025-001" --count 2000 \
+//   npm run seed:files -- --project DEMO-A --folder "M2-5 分配演示" --count 12 \
 //     [--low-dpi K] [--no-cover K] [--remark 原件位置] [--prefix IMG_] [--start 1] \
 //     [--base http://127.0.0.1:9080] [--user 登录名:密码]
 //
@@ -23,7 +24,7 @@
 //   所以改了 --low-dpi、--no-cover 再跑，已有的页也不会变成改名的重复页（要重造就换个文件夹）。
 //   上一次传到一半断开的那一页，server 会按"之前已上传过"（同名同内容，200）处理。
 //
-// 账号：--user，或环境变量 INIT_ADMIN_USERNAME / INIT_ADMIN_PASSWORD，默认 admin / change-me-now（同 seed:demo）。
+// 账号：--user，或环境变量 INIT_ADMIN_USERNAME / INIT_ADMIN_PASSWORD，默认 admin / change-me-now（同 npm run seed）。
 // 地址：--base，或环境变量 DOCLITE_BASE，默认 http://127.0.0.1:9080（server 本身，不经过 vite）。
 
 import { createHash } from 'node:crypto'

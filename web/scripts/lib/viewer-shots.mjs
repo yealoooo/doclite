@@ -88,7 +88,7 @@ export function viewerContext(origin, { user, password }) {
     const me = await call('GET', '/api/me')
     const projects = await call('GET', '/api/projects')
     const project = projects.find((p) => p.project_code === PROJECT)
-    assert(project, `找不到项目 ${PROJECT}，先跑 seed:demo`)
+    assert(project, `找不到项目 ${PROJECT}，先跑 npm run seed`)
     const root = project.root_folder_id
     const folders = {
       jpeg: await resolvePath(call, root, JPEG_FOLDER),

@@ -4,7 +4,7 @@
 //   INIT_ADMIN_PASSWORD=<管理员密码> \
 //     npm run screenshots -- --spec scripts/shots/m9-catalog.mjs --base http://127.0.0.1:<vite 端口>
 //
-// 要有 seed:demo 建好的 DEMO-A、demo_scanner（只有 files、scan 菜单，能进 DEMO-A）。数据（经接口）：
+// 要有 npm run seed 建好的 DEMO-A、demo_scanner（只有 files、scan 菜单，能进 DEMO-A）。数据（经接口）：
 // - 文件夹「M9 归档演示 <时间>/盒 WS-2025-001」：4 个子文件夹（3、4、2、3 页）、1 个带下级文件夹的「附件（含下级）」
 //   （演示"跳过"）、盒子里直接放 1 页（演示"直接放的文件不会归档"）；全部分给 admin 并通过；
 // - 归类树：全宗 Z<时间> / 门类 WS / 年度 2025 / 保管期限 Y / 机构 BGS「办公室」。
@@ -30,7 +30,7 @@
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 
-import { apiLogin, stamp, uploadPage } from '../lib/m3-demo.mjs'
+import { apiLogin, requiredFieldValues, stamp, uploadPage } from '../lib/api.mjs'
 import { injectFiles, scanPng, waitUploadDone } from '../lib/upload-samples.mjs'
 
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
@@ -71,7 +71,7 @@ function context(page) {
     const origin = new URL(page.url()).origin
     const api = await apiLogin(origin, admin, adminPassword)
     const project = (await api('GET', '/api/projects')).find((p) => p.project_code === 'DEMO-A')
-    if (!project) throw new Error('找不到 DEMO-A，先跑 seed:demo')
+    if (!project) throw new Error('找不到 DEMO-A，先跑 npm run seed')
     const pid = project.id
     const me = await api('GET', '/api/me')
     const mk = (parent, name) => api('POST', '/api/folders', { parent_id: parent, folder_name: name, if_exists: 'return' })
@@ -246,8 +246,13 @@ export default {
         const rows = await itemRows(page)
         assert(rows.map((r) => r.no).join() === '1,2,3,4' && rows.every((r) => r.status === 'draft' && r.source === 'sealed'), `列表不对：${JSON.stringify(rows)}`)
         const list = await ctx.api('GET', `/api/archive-categories/${ctx.bgs.id}/items`)
-        ctx.items = list.items
         assert(list.items.some((i) => i.title === '关于调整2025年值班安排的通知'), '改过的题名没有用上')
+        // 项目里有必填的著录项时（npm run seed 的 DEMO-A 有"责任者"）先经接口填上，后面才锁得了。
+        const required = await requiredFieldValues(ctx.api, ctx.pid)
+        if (Object.keys(required).length) {
+          for (const it of list.items) await ctx.api('PATCH', `/api/archive-items/${it.id}`, { row_version: it.row_version, extra_fields: required })
+        }
+        ctx.items = (await ctx.api('GET', `/api/archive-categories/${ctx.bgs.id}/items`)).items
         console.log('  已归档 4 件（未锁定、已封存），改过的题名用上了')
       },
     },

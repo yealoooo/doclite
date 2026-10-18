@@ -1,5 +1,5 @@
 // M0-5 的截图清单：npm run screenshots -- --spec scripts/shots/m0.mjs
-// 账号来自 scripts/seed-demo.mjs 建的演示用户，另加 server 首次启动时建的初始管理员：
+// 账号来自 scripts/seed.mjs 建的演示用户，另加 server 首次启动时建的初始管理员：
 // 登录名和密码取环境变量 INIT_ADMIN_USERNAME、INIT_ADMIN_PASSWORD（和启动 server 用的是同一组变量），
 // 默认 admin / change-me-now（和 server/.env.example 一致）；也可以用 --account 登录名:密码 覆盖。
 // 例如：INIT_ADMIN_PASSWORD=admin123456 npm run screenshots -- --spec scripts/shots/m0.mjs

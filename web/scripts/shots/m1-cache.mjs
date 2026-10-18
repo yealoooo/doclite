@@ -106,7 +106,7 @@ async function askClearDemoB(page) {
     const list = await res.json()
     return (list.find((p) => p.project_code === 'DEMO-B') ?? list[1])?.id
   })
-  if (!pid) throw new Error('找不到 DEMO-B（先运行 seed:demo）')
+  if (!pid) throw new Error('找不到 DEMO-B（先运行 npm run seed）')
   await page.click(`[data-testid=cache-project-row][data-project-id="${pid}"] [data-testid=cache-clear-project]`)
   await page.waitForSelector('[role=alertdialog]')
   return pid

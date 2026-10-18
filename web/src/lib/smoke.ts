@@ -1233,7 +1233,7 @@ export async function runSmoke(hooks: SmokeHooks) {
           const projects = await request<MyProject[]>('/api/projects', { handle: true })
           const project = projects.find((p) => p.status === 'active') ?? projects[0]
           if (!project) {
-            throw new Error('这个账号没有能进的项目，没法订阅实时通道（先在 server 上运行 seed:demo，或给这个账号授权一个项目）')
+            throw new Error('这个账号没有能进的项目，没法订阅实时通道（先用 web 的 npm run seed 建演示数据，或给这个账号授权一个项目）')
           }
           const hb = await waitHeartbeat(`/api/projects/${project.id}/stream`)
           return { project_code: project.project_code, project_id: project.id, ...hb }

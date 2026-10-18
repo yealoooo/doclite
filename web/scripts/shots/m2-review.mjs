@@ -112,7 +112,7 @@ function context(page) {
     const adminApi = await as(origin, admin, adminPassword)
     const projects = await adminApi('GET', '/api/projects')
     const project = projects.find((p) => p.project_code === PROJECT)
-    assert(project, `找不到项目 ${PROJECT}，先跑 seed:demo`)
+    assert(project, `找不到项目 ${PROJECT}，先跑 npm run seed`)
     const users = {}
     for (const name of [MANAGER, REV1, REV2, SCANNER]) {
       const res = await adminApi('GET', `/api/system/users?keyword=${encodeURIComponent(name)}&page_size=100`)

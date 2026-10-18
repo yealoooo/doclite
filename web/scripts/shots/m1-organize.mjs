@@ -7,7 +7,7 @@
 // scripts/lib/upload-samples.mjs。
 // 局域网地址（非安全上下文）上的上传另见 m1-upload-lan.mjs。
 //
-// 只看界面的截图（右键菜单、移动对话框、多选、删除确认、错误提示）用 M1-10 的演示文件夹，不提交改动；
+// 只看界面的截图（右键菜单、移动对话框、多选、删除确认、错误提示）用 npm run seed 的演示文件夹（BOX2、BOX3），不提交改动；
 // 会改数据的（整理流程、上传结果、两个页面的实时刷新）各自在 DEMO-A 根下建一个"截图验证 M1-12 …"临时文件夹，
 // 做完在 after 里删掉（软删除；前面失败了也删）。
 //
@@ -34,8 +34,9 @@ import { installWailsMock, shellOrigin } from '../lib/wails-mock.mjs'
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
 const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
 const PROJECT = 'DEMO-A'
-const BOX2 = '2025 文书档案/盒 WS-2025-002'
-const BOX3 = '2025 文书档案/盒 WS-2025-003'
+// npm run seed 建的盒 002 里两个没归档的子文件夹（各 6 页 IMG_0001–0006.png；M9-3 起不再有 M1-10 的盒 002、003）。
+const BOX2 = '2025 文书档案/盒 WS-2025-002/2025年1月财务收支报表'
+const BOX3 = '2025 文书档案/盒 WS-2025-002/关于2025年度部门预算的批复'
 const IDLE = 'networkidle2'
 
 // ---------- 页面之外调接口（admin） ----------
@@ -72,7 +73,7 @@ export function context(page) {
     await api(origin, 'POST', '/api/auth/login', { username: admin, password: adminPassword })
     const projects = await api(origin, 'GET', '/api/projects')
     const project = projects.find((p) => p.project_code === PROJECT)
-    if (!project) throw new Error(`找不到项目 ${PROJECT}，先跑 seed:demo`)
+    if (!project) throw new Error(`找不到项目 ${PROJECT}，先跑 npm run seed`)
     const call = (method, path, body, opts) => api(origin, method, path, body, opts)
     const folders = {}
     for (const path of [BOX2, BOX3]) folders[path] = await resolvePath(call, project.root_folder_id, path)
@@ -346,7 +347,7 @@ export default {
         await waitCovers(page)
         await clickCell(page, 'IMG_0003.png', { button: 'right' })
         await menu(page, 'menu-move')
-        await pickFolder(page, '盒 WS-2025-004')
+        await pickFolder(page, '格式样本')
         const disabled = await page.$eval('[data-testid=folder-picker-confirm]', (b) => b.disabled)
         assert(!disabled, '选了别的文件夹，确认按钮应该能点')
       },
@@ -845,7 +846,7 @@ export default {
         const uploads = await page.evaluate(() => window.__shellCalls.filter((c) => c.cmd === 'api_fetch' && /\/files$/.test(c.args.path)).length)
         assert(uploads === 0, '壳里不应从页面发上传请求')
         assert(!(await page.$('[data-testid=upload-panel]')), '壳里不应出现浏览器上传的结果列表')
-        console.log(`  断言 壳：上传文件夹、上传文件各调 1 次 pick_and_enqueue_upload（folderId=盒 003，mode=folder/files），提示"已加入上传队列"，页面没有自己发上传请求`)
+        console.log(`  断言 壳：上传文件夹、上传文件各调 1 次 pick_and_enqueue_upload（folderId=BOX3，mode=folder/files），提示"已加入上传队列"，页面没有自己发上传请求`)
       },
       async after(page) {
         // 截完图再试"下载原图"：壳里调 open_external（系统浏览器打开 original_url）。

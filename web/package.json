@@ -9,7 +9,7 @@
     "release": "npm run build && node scripts/release.mjs",
     "preview": "vite preview",
     "screenshots": "node scripts/screenshots.mjs",
-    "seed:demo": "node scripts/seed-demo.mjs",
+    "seed": "node scripts/seed.mjs",
     "seed:files": "node scripts/seed-files.mjs"
   },
   "dependencies": {
