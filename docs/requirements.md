@@ -289,6 +289,7 @@
 - **封存**：归档后来源文件夹封存（规则见 5.5）。重扫、审核不受影响，条目里自动显示新版本和"第 n 轮 / 待审"。
 - **解除封存** `POST /api/archive-items/{id}/unseal {row_version, reason?}`：只有 draft 且 sealed 的可以（locked 409 `item_locked`，已是 modifying 409 `invalid_state`）；reason 选填 ≤ 200 字。→ modifying，记下谁、何时、原因；件号、档号、著录、页都不变，**和文件夹的绑定不断**。修改中：不能锁定、导出预检不就绪；著录照常可改。
 - **重新归档** `GET /api/archive-items/{id}/reseal-preview` → 原页数、现页数、新增（文件、在第几页）、去掉、调序（只算相对顺序变了的，同 reorder 审计的算法）；`POST /api/archive-items/{id}/reseal {row_version}`：只有 modifying 的可以；来源文件夹要仍是件文件夹（被删了、有了子文件夹、空了、> 2000 → 409 `invalid_state` 写明原因；不要这一件就撤销归档）；新增的文件已在别的条目里（比如从另一个修改中的文件夹移过来）409 `file_cataloged`，提示先重新归档那一件。成功：页换成文件夹现在的清单、→ sealed、没有变化也可以（等于"没改，恢复封存"）。
+- **修改中的件** `GET /api/projects/{pid}/archive-items:modifying` → `{items, total}`：项目里全部修改中的未删除条目（件号、档号、题名、节点名称链、来源文件夹、解除封存的人 / 时间 / 原因、row_version），按解除时间倒序、最多 500 条；给归类页顶部的"修改中 n 件"用【总控，M9-2】。
 - **撤销归档** = `DELETE /api/archive-items/{id}`：只有 draft 的可以（locked 409 `item_locked`）；页一并移出（unlink 带 item_deleted），件号不回收，文件夹回到未归档。
 - 一个文件只在一个条目（`archive_item_files.file_id` 唯一）、一个文件夹只对应一个未删除条目（`source_folder_id` 部分唯一索引）。
 
@@ -411,7 +412,7 @@
 | POST files/{fid}/reopen · GET files/{fid}/reviews | review 或 review_assign | 撤回、分配历史 |
 | GET …/review-settings · …/catalog-settings · POST …/catalog-placements · GET files/{fid}/catalog · …/stream | 能进项目 | 设置、归类信息、SSE |
 | projects/{pid}/archive-categories（GET/POST）· {id}（PATCH/DELETE） | catalog | 节点 |
-| GET archive-categories/{id}/items · POST archive-categories/{id}/items:from-folders · archive-items/{id}（GET/PATCH/DELETE）· {id}/lock · {id}/unlock · {id}/unseal · GET {id}/reseal-preview · POST {id}/reseal · projects/{pid}/archive-items:lock · :renumber | catalog | 条目、归档、封存、锁定解锁（2026-10-19 去掉 POST items、mark-done、back-to-draft、PUT files；解锁不再要 review_assign） |
+| GET archive-categories/{id}/items · POST archive-categories/{id}/items:from-folders · archive-items/{id}（GET/PATCH/DELETE）· {id}/lock · {id}/unlock · {id}/unseal · GET {id}/reseal-preview · POST {id}/reseal · GET projects/{pid}/archive-items:modifying · projects/{pid}/archive-items:lock · :renumber | catalog | 条目、归档、封存、锁定解锁（2026-10-19 去掉 POST items、mark-done、back-to-draft、PUT files；解锁不再要 review_assign） |
 | GET projects/{pid}/catalog-summary | dashboard | 看板 |
 | POST projects/{pid}/export-tasks:precheck · export-tasks（POST/GET）· export-tasks/{id} · /files · /changes · /download · /cancel | export | 导出 |
 
