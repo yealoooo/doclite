@@ -8,7 +8,7 @@ import (
 
 // 状态的中文（目录.xlsx、清单.csv 里写中文）。
 var (
-	itemStatusLabels = map[string]string{"draft": "草稿", "done": "已完成", "locked": "已定稿"}
+	itemStatusLabels = map[string]string{"draft": "未锁定", "locked": "已锁定"}
 	reviewLabels     = map[string]string{"unassigned": "待分配", "pending": "待审", "approved": "通过", "rejected": "驳回"}
 )
 

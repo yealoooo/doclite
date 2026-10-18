@@ -296,7 +296,7 @@ func (t *Template) Separators() []rune {
 // Render 按祖先链和件号生成档号。chain 是从根到条目所在节点（含它自己）的节点，顺序从根往下。
 //
 // 每个节点占位符取链上离条目最近（最靠后）的同类型节点的编码。链上缺模板用到的类型时，archiveNo 为空，
-// missing 列出缺的类型（按模板里的顺序）：档号留空，条目能建不能定稿。
+// missing 列出缺的类型（按模板里的顺序）：档号留空，条目能建不能锁定。
 func (t *Template) Render(chain []Node, itemNo int) (archiveNo string, missing []CategoryType) {
 	var b strings.Builder
 	for _, s := range t.segments {

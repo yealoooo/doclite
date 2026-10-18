@@ -255,16 +255,17 @@ func (r childrenResponse) fileNames() []string {
 	return out
 }
 
-// catalog 把文件挂到项目归类根下的一个新条目（直接写库，挂接接口在 M4-2）。
-func (e *Env) catalog(pid, fileID uuid.UUID) {
+// catalog 把文件挂到项目归类根下的一个新条目（直接写库）：条目封存，来源文件夹是 source（不是文件所在的文件夹，
+// 所以文件所在的文件夹不封存，只测"已归类的文件删不掉"）。
+func (e *Env) catalog(pid, source, fileID uuid.UUID) {
 	e.t.Helper()
 	e.Exec(`WITH it AS (
-  INSERT INTO archive_items (id, project_id, category_id, item_level, item_no, created_by)
-  SELECT gen_random_uuid(), $1, c.id, 'item', (SELECT count(*) + 1 FROM archive_items WHERE project_id = $1), u.id
+  INSERT INTO archive_items (id, project_id, category_id, item_level, item_no, created_by, source_folder_id)
+  SELECT gen_random_uuid(), $1, c.id, 'item', (SELECT count(*) + 1 FROM archive_items WHERE project_id = $1), u.id, $3
   FROM archive_categories c, users u WHERE c.project_id = $1 AND c.parent_id IS NULL AND u.username = 'admin'
   RETURNING id, created_by)
 INSERT INTO archive_item_files (project_id, archive_item_id, file_id, page_no, linked_by)
-SELECT $1, it.id, $2, 1, it.created_by FROM it`, pid, fileID)
+SELECT $1, it.id, $2, 1, it.created_by FROM it`, pid, fileID, source)
 }
 
 // openReview 给文件加一行 open 的分配（直接写库，分配接口在 M3-1），返回它的 id。

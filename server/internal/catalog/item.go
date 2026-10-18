@@ -18,16 +18,15 @@ import (
 )
 
 // 档案条目（requirements 5.9"条目"，只做"件"）：
-//   - 新建：draft、row_version 1；件号取节点里的 max+1（算上已删除的，不回收）；档号按模板生成，缺级、撞号留空；
-//     请求里没提到的著录项用设置里的 default；
+//   - 条目只能由整个文件夹归档产生（archive.go）；不能新建空条目、不能单独挂页（2026-10-19）；
 //   - PATCH：改题名、著录（按 key 合并）、移到别的节点（件号取目标的 max+1，同时带 item_no 就用它）、改件号
 //     （1–999999999，节点里已占，含已删除的，409 `conflict`）；移动、改件号时用当前模板重算档号，只有显式改件号时
-//     撞号 409；没有实际变化不写库；
-//   - 删除：软删除，件号不回收；有页时一并移出（每页一条 unlink，带 item_deleted，见 pages.go）；
-//   - 新建可以带 file_ids：建条目并按顺序挂上（第 1..n 页，row_version 仍是 1），失败整体回滚、条目也不建；
-//   - 定稿的条目改著录、移动、改件号、删除 409 `item_locked`；每个成功的动作 row_version + 1 并审计；
+//     撞号 409；没有实际变化不写库；封存、修改中都可以改，著录只查格式（必填在锁定时查）；
+//   - 删除 = 撤销归档：软删除，件号不回收；页一并移出（每页一条 unlink，带 item_deleted，见 pages.go），来源文件夹
+//     回到未归档；
+//   - 已锁定的条目改著录、移动、改件号、删除 409 `item_locked`；每个成功的动作 row_version + 1 并审计；
 //     PATCH、状态动作带 row_version，不一致 409 `conflict`；删除可以在查询参数里带。
-//   - 审计 archive_item：create、update、move、delete，detail {before, after} 只放变了的（title、extra_fields 里变了
+//   - 审计 archive_item：update、move、delete，detail {before, after} 只放变了的（title、extra_fields 里变了
 //     的 key、category_id、category_path、item_no、archive_no），撞号时 after 带 archive_no_conflict。
 
 const (
@@ -164,105 +163,6 @@ func (s *Service) ListItems(ctx context.Context, projectID, categoryID uuid.UUID
 	return out, err
 }
 
-// ItemInput 是新建条目的输入。Fields 里 key → 提交的原值（string、nil 或别的类型）。
-type ItemInput struct {
-	Title  *string
-	Fields map[string]any
-	// FileIDs 是要挂上的页（按页序，0–2000 个，不能重复）。
-	FileIDs []uuid.UUID
-}
-
-// CreateItem 在节点里新建条目（draft）。
-func (s *Service) CreateItem(ctx context.Context, operatorID, projectID, categoryID uuid.UUID, in ItemInput) (*Item, error) {
-	st, err := loadSettings(ctx, s.pool, projectID)
-	if err != nil {
-		return nil, err
-	}
-	fields := make(map[string]any, len(in.Fields)+len(st.fields))
-	for k, v := range in.Fields {
-		fields[k] = v
-	}
-	for _, d := range st.fields {
-		if _, given := fields[d.Key]; !given && d.Default != nil {
-			fields[d.Key] = *d.Default
-		}
-	}
-	title, extra, issues := st.applyEdits("", map[string]any{}, edits{Title: in.Title, Fields: fields})
-	if len(issues) > 0 {
-		return nil, fieldsError(issues)
-	}
-	if err := checkPageList(in.FileIDs); err != nil {
-		return nil, err
-	}
-	var out *Item
-	err = s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
-		if err := project.LockCatalogTree(ctx, tx, projectID, false); err != nil {
-			return err
-		}
-		locked, err := lockCategories(ctx, tx, projectID, categoryID)
-		if err != nil {
-			return err
-		}
-		cat := locked[categoryID]
-		if cat == nil || cat.Deleted {
-			return errCategoryNotFound
-		}
-		if st.tmpl == nil {
-			return st.templateInvalid("新建条目")
-		}
-		itemNo, err := nextItemNo(ctx, tx, cat.ID)
-		if err != nil {
-			return err
-		}
-		if itemNo > MaxItemNo {
-			return httpx.Conflict(httpx.CodeInvalidState, fmt.Sprintf("这个节点里的件号已经用到 %d，不能再新建条目", MaxItemNo))
-		}
-		ch, err := categoryChain(ctx, tx, projectID, cat.PathCode)
-		if err != nil {
-			return err
-		}
-		archiveNo, conflict, err := assignArchiveNo(ctx, tx, st, projectID, uuid.Nil, ch, itemNo)
-		if err != nil {
-			return err
-		}
-		r := &itemRow{ID: db.NewID(), ProjectID: projectID, CategoryID: cat.ID, ItemNo: itemNo, ArchiveNo: archiveNo,
-			Title: title, ExtraFields: extra, CreatedBy: operatorID}
-		if err := insertItem(ctx, tx, r); err != nil {
-			return err
-		}
-		after := map[string]any{"category_id": cat.ID, "category_path": ch.path(), "item_no": itemNo, "archive_no": archiveNo,
-			"title": title, "extra_fields": extra, "status": statusDraft}
-		if conflict != nil {
-			after["archive_no_conflict"] = conflict
-		}
-		// 带 file_ids：插入条目之后挂上（有页时才拿文件树锁），失败整个事务回滚、条目也不建。
-		var pages *pageChange
-		if len(in.FileIDs) > 0 {
-			if pages, err = applyPages(ctx, tx, projectID, operatorID, r, in.FileIDs, false); err != nil {
-				return err
-			}
-			after["page_count"] = len(in.FileIDs)
-		}
-		if err := audit.Write(ctx, tx, audit.Entry{ProjectID: &projectID, OperatorID: audit.Operator(operatorID),
-			TargetType: audit.TargetArchiveItem, TargetID: r.ID, Action: "create",
-			Detail: map[string]any{"after": after}}); err != nil {
-			return err
-		}
-		if out, err = readItem(ctx, tx, st, r.ID); err != nil {
-			return err
-		}
-		if pages != nil {
-			ev.Add(pages.filesEvent(projectID)...)
-		}
-		ev.Add(events.CatalogChanged(projectID, []uuid.UUID{cat.ID}, []uuid.UUID{r.ID}))
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // assignArchiveNo 在共享归类树锁下给条目生成档号：拿这个档号的咨询锁后查占用，被别的条目（except 以外）占着就
 // 留空，返回撞了谁（审计用）。缺级时为空、conflict 也为空。st.tmpl 不能为 nil。
 func assignArchiveNo(ctx context.Context, tx pgx.Tx, st *settings, projectID, except uuid.UUID, ch chain, itemNo int) (*string, map[string]any, error) {
@@ -387,11 +287,6 @@ func (s *Service) UpdateItem(ctx context.Context, operatorID, id uuid.UUID, in I
 				return fieldsError(issues)
 			}
 			fieldsChanged = t != r.Title || !sameFields(f, r.ExtraFields)
-			if fieldsChanged && r.Status == statusDone {
-				if req := st.requiredIssues(t, f); len(req) > 0 {
-					return fieldsError(req)
-				}
-			}
 			after.Title, after.ExtraFields = t, f
 		}
 
@@ -504,7 +399,8 @@ func (s *Service) UpdateItem(ctx context.Context, operatorID, id uuid.UUID, in I
 	return out, nil
 }
 
-// DeleteItem 软删除条目，有页时一并移出（每页一条 unlink，带 item_deleted）。rowVersion 为 nil 时不核对版本。
+// DeleteItem 撤销归档：软删除条目，页一并移出（每页一条 unlink，带 item_deleted），来源文件夹回到未归档。
+// 只有未锁定的可以（封存、修改中都行）。rowVersion 为 nil 时不核对版本。
 func (s *Service) DeleteItem(ctx context.Context, operatorID, id uuid.UUID, rowVersion *int) error {
 	if rowVersion != nil {
 		if err := checkRowVersion(*rowVersion); err != nil {
@@ -531,13 +427,13 @@ func (s *Service) DeleteItem(ctx context.Context, operatorID, id uuid.UUID, rowV
 			return errItemNotFound
 		}
 		if r.Status == statusLocked {
-			return errLockedEdit("删除")
+			return errLockedEdit("撤销归档")
 		}
 		if rowVersion != nil && r.RowVersion != *rowVersion {
 			return staleVersion(r.RowVersion)
 		}
 		// 一并移出（不变量：已删除的条目没有挂接行）；没有页时不拿文件树锁。
-		pages, err := applyPages(ctx, tx, projectID, operatorID, r, nil, true)
+		pages, err := applyPages(ctx, tx, projectID, operatorID, r, nil, pageOpts{itemDeleted: true, lockFiles: true})
 		if err != nil {
 			return err
 		}
@@ -548,14 +444,23 @@ func (s *Service) DeleteItem(ctx context.Context, operatorID, id uuid.UUID, rowV
 		if err := softDeleteItem(ctx, tx, id, operatorID); err != nil {
 			return err
 		}
+		before := map[string]any{"category_id": r.CategoryID, "category_path": ch.path(),
+			"item_no": r.ItemNo, "archive_no": r.ArchiveNo, "title": r.Title, "status": r.Status,
+			"source_status": r.SourceStatus, "page_count": len(pages.Plan.Unlinked)}
+		if r.SourceFolderID != nil {
+			paths, err := folderPaths(ctx, tx, []uuid.UUID{*r.SourceFolderID})
+			if err != nil {
+				return err
+			}
+			before["source_folder_id"], before["source_folder_path"] = *r.SourceFolderID, paths[*r.SourceFolderID]
+		}
 		if err := audit.Write(ctx, tx, audit.Entry{ProjectID: &projectID, OperatorID: audit.Operator(operatorID),
 			TargetType: audit.TargetArchiveItem, TargetID: id, Action: "delete",
-			Detail: map[string]any{"before": map[string]any{"category_id": r.CategoryID, "category_path": ch.path(),
-				"item_no": r.ItemNo, "archive_no": r.ArchiveNo, "title": r.Title, "status": r.Status,
-				"page_count": len(pages.Plan.Unlinked)}}}); err != nil {
+			Detail: map[string]any{"before": before}}); err != nil {
 			return err
 		}
 		ev.Add(pages.filesEvent(projectID)...)
+		ev.Add(events.FoldersChanged(projectID, sourceIDs(r)...))
 		ev.Add(events.CatalogChanged(projectID, []uuid.UUID{r.CategoryID}, []uuid.UUID{id}))
 		return nil
 	})

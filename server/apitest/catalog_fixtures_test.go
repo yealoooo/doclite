@@ -1,13 +1,15 @@
 package apitest
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
 	"github.com/google/uuid"
 )
 
-// 归类（M4-1）的测试辅助。
+// 归类的测试辅助。条目只能由整个文件夹归档产生（M9-1）：mkItem 建一个新文件夹（放在项目根文件夹下）、造文件、
+// 归档；改页走"解除封存 → 改文件夹 → 重新归档"（addPage）。
 
 // catNode 是归类节点的响应（修改时另有 renumbered、archive_no_conflicts）。
 type catNode struct {
@@ -38,22 +40,28 @@ type itemReason struct {
 
 // itemView 是条目详情。
 type itemView struct {
-	ID              uuid.UUID      `json:"id"`
-	ProjectID       uuid.UUID      `json:"project_id"`
-	CategoryID      uuid.UUID      `json:"category_id"`
-	CategoryPath    string         `json:"category_path"`
-	ItemNo          int            `json:"item_no"`
-	ArchiveNo       *string        `json:"archive_no"`
-	ArchiveNoReason *itemReason    `json:"archive_no_reason"`
-	Title           string         `json:"title"`
-	ExtraFields     map[string]any `json:"extra_fields"`
-	FieldIssues     []fieldIssue   `json:"field_issues"`
-	Status          string         `json:"status"`
-	RowVersion      int            `json:"row_version"`
-	PageCount       int            `json:"page_count"`
-	PageCounts      map[string]int `json:"page_counts"`
-	LockedAt        *string        `json:"locked_at"`
-	Pages           []struct {
+	ID               uuid.UUID      `json:"id"`
+	ProjectID        uuid.UUID      `json:"project_id"`
+	CategoryID       uuid.UUID      `json:"category_id"`
+	CategoryPath     string         `json:"category_path"`
+	ItemNo           int            `json:"item_no"`
+	ArchiveNo        *string        `json:"archive_no"`
+	ArchiveNoReason  *itemReason    `json:"archive_no_reason"`
+	Title            string         `json:"title"`
+	ExtraFields      map[string]any `json:"extra_fields"`
+	FieldIssues      []fieldIssue   `json:"field_issues"`
+	Status           string         `json:"status"`
+	SourceFolderID   uuid.UUID      `json:"source_folder_id"`
+	SourceFolderPath string         `json:"source_folder_path"`
+	SourceStatus     string         `json:"source_status"`
+	UnsealedBy       *uuid.UUID     `json:"unsealed_by"`
+	UnsealedByName   *string        `json:"unsealed_by_name"`
+	UnsealReason     *string        `json:"unseal_reason"`
+	RowVersion       int            `json:"row_version"`
+	PageCount        int            `json:"page_count"`
+	PageCounts       map[string]int `json:"page_counts"`
+	LockedAt         *string        `json:"locked_at"`
+	Pages            []struct {
 		FileID       uuid.UUID `json:"file_id"`
 		PageNo       int       `json:"page_no"`
 		FileName     string    `json:"file_name"`
@@ -93,6 +101,7 @@ type catalogEnv struct {
 	folder  uuid.UUID // 根文件夹（造页用）
 	adminID uuid.UUID
 	admin   *Client
+	n       int // 文件夹名的序号
 }
 
 func newCatalogEnv(t *testing.T, code string) *catalogEnv {
@@ -128,12 +137,109 @@ func (c *catalogEnv) mkChain() (fonds, cat, year, ret, org catNode) {
 	return
 }
 
+// archive 归档（POST items:from-folders）。
+func (c *catalogEnv) archive(cat uuid.UUID, body map[string]any) *Response {
+	c.t.Helper()
+	return c.admin.Post("/api/archive-categories/"+cat.String()+"/items:from-folders", body)
+}
+
+// archiveResult 是归档的响应。
+type archiveResult struct {
+	CategoryID uuid.UUID `json:"category_id"`
+	DryRun     bool      `json:"dry_run"`
+	Items      []struct {
+		FolderID   uuid.UUID  `json:"folder_id"`
+		FolderName string     `json:"folder_name"`
+		FolderPath string     `json:"folder_path"`
+		Title      string     `json:"title"`
+		PageCount  int        `json:"page_count"`
+		ItemNo     int        `json:"item_no"`
+		ArchiveNo  *string    `json:"archive_no"`
+		ItemID     *uuid.UUID `json:"item_id"`
+	} `json:"items"`
+	Skipped []struct {
+		FolderID       uuid.UUID `json:"folder_id"`
+		FolderName     string    `json:"folder_name"`
+		Reason         string    `json:"reason"`
+		Message        string    `json:"message"`
+		PageCount      int       `json:"page_count"`
+		SubfolderCount int       `json:"subfolder_count"`
+		Item           *struct {
+			ItemID        uuid.UUID `json:"item_id"`
+			ItemNo        int       `json:"item_no"`
+			CategoryNames []string  `json:"category_names"`
+		} `json:"item"`
+	} `json:"skipped"`
+}
+
+// mkFolder 在 parent（uuid.Nil 是项目根文件夹）下建文件夹，造 statuses 个文件（直接写库），返回文件夹和文件。
+func (c *catalogEnv) mkFolder(parent uuid.UUID, name string, statuses ...string) (uuid.UUID, []uuid.UUID) {
+	c.t.Helper()
+	if parent == uuid.Nil {
+		parent = c.folder
+	}
+	f := mkdir(c.admin, parent, name).ID
+	files := make([]uuid.UUID, len(statuses))
+	for i, st := range statuses {
+		files[i] = c.mkFile(f, st)
+	}
+	return f, files
+}
+
+// archiveOne 把一个文件夹归档到节点 cat（title 为空用文件夹名），返回条目详情。
+func (c *catalogEnv) archiveOne(cat, folder uuid.UUID, title string) itemView {
+	c.t.Helper()
+	body := map[string]any{"folder_ids": []uuid.UUID{folder}}
+	if title != "" {
+		body["titles"] = map[string]any{folder.String(): title}
+	}
+	res := Decode[archiveResult](c.archive(cat, body).Expect(http.StatusCreated))
+	if len(res.Items) != 1 || res.Items[0].ItemID == nil {
+		c.t.Fatalf("归档：%+v", res)
+	}
+	return c.item(*res.Items[0].ItemID)
+}
+
+// mkItem 建一件：新文件夹（"件 n"）里一个通过的文件（body 带 file_ids 时是把这些文件移进新文件夹），归档到 cat；
+// body 的 title 走 titles，extra_fields 归档后再 PATCH。
 func (c *catalogEnv) mkItem(cat uuid.UUID, body map[string]any) itemView {
 	c.t.Helper()
-	if body == nil {
-		body = map[string]any{}
+	c.n++
+	name := fmt.Sprintf("件 %03d", c.n)
+	var folder uuid.UUID
+	if ids, ok := body["file_ids"].([]uuid.UUID); ok {
+		folder, _ = c.mkFolder(uuid.Nil, name)
+		c.moveFiles(folder, ids...)
+	} else {
+		folder, _ = c.mkFolder(uuid.Nil, name, "approved")
 	}
-	return Decode[itemView](c.admin.Post("/api/archive-categories/"+cat.String()+"/items", body).Expect(http.StatusCreated))
+	title, _ := body["title"].(string)
+	it := c.archiveOne(cat, folder, title)
+	if f, ok := body["extra_fields"]; ok {
+		it = Decode[itemView](c.patchItem(it.ID, map[string]any{"extra_fields": f}).Expect(http.StatusOK))
+	}
+	return it
+}
+
+// moveFiles 把这些文件（file_id）移到 folder（folder-files:move），按原文件夹的顺序排到末尾。
+func (c *catalogEnv) moveFiles(folder uuid.UUID, fileIDs ...uuid.UUID) {
+	c.t.Helper()
+	var ffIDs []uuid.UUID
+	for _, fid := range fileIDs {
+		ffIDs = append(ffIDs, QueryValue[uuid.UUID](c.Env, `SELECT id FROM folder_files WHERE file_id = $1`, fid))
+	}
+	c.admin.Post("/api/folder-files:move", map[string]any{"ids": ffIDs, "folder_id": folder}).Expect(http.StatusOK)
+}
+
+// unseal、reseal 用条目现在的 row_version 解除封存、重新归档。
+func (c *catalogEnv) unseal(id uuid.UUID) *Response {
+	c.t.Helper()
+	return c.admin.Post("/api/archive-items/"+id.String()+"/unseal", map[string]any{"row_version": c.item(id).RowVersion})
+}
+
+func (c *catalogEnv) reseal(id uuid.UUID) *Response {
+	c.t.Helper()
+	return c.admin.Post("/api/archive-items/"+id.String()+"/reseal", map[string]any{"row_version": c.item(id).RowVersion})
 }
 
 func (c *catalogEnv) item(id uuid.UUID) itemView {
@@ -181,17 +287,6 @@ func (c *catalogEnv) mkFile(folder uuid.UUID, reviewStatus string) uuid.UUID {
 	return c.mkFileIn(c.pid, folder, reviewStatus)
 }
 
-func filesPath(itemID uuid.UUID) string { return "/api/archive-items/" + itemID.String() + "/files" }
-
-// putPages 用条目现在的 row_version 整体替换页。
-func (c *catalogEnv) putPages(itemID uuid.UUID, fileIDs ...uuid.UUID) *Response {
-	c.t.Helper()
-	if fileIDs == nil {
-		fileIDs = []uuid.UUID{}
-	}
-	return c.admin.Put(filesPath(itemID), map[string]any{"row_version": c.item(itemID).RowVersion, "file_ids": fileIDs})
-}
-
 // pageIDs 是条目详情里的页（按页号）。
 func (v itemView) pageIDs() []uuid.UUID {
 	out := []uuid.UUID{}
@@ -199,14 +294,6 @@ func (v itemView) pageIDs() []uuid.UUID {
 		out = append(out, p.FileID)
 	}
 	return out
-}
-
-// addPage 给条目末尾挂一页：文件直接写库（审核状态 reviewStatus），挂接走 PUT /api/archive-items/{id}/files。
-func (c *catalogEnv) addPage(itemID uuid.UUID, reviewStatus string) uuid.UUID {
-	c.t.Helper()
-	fid := c.mkFile(uuid.Nil, reviewStatus)
-	c.putPages(itemID, append(c.item(itemID).pageIDs(), fid)...).Expect(http.StatusOK)
-	return fid
 }
 
 func errOf(r *Response) errorBody { return Decode[errorBody](r) }

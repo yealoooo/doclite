@@ -14,8 +14,8 @@ var testItemFields = []any{
 	map[string]any{"key": "remark", "label": "备注", "type": "text"},
 }
 
-// TestItemFields：著录校验（草稿只查格式、details.fields 一次列全）、默认值、catalog-settings、改设置后的旧值规则、
-// 标记完成和已完成条目的必填检查。
+// TestItemFields：著录校验（未锁定只查格式、details.fields 一次列全）、默认值、catalog-settings、改设置后的旧值规则、
+// 锁定时的必填检查。
 func TestItemFields(t *testing.T) {
 	t.Parallel()
 	c := newCatalogEnv(t, "FD")
@@ -48,7 +48,7 @@ func TestItemFields(t *testing.T) {
 		t.Fatalf("catalog-settings：%+v", st)
 	}
 
-	// 新建：去首尾空白；没提到的用默认值，提到了的（含 null）以请求为准；草稿不查必填。
+	// 归档：题名去首尾空白，著录项用默认值；之后 PATCH 按 key 合并（null 清空）；未锁定不查必填。
 	it := c.mkItem(org.ID, map[string]any{"title": " 题名 ", "extra_fields": map[string]any{"author": " 张三 "}})
 	if it.Title != "题名" || it.ExtraFields["author"] != "张三" || it.ExtraFields["secret"] != "内部" || len(it.ExtraFields) != 2 {
 		t.Fatalf("新建：%+v", it)
@@ -56,8 +56,6 @@ func TestItemFields(t *testing.T) {
 	if noDefault := c.mkItem(org.ID, map[string]any{"extra_fields": map[string]any{"secret": nil}}); len(noDefault.ExtraFields) != 0 {
 		t.Fatalf("明确清空就不填默认值：%v", noDefault.ExtraFields)
 	}
-	c.admin.Post("/api/archive-categories/"+org.ID.String()+"/items", map[string]any{"extra_fields": map[string]any{"doc_date": "2025-13"}}).
-		ExpectError(400, "invalid_input")
 
 	// 草稿只查格式（表驱动）：keys 为空表示通过。
 	cases := []struct {
@@ -123,9 +121,10 @@ func TestItemFields(t *testing.T) {
 		t.Fatalf("合并后的著录：%+v", got.ExtraFields)
 	}
 
-	// 标记完成查必填（含题名）。
+	// 锁定时查必填（含题名）。
 	empty := c.mkItem(org.ID, nil)
-	e := errOf(c.act(empty.ID, "mark-done").ExpectError(400, "invalid_input"))
+	c.patchItem(empty.ID, map[string]any{"title": ""}).Expect(200)
+	e := errOf(c.act(empty.ID, "lock").ExpectError(400, "invalid_input"))
 	if len(e.Details.Fields) != 3 || e.Details.Fields[0].Message != "题名不能为空" || e.Details.Fields[1].Message != "责任者不能为空" ||
 		e.Details.Fields[2].Message != "日期不能为空" {
 		t.Fatalf("必填：%+v", e)
@@ -154,18 +153,18 @@ func TestItemFields(t *testing.T) {
 	if got := c.item(old.ID); got.ExtraFields["secret"] != "秘密" || got.ExtraFields["remark"] != "旧备注" || got.Title != "旧值 2" {
 		t.Fatalf("旧值没保留：%+v", got)
 	}
-	// 标记完成：现有的值要合现在的设置（设置里已经没有的不管）。
-	e = errOf(c.act(old.ID, "mark-done").ExpectError(400, "invalid_input"))
+	// 锁定：现有的值要合现在的设置（设置里已经没有的不管）。
+	e = errOf(c.act(old.ID, "lock").ExpectError(400, "invalid_input"))
 	if len(e.Details.Fields) != 2 || e.Details.Fields[0].Key != "doc_no" || e.Details.Fields[1].Key != "secret" {
-		t.Fatalf("完成时的旧值：%+v", e.Details.Fields)
+		t.Fatalf("锁定时的旧值：%+v", e.Details.Fields)
 	}
 	c.patchItem(old.ID, map[string]any{"extra_fields": map[string]any{"secret": "内部", "doc_no": "123"}}).Expect(200)
-	c.act(old.ID, "mark-done").Expect(200)
-	// 已完成的条目改著录保持完成，再查必填。
-	c.patchItem(old.ID, map[string]any{"extra_fields": map[string]any{"author": nil}}).ExpectError(400, "invalid_input")
-	c.patchItem(old.ID, map[string]any{"title": ""}).ExpectError(400, "invalid_input")
-	if got := Decode[itemView](c.patchItem(old.ID, map[string]any{"extra_fields": map[string]any{"doc_no": "12"}}).Expect(200)); got.Status != "done" {
-		t.Fatalf("已完成的改著录：%s", got.Status)
+	c.act(old.ID, "lock").Expect(200)
+	// 解锁后（未锁定）改著录只查格式：必填空着也能存，锁定时再查。
+	c.act(old.ID, "unlock").Expect(200)
+	c.patchItem(old.ID, map[string]any{"extra_fields": map[string]any{"author": nil}}).Expect(200)
+	if got := Decode[itemView](c.patchItem(old.ID, map[string]any{"extra_fields": map[string]any{"doc_no": "12"}}).Expect(200)); got.Status != "draft" {
+		t.Fatalf("未锁定的改著录：%s", got.Status)
 	}
 	upd := QueryValue[map[string]any](c.Env, `SELECT detail FROM audit_logs WHERE target_id = $1 AND action = 'update' ORDER BY id DESC LIMIT 1`, old.ID)
 	if upd["before"].(map[string]any)["extra_fields"].(map[string]any)["doc_no"] != "123" ||

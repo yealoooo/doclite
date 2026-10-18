@@ -12,7 +12,12 @@
 //   - 文件的 sort_no = 目标文件夹未删除文件的 max + 1（锁住文件夹行之后取）；
 //   - 根文件夹不能改名、移动、删除（409 root_folder_locked），可改备注；移进自己的子树 409 tree_cycle；
 //     目标不在这个项目或已删除 404；
-//   - 删除是软删除：删文件夹连子树；已归类的文件不能删（409 file_cataloged）；取消进行中的分配；每个文件记 delete；
+//   - 删除是软删除：删文件夹连子树；已归类的文件不能删（409 file_cataloged；修改中的条目的页除外，它们在重新归档时
+//     移出）；取消进行中的分配；每个文件记 delete；
+//   - 封存（requirements 5.5，2026-10-19）：是某个未删除条目的来源、且条目不在修改中的文件夹不能改结构：往里上传、
+//     复制进去、移入移出文件、删除里面的文件、给里面的文件改名、在里面建子文件夹（含把文件夹移进去）、它本身改名、移动、
+//     删除，一律 409 folder_archived（catalog.SealedCheck，在锁住文件夹行之后查，和归档读文件清单互斥）；改备注可以；
+//     上级文件夹不封存；批量操作碰到一个就整体不做；
 //   - 加锁（requirements 3.6）：文件树锁（建、改名文件夹、文件的操作共享；移动文件夹、删子树排他）→ files 行（id 升序）
 //     → folders 行（id 升序）→ 存储配置行；
 //   - 文件夹的变更写审计（target_type folder），文件的操作写 file_logs；没有实际变化不写库、不审计、不发事件；
@@ -35,6 +40,7 @@ import (
 
 	"doclite/server/internal/audit"
 	"doclite/server/internal/auth"
+	"doclite/server/internal/catalog"
 	"doclite/server/internal/file"
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/events"
@@ -122,6 +128,8 @@ type FolderItem struct {
 	UpdatedAt  time.Time  `json:"updated_at"`
 	// Ancestors 从根文件夹到父文件夹，不含自己；根文件夹的为空。
 	Ancestors []Ancestor `json:"ancestors"`
+	// Archive 是自己的归档信息（是某个未删除条目的来源时；否则为 null）。
+	Archive *catalog.FolderArchive `json:"archive"`
 }
 
 // readItem 在 q 上读未删除的文件夹和祖先链；不存在或已删除 404。
@@ -137,8 +145,12 @@ func readItem(ctx context.Context, q db.Querier, id uuid.UUID) (*FolderItem, err
 	if err != nil {
 		return nil, err
 	}
+	arch, err := catalog.FolderArchives(ctx, q, []uuid.UUID{id})
+	if err != nil {
+		return nil, err
+	}
 	return &FolderItem{ID: f.ID, ProjectID: f.ProjectID, ParentID: f.ParentID, FolderName: f.FolderName, Remark: f.Remark,
-		PathCode: f.PathCode, CreatedAt: f.CreatedAt, UpdatedAt: f.UpdatedAt, Ancestors: as}, nil
+		PathCode: f.PathCode, CreatedAt: f.CreatedAt, UpdatedAt: f.UpdatedAt, Ancestors: as, Archive: arch[id]}, nil
 }
 
 // readOnly 在一个只读的可重复读事务里执行 fn（几条查询看到同一个快照）。
@@ -181,6 +193,17 @@ func (s *Service) Children(ctx context.Context, id uuid.UUID) (*Children, error)
 		}
 		if out.Folders, err = listSubfolders(ctx, tx, id); err != nil {
 			return err
+		}
+		ids := make([]uuid.UUID, len(out.Folders))
+		for i, c := range out.Folders {
+			ids[i] = c.ID
+		}
+		arch, err := catalog.FolderArchives(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+		for i := range out.Folders {
+			out.Folders[i].Archive = arch[out.Folders[i].ID]
 		}
 		out.Files, err = listFiles(ctx, tx, id)
 		return err
@@ -266,6 +289,9 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 		parent := locked[in.ParentID]
 		if parent == nil || parent.Deleted || parent.ProjectID != pid {
 			return httpx.NotFound("上级文件夹")
+		}
+		if err := catalog.SealedCheck(ctx, tx, "在里面新建文件夹", parent.ID); err != nil {
+			return err
 		}
 		sib, err := siblingNamed(ctx, tx, parent.ID, in.FolderName, uuid.Nil)
 		if err != nil {
@@ -388,6 +414,20 @@ func (s *Service) Update(ctx context.Context, userID, projectID, id uuid.UUID, i
 				return httpx.Conflict("tree_cycle", "不能把文件夹移到它自己或它下面的子文件夹里")
 			}
 		}
+		if rename || move {
+			what := "改名"
+			if move {
+				what = "移动"
+			}
+			if err := catalog.SealedCheck(ctx, tx, what, id); err != nil {
+				return err
+			}
+		}
+		if move {
+			if err := catalog.SealedCheck(ctx, tx, "把文件夹移进去", target.ID); err != nil {
+				return err
+			}
+		}
 		if !rename && !remarkChange && !move {
 			out, err = readItem(ctx, tx, id)
 			return err
@@ -482,8 +522,8 @@ func equalPtr(a, b *string) bool {
 	return *a == *b
 }
 
-// Delete 软删除文件夹和整棵子树（项目 projectID 的授权已经查过）。子树里有已归类的文件 409 file_cataloged，
-// 什么都不改；否则子树里的文件夹和文件都打上 deleted_at，进行中的分配改成 cancelled，每个文件记一条 delete。
+// Delete 软删除文件夹和整棵子树（项目 projectID 的授权已经查过）。文件夹本身封存 409 folder_archived；子树里有
+// 已归类的文件（修改中的条目的页除外）409 file_cataloged，什么都不改；否则子树里的文件夹和文件都打上 deleted_at，进行中的分配改成 cancelled，每个文件记一条 delete。
 func (s *Service) Delete(ctx context.Context, userID, projectID, id uuid.UUID) error {
 	return s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
 		if err := project.LockFileTree(ctx, tx, projectID, true); err != nil {
@@ -499,7 +539,11 @@ func (s *Service) Delete(ctx context.Context, userID, projectID, id uuid.UUID) e
 		if f.ParentID == nil {
 			return rootLocked()
 		}
-		// 先按 id 升序锁住子树里文件的 files 行，再检查已归类（挂接锁同一行，并发也不漏）。
+		// 文件树排他锁挡住了归档、重新归档（它们拿共享锁），不用再锁文件夹行。
+		if err := catalog.SealedCheck(ctx, tx, "删除", id); err != nil {
+			return err
+		}
+		// 先按 id 升序锁住子树里文件的 files 行，再检查已归类（撤销归档锁同一行，并发也不漏）。
 		fileIDs, err := subtreeLiveFileIDs(ctx, tx, projectID, f.PathCode)
 		if err != nil {
 			return err

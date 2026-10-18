@@ -128,32 +128,26 @@ func checkCounts(t *testing.T, what string, got summaryCounts, want map[string]m
 	}
 }
 
-// TestCatalogSummary：看板矩阵（4 种审核状态 × 3 种归类状态）、可导出、按文件夹逐层展开，计数和 SQL 直接数的一致。
+// TestCatalogSummary：看板矩阵（4 种审核状态 × 3 种归档状态）、可导出、按文件夹逐层展开，计数和 SQL 直接数的一致。
 func TestCatalogSummary(t *testing.T) {
 	t.Parallel()
 	c := newCatalogEnv(t, "DB")
 	_, _, _, _, org := c.mkChain()
 	admin := c.admin
 
-	// 根 → A → A1；根 → B。
-	fa := mkdir(admin, c.folder, "A")
-	fa1 := mkdir(admin, fa.ID, "A1")
-	fb := mkdir(admin, c.folder, "B")
-	r1, r2 := c.mkFile(uuid.Nil, "unassigned"), c.mkFile(uuid.Nil, "approved")
-	a1, a2, _ := c.mkFile(fa.ID, "pending"), c.mkFile(fa.ID, "approved"), c.mkFile(fa.ID, "rejected")
-	x1, x2, _, x4 := c.mkFile(fa1.ID, "approved"), c.mkFile(fa1.ID, "approved"), c.mkFile(fa1.ID, "unassigned"), c.mkFile(fa1.ID, "pending")
-	b1 := c.mkFile(fb.ID, "approved")
-	gone := c.mkFile(fa1.ID, "approved")
-	c.Exec(`UPDATE folder_files SET deleted_at = now() WHERE file_id = $1`, gone)
+	// 根 → A（盒：直接放 3 个文件，下面 A1、A2）；根 → B。根里直接放 2 个文件。
+	c.mkFile(uuid.Nil, "unassigned")
+	c.mkFile(uuid.Nil, "approved")
+	fa, _ := c.mkFolder(uuid.Nil, "A", "pending", "approved", "rejected")
+	fa1, a1Files := c.mkFolder(fa, "A1", "approved", "approved", "unassigned", "pending", "approved")
+	c.mkFolder(fa, "A2", "approved", "pending")
+	fb, _ := c.mkFolder(uuid.Nil, "B", "approved", "approved", "approved")
+	c.Exec(`UPDATE folder_files SET deleted_at = now() WHERE file_id = $1`, a1Files[4]) // 已删除的不算
 
-	// 草稿条目 4 页（含两页待审、一页待分配），定稿条目 3 页（都通过）。
-	draft := c.mkItem(org.ID, map[string]any{"title": "草稿"})
-	c.putPages(draft.ID, a2, x4, r1, a1).Expect(200)
-	locked := c.mkItem(org.ID, map[string]any{"title": "定稿"})
-	c.putPages(locked.ID, x1, b1, r2).Expect(200)
-	c.act(locked.ID, "mark-done").Expect(200)
+	// A1 归档成未锁定的一件（4 页，含一页待审、一页待分配），B 归档并锁定（3 页都通过）。
+	draft := c.archiveOne(org.ID, fa1, "")
+	locked := c.archiveOne(org.ID, fb, "")
 	c.act(locked.ID, "lock").Expect(200)
-	_ = x2
 
 	get := func(folder *uuid.UUID) summaryView {
 		t.Helper()
@@ -175,32 +169,37 @@ func TestCatalogSummary(t *testing.T) {
 		}
 	}
 
-	// 根（整个项目）：总数 10（不含已删除的），子文件夹 A、B 按 sort_no 排。
+	// 根（整个项目）：总数 14（不含已删除的），子文件夹 A、B 按 sort_no 排。
 	root := get(nil)
-	if root.FolderID != c.folder || root.ParentID != nil || len(root.Children) != 2 || root.Children[0].FolderID != fa.ID ||
-		root.Children[1].FolderID != fb.ID || root.Counts.Total != 10 || root.DirectCounts.Total != 2 ||
-		root.Children[0].Counts.Total != 7 {
+	if root.FolderID != c.folder || root.ParentID != nil || len(root.Children) != 2 || root.Children[0].FolderID != fa ||
+		root.Children[1].FolderID != fb || root.Counts.Total != 14 || root.DirectCounts.Total != 2 ||
+		root.Children[0].Counts.Total != 9 {
 		t.Fatalf("根：%+v", root)
 	}
-	// 几个关键格子（防止 SQL 和接口一起错）：通过且已定稿 3，通过且未定稿 1（a2），通过且未归类 1（x2）。
-	if m := root.Counts.Matrix["approved"]; m.Locked != 3 || m.Unlocked != 1 || m.Uncataloged != 1 ||
+	// 几个关键格子（防止 SQL 和接口一起错）：通过且已锁定 3，通过且未锁定 2（A1），通过且未归档 3。
+	if m := root.Counts.Matrix["approved"]; m.Locked != 3 || m.Unlocked != 2 || m.Uncataloged != 3 ||
 		root.Counts.Exportable.Approved != 3 || root.Counts.Exportable.Total != 3 || root.Counts.Catalog.Cataloged != 7 {
 		t.Fatalf("矩阵：%+v", root.Counts)
 	}
 	check(root, true)
-	sub := get(&fa.ID)
-	if sub.ParentID == nil || *sub.ParentID != c.folder || len(sub.Children) != 1 || sub.Children[0].FolderID != fa1.ID {
+	sub := get(&fa)
+	if sub.ParentID == nil || *sub.ParentID != c.folder || len(sub.Children) != 2 || sub.Children[0].FolderID != fa1 {
 		t.Fatalf("A：%+v", sub)
 	}
 	check(sub, true)
 
-	// export.require_locked_item 关掉：可导出算全部已归类的。
+	// export.require_locked_item 关掉：可导出算全部已归档的（修改中的除外，导出预检不就绪）。
 	c.setSettings(map[string]any{"export": map[string]any{"require_locked_item": false}})
 	root = get(nil)
-	if root.Counts.Exportable.Total != 7 || root.Counts.Exportable.Pending != 2 {
-		t.Fatalf("不要求定稿：%+v", root.Counts.Exportable)
+	if root.Counts.Exportable.Total != 7 || root.Counts.Exportable.Pending != 1 {
+		t.Fatalf("不要求锁定：%+v", root.Counts.Exportable)
 	}
 	check(root, false)
+	c.unseal(draft.ID).Expect(200)
+	root = get(nil)
+	if root.Counts.Exportable.Total != 3 || root.Counts.Matrix["approved"].Unlocked != 2 {
+		t.Fatalf("修改中的不可导出：%+v", root.Counts)
+	}
 
 	// 参数：不合法 400；别的项目的、不存在的文件夹 404。
 	base := "/api/projects/" + c.pid.String() + "/catalog-summary?folder_id="

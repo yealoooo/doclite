@@ -28,15 +28,21 @@ type itemRow struct {
 	UpdatedAt    time.Time
 	Deleted      bool
 	CategoryPath string
+	// SourceFolderID 是来源文件夹（未删除的条目一定有；迁移 0004 之前删掉的旧条目为 nil）。
+	SourceFolderID *uuid.UUID
+	// SourceStatus 是 sealed（封存）或 modifying（修改中）。
+	SourceStatus string
 }
 
 const itemColumns = `i.id, i.project_id, i.category_id, i.item_no, i.archive_no, i.title, i.extra_fields, i.status,
-  i.row_version, i.created_by, i.created_at, i.updated_by, i.updated_at, i.deleted_at IS NOT NULL, c.path_code`
+  i.row_version, i.created_by, i.created_at, i.updated_by, i.updated_at, i.deleted_at IS NOT NULL, c.path_code,
+  i.source_folder_id, i.source_status`
 
 func scanItemRow(sc interface{ Scan(...any) error }) (*itemRow, error) {
 	var r itemRow
 	if err := sc.Scan(&r.ID, &r.ProjectID, &r.CategoryID, &r.ItemNo, &r.ArchiveNo, &r.Title, &r.ExtraFields, &r.Status,
-		&r.RowVersion, &r.CreatedBy, &r.CreatedAt, &r.UpdatedBy, &r.UpdatedAt, &r.Deleted, &r.CategoryPath); err != nil {
+		&r.RowVersion, &r.CreatedBy, &r.CreatedAt, &r.UpdatedBy, &r.UpdatedAt, &r.Deleted, &r.CategoryPath,
+		&r.SourceFolderID, &r.SourceStatus); err != nil {
 		return nil, err
 	}
 	if r.ExtraFields == nil {
@@ -129,14 +135,6 @@ func itemNoTaken(ctx context.Context, q db.Querier, categoryID uuid.UUID, itemNo
 	return &u, err
 }
 
-func insertItem(ctx context.Context, q db.Querier, r *itemRow) error {
-	_, err := q.Exec(ctx, `INSERT INTO archive_items
-  (id, project_id, category_id, item_level, item_no, archive_no, title, extra_fields, status, row_version, created_by)
-VALUES ($1, $2, $3, 'item', $4, $5, $6, $7, 'draft', 1, $8)`,
-		r.ID, r.ProjectID, r.CategoryID, r.ItemNo, r.ArchiveNo, r.Title, r.ExtraFields, r.CreatedBy)
-	return err
-}
-
 // updateItemRow 写条目的可变列，row_version + 1。
 func updateItemRow(ctx context.Context, q db.Querier, r *itemRow, operatorID uuid.UUID) error {
 	_, err := q.Exec(ctx, `UPDATE archive_items SET category_id = $2, item_no = $3, archive_no = $4, title = $5,
@@ -150,6 +148,17 @@ func softDeleteItem(ctx context.Context, q db.Querier, id, operatorID uuid.UUID)
 	_, err := q.Exec(ctx, `UPDATE archive_items SET deleted_at = now(), row_version = row_version + 1, updated_by = $2,
   updated_at = now() WHERE id = $1`, id, operatorID)
 	return err
+}
+
+// sourceIDs 是这些条目的来源文件夹（folders.changed 用）。
+func sourceIDs(rows ...*itemRow) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, r := range rows {
+		if r.SourceFolderID != nil {
+			out = append(out, *r.SourceFolderID)
+		}
+	}
+	return out
 }
 
 // setItemsStatus 改一批条目的状态，row_version + 1。
@@ -182,22 +191,37 @@ type ItemSummary struct {
 	RowVersion int        `json:"row_version"`
 	PageCount  int        `json:"page_count"`
 	PageCounts PageCounts `json:"page_counts"`
-	// LockedAt 是最近一次定稿的时间（最近一条 archive_item / lock 审计）；没有定稿为 null。
+	// LockedAt 是最近一次锁定的时间（最近一条 archive_item / lock 审计）；没有锁定为 null。
 	LockedAt *time.Time `json:"locked_at"`
-	// NewVersionAfterLock：已定稿，而且有页的当前版本是定稿之后出的。
+	// NewVersionAfterLock：已锁定，而且有页的当前版本是锁定之后出的。
 	NewVersionAfterLock bool      `json:"new_version_after_lock"`
 	UpdatedAt           time.Time `json:"updated_at"`
+	// 来源文件夹（迁移 0004）：条目由它整个归档而来。SourceFolderPath 从项目根文件夹起用 `/` 连接；
+	// SourceFolderDeleted：文件夹已删除（只会发生在修改中，重新归档会 409，只能撤销归档）。
+	SourceFolderID      uuid.UUID `json:"source_folder_id"`
+	SourceFolderName    string    `json:"source_folder_name"`
+	SourceFolderPath    string    `json:"source_folder_path"`
+	SourceFolderDeleted bool      `json:"source_folder_deleted"`
+	// SourceStatus 是 sealed（封存）或 modifying（修改中）；UnsealedBy 等是修改中的那次解除封存（sealed 时为 null）。
+	SourceStatus   string     `json:"source_status"`
+	UnsealedBy     *uuid.UUID `json:"unsealed_by"`
+	UnsealedByName *string    `json:"unsealed_by_name"`
+	UnsealedAt     *time.Time `json:"unsealed_at"`
+	UnsealReason   *string    `json:"unseal_reason"`
 }
 
-// summarySelect 是列表、详情共用的部分；条件里用别名 i。页数按 folder_files 的审核状态分（挂接的文件不会被删除，
-// 已归类的文件删不掉）；定稿时间读审计。
+// summarySelect 是列表、详情共用的部分；条件里用别名 i。页数按 folder_files 的审核状态分（含修改中删掉的文件：
+// 重新归档前页不变）；锁定时间读审计；来源文件夹、解除封存的人是跨模块的读（folders、users）。
 const summarySelect = `SELECT i.id, i.category_id, i.item_no, i.archive_no, i.title, i.status, i.row_version,
   pc.total, pc.unassigned, pc.pending, pc.approved, pc.rejected, la.locked_at,
   (la.locked_at IS NOT NULL AND EXISTS (
      SELECT 1 FROM archive_item_files af JOIN file_snapshots s ON s.file_id = af.file_id
      WHERE af.archive_item_id = i.id AND s.created_at > la.locked_at)),
-  i.updated_at
+  i.updated_at, i.source_folder_id, sf.folder_name, sf.deleted_at IS NOT NULL, i.source_status,
+  i.unsealed_by, uu.display_name, i.unsealed_at, i.unseal_reason
 FROM archive_items i
+JOIN folders sf ON sf.id = i.source_folder_id
+LEFT JOIN users uu ON uu.id = i.unsealed_by
 CROSS JOIN LATERAL (
   SELECT count(*) AS total,
     count(*) FILTER (WHERE ff.review_status = 'unassigned') AS unassigned,
@@ -214,8 +238,28 @@ func scanSummary(sc interface{ Scan(...any) error }) (ItemSummary, error) {
 	var s ItemSummary
 	err := sc.Scan(&s.ID, &s.CategoryID, &s.ItemNo, &s.ArchiveNo, &s.Title, &s.Status, &s.RowVersion,
 		&s.PageCount, &s.PageCounts.Unassigned, &s.PageCounts.Pending, &s.PageCounts.Approved, &s.PageCounts.Rejected,
-		&s.LockedAt, &s.NewVersionAfterLock, &s.UpdatedAt)
+		&s.LockedAt, &s.NewVersionAfterLock, &s.UpdatedAt, &s.SourceFolderID, &s.SourceFolderName, &s.SourceFolderDeleted,
+		&s.SourceStatus, &s.UnsealedBy, &s.UnsealedByName, &s.UnsealedAt, &s.UnsealReason)
 	return s, err
+}
+
+// fillSourcePaths 填上来源文件夹的路径（一条查询）。
+func fillSourcePaths(ctx context.Context, q db.Querier, items []ItemSummary) error {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(items))
+	for i, it := range items {
+		ids[i] = it.SourceFolderID
+	}
+	paths, err := folderPaths(ctx, q, ids)
+	if err != nil {
+		return err
+	}
+	for i := range items {
+		items[i].SourceFolderPath = paths[items[i].SourceFolderID]
+	}
+	return nil
 }
 
 // listItemSummaries 是节点里直接放的未删除条目，按件号、id 排，从 (afterNo, afterID) 之后取 limit 个（after 为 nil 从头）。
@@ -235,27 +279,36 @@ ORDER BY i.item_no, i.id LIMIT $4`, categoryID, afterNo, afterID, limit)
 		}
 		out = append(out, s)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, fillSourcePaths(ctx, q, out)
 }
 
-// StatusCounts 是节点里直接放的未删除条目按状态的个数。
+// StatusCounts 是节点里直接放的未删除条目按状态的个数：draft 未锁定（其中 modifying 个修改中）、locked 已锁定。
 type StatusCounts struct {
-	Draft  int `json:"draft"`
-	Done   int `json:"done"`
-	Locked int `json:"locked"`
+	Draft     int `json:"draft"`
+	Locked    int `json:"locked"`
+	Modifying int `json:"modifying"`
 }
 
 func countItems(ctx context.Context, q db.Querier, categoryID uuid.UUID) (int, StatusCounts, error) {
 	var total int
 	var c StatusCounts
 	err := q.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE status = 'draft'),
-  count(*) FILTER (WHERE status = 'done'), count(*) FILTER (WHERE status = 'locked')
-FROM archive_items WHERE category_id = $1 AND deleted_at IS NULL`, categoryID).Scan(&total, &c.Draft, &c.Done, &c.Locked)
+  count(*) FILTER (WHERE status = 'locked'), count(*) FILTER (WHERE source_status = 'modifying')
+FROM archive_items WHERE category_id = $1 AND deleted_at IS NULL`, categoryID).Scan(&total, &c.Draft, &c.Locked, &c.Modifying)
 	return total, c, err
 }
 
 func itemSummary(ctx context.Context, q db.Querier, id uuid.UUID) (ItemSummary, error) {
-	return scanSummary(q.QueryRow(ctx, summarySelect+` WHERE i.id = $1`, id))
+	s, err := scanSummary(q.QueryRow(ctx, summarySelect+` WHERE i.id = $1`, id))
+	if err != nil {
+		return s, err
+	}
+	one := []ItemSummary{s}
+	err = fillSourcePaths(ctx, q, one)
+	return one[0], err
 }
 
 // Page 是条目的一页（详情的 pages，按页号排）。
@@ -270,11 +323,11 @@ type Page struct {
 	ReviewRound  int    `json:"review_round"`
 	// VersionNo 是当前版本号。
 	VersionNo int `json:"version_no"`
-	// NewVersionAfterLock：条目已定稿，而且这一页的当前版本是定稿之后出的。
+	// NewVersionAfterLock：条目已锁定，而且这一页的当前版本是锁定之后出的。
 	NewVersionAfterLock bool `json:"new_version_after_lock"`
 }
 
-// itemPages 读条目的页（跨模块的读：folder_files、file_snapshots、folders）。lockedAt 是定稿时间（没定稿为 nil）。
+// itemPages 读条目的页（跨模块的读：folder_files、file_snapshots、folders）。lockedAt 是锁定时间（没锁定为 nil）。
 func itemPages(ctx context.Context, q db.Querier, itemID uuid.UUID, lockedAt *time.Time) ([]Page, error) {
 	rows, err := q.Query(ctx, `SELECT af.file_id, af.page_no, ff.file_name, ff.folder_id, ff.review_status, ff.review_round,
   coalesce(s.version_no, 0), s.created_at
@@ -345,7 +398,7 @@ GROUP BY f.id`, ids)
 	return out, rows.Err()
 }
 
-// pageStats 是定稿前置条件要看的页：页数、没审核通过的页数和其中最前的页号（审核状态按这一刻读，不锁文件）。
+// pageStats 是锁定前置条件要看的页：页数、没审核通过的页数和其中最前的页号（审核状态按这一刻读，不锁文件）。
 type pageStats struct {
 	Pages       int
 	NotApproved int

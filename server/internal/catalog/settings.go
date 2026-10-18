@@ -49,7 +49,7 @@ type settings struct {
 	templateErr string
 	fields      []FieldDef
 	fieldByKey  map[string]*FieldDef
-	// lockRequiresApproved：定稿要求全部页审核通过。
+	// lockRequiresApproved：锁定要求全部页审核通过。
 	lockRequiresApproved bool
 	requireLockedItem    bool
 }

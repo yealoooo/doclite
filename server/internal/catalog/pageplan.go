@@ -5,29 +5,13 @@ import (
 	"slices"
 
 	"github.com/google/uuid"
-
-	"doclite/server/internal/platform/httpx"
 )
 
-// 页序的纯函数（requirements 5.9"挂接"，用户决定 Q3）：PUT 整体替换条目的页，页号重排成 1..n。
+// 页序的纯函数（requirements 5.9）：重新归档把条目的页换成来源文件夹现在的文件，页号重排成 1..n；
+// 调序（reorder 审计、reseal-preview 的 moved）只算留下的页里相对顺序变了的。
 
-// MaxItemPages 是一个条目最多的页数。
+// MaxItemPages 是一个条目最多的页数（件文件夹最多 2000 个文件）。
 const MaxItemPages = 2000
-
-// checkPageList 校验要挂的页：≤ MaxItemPages 个，同一个文件不能出现两次（400 `invalid_input`）。
-func checkPageList(ids []uuid.UUID) error {
-	if len(ids) > MaxItemPages {
-		return httpx.Invalid("一个条目最多 %d 页，这次有 %d 页", MaxItemPages, len(ids))
-	}
-	seen := make(map[uuid.UUID]int, len(ids))
-	for i, id := range ids {
-		if j, dup := seen[id]; dup {
-			return httpx.Invalid("file_ids 的第 %d 项和第 %d 项是同一个文件（%s），一个文件在条目里只能出现一次", j+1, i+1, id)
-		}
-		seen[id] = i
-	}
-	return nil
-}
 
 // curPage 是条目现在的一页。
 type curPage struct {

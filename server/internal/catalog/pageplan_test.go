@@ -95,16 +95,3 @@ func TestLongestIncreasing(t *testing.T) {
 		}
 	}
 }
-
-func TestCheckPageList(t *testing.T) {
-	a := uuid.New()
-	if err := checkPageList([]uuid.UUID{a, uuid.New(), a}); err == nil {
-		t.Fatal("重复的文件应当 400")
-	}
-	if err := checkPageList(make([]uuid.UUID, MaxItemPages+1)); err == nil {
-		t.Fatal("超过上限应当 400")
-	}
-	if err := checkPageList(nil); err != nil {
-		t.Fatal(err)
-	}
-}

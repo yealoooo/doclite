@@ -15,7 +15,7 @@ import (
 //
 // 跨模块的读（只读）：projects.settings（归类设置）；folder_files、folders、file_snapshots（条目的页：文件名、
 // 文件夹路径、审核状态、当前版本；挂接时锁住 files 行之后重读；归类信息、看板）；audit_logs 里 archive_item / lock
-// 的时间（定稿时间）。
+// 的时间（锁定时间）。
 // 跨模块的写：file_logs 经 file.WriteLogs，files 行锁经 file.LockFiles（挂接、移出）。
 // 跨模块的写：audit_logs 的批量插入（[insertAudits]，格式同 audit.Write，重算档号时一次写很多条）。
 
@@ -361,7 +361,7 @@ type renumberRow struct {
 	CategoryPath string
 }
 
-// subtreeItemsForRenumber 是 path 子树里未删除、未定稿的条目（按 id），以及已定稿的条目数。
+// subtreeItemsForRenumber 是 path 子树里未删除、未锁定的条目（按 id），以及已锁定的条目数。
 func subtreeItemsForRenumber(ctx context.Context, q db.Querier, projectID uuid.UUID, path string) ([]renumberRow, int, error) {
 	rows, err := q.Query(ctx, `SELECT i.id, i.item_no, i.archive_no, c.path_code, i.status = 'locked'
 FROM archive_items i JOIN archive_categories c ON c.id = i.category_id

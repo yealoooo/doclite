@@ -20,7 +20,7 @@ import (
 //   - 档号按项目现在的模板和条目所在节点的祖先链生成（archiveno），缺级留空；
 //   - **撞号**：生成的档号已经被项目里别的未删除条目占着时，自动生成和重算都把档号留空、不报错；只有显式改件号
 //     （PATCH 带 item_no）时 409 `conflict`；
-//   - **批量重算**（[renumberSubtree]：改节点编码、类型、移动节点、按新模板重新生成）：范围外的和已定稿的先占着
+//   - **批量重算**（[renumberSubtree]：改节点编码、类型、移动节点、按新模板重新生成）：范围外的和已锁定的先占着
 //     现在的号；范围里的分档先到先得——① 有号、号不变 ② 有号、要换号 ③ 原来没号，档内按 id 升序；后到的撞号留空。
 //     结果是确定的，重复执行不变；
 //   - 唯一索引 ux_archive_items_no 不能延迟检查：写的时候先把"旧号是别人新号"的置空，再写新号；
@@ -28,16 +28,21 @@ import (
 //     同时生成同一个档号时后到的等前一个提交，再查就能看到，不会撞唯一索引。批量重算拿归类树排他锁，不用它。
 
 // lockClassArchiveNo 是档号咨询锁的类别（6000 迁移和测试模板库、6001 文件树、6002 归类树、6003 内容锁、
-// 6004 任务领取）。它在归类的行锁之后、文件树锁之前拿。带页新建时，拿到 6005 之后还会拿文件树锁和 files 行；
-// 拿着文件树锁或 files 行的事务不能再拿 6005。
+// 6004 任务领取）。它在归类的行锁之后拿；归档（archive.go）在文件树锁、来源文件夹行之后拿（一次按键排序拿全）。
+// 拿着 6005 的事务不再等文件树锁、files 行、folders 行，也不再一个一个地多拿 6005（只有归档一次拿多个，按键排序）。
 const lockClassArchiveNo = 6005
 
-// lockArchiveNo 在事务里拿（项目, 档号）的咨询锁，到事务结束为止。不同档号折叠到同一个键只是多等一会儿。
-func lockArchiveNo(ctx context.Context, tx db.Querier, projectID uuid.UUID, archiveNo string) error {
+// archiveNoKey 是（项目, 档号）的咨询锁的键。不同档号折叠到同一个键只是多等一会儿。
+func archiveNoKey(projectID uuid.UUID, archiveNo string) int32 {
 	h := fnv.New32a()
 	h.Write(projectID[:])
 	h.Write([]byte(archiveNo))
-	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1::int4, $2::int4)`, lockClassArchiveNo, int32(h.Sum32()))
+	return int32(h.Sum32())
+}
+
+// lockArchiveNo 在事务里拿（项目, 档号）的咨询锁，到事务结束为止。
+func lockArchiveNo(ctx context.Context, tx db.Querier, projectID uuid.UUID, archiveNo string) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1::int4, $2::int4)`, lockClassArchiveNo, archiveNoKey(projectID, archiveNo))
 	return err
 }
 
@@ -127,7 +132,7 @@ func equalStr(a, b *string) bool {
 	return *a == *b
 }
 
-// allocate 给候选条目分配档号。taken 是范围外的、已定稿的条目占着的号（档号 → 条目），不会被改动。
+// allocate 给候选条目分配档号。taken 是范围外的、已锁定的条目占着的号（档号 → 条目），不会被改动。
 // 分档：① 有号、号不变 ② 有号、要换号 ③ 原来没号；档内按 id 升序；生成的号已经被占（范围外，或者前面的条目
 // 刚拿到）就留空。返回值按 id 升序。
 func allocate(cands []candidate, taken map[string]uuid.UUID) []assignment {
@@ -177,13 +182,13 @@ func allocate(cands []candidate, taken map[string]uuid.UUID) []assignment {
 type renumberResult struct {
 	// Changed 是档号变了的条目（含变成空的）。
 	Changed []uuid.UUID
-	// Conflicts 是范围里因为撞号档号留空的未定稿条目数（这次变成空的和原来就空、这次还是空的都算）。
+	// Conflicts 是范围里因为撞号档号留空的未锁定条目数（这次变成空的和原来就空、这次还是空的都算）。
 	Conflicts int
-	// SkippedLocked 是范围里已定稿、没有动的条目数。
+	// SkippedLocked 是范围里已锁定、没有动的条目数。
 	SkippedLocked int
 }
 
-// renumberSubtree 按项目现在的模板重算 path 子树里未删除、未定稿条目的档号（path 是子树根现在的 path_code）。
+// renumberSubtree 按项目现在的模板重算 path 子树里未删除、未锁定条目的档号（path 是子树根现在的 path_code）。
 // 档号变了的 row_version + 1，各写一条 archive_item / renumber 审计（detail 带 cause，撞号的带 conflict）。
 // 模板解析不了而有要重算的条目时 409 `invalid_state`（what 是给人看的动作，例如"移动节点"）。
 func renumberSubtree(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.UUID, path string, st *settings,

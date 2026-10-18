@@ -16,27 +16,21 @@ import (
 	"doclite/server/internal/project"
 )
 
-// 挂接、页序和删除条目时一并移出（requirements 5.9"挂接"，用户决定 Q3、Q8）：
-//   - PUT 整体替换条目的页，页号重排成 1..n；≤ 2000 页；同一个文件出现两次 400；和现在完全一样时不写库、不写日志、
-//     不发事件，row_version 不变；有变化时 row_version + 1（一个请求只加 1）；
-//   - 一个文件只在一个条目里：要新挂上的文件已经在别的条目里 409 `file_cataloged`，details {ids, items}（在哪：条目、
-//     档号、件号、题名、节点名称链、第几页、状态）；不存在、已删除（含所在文件夹）、不在这个项目里 404，details.ids
-//     是 file_id（按请求里的顺序）。任何一个错误都整体不做；
-//   - 新建条目带 file_ids：插入条目之后同样挂上（row_version 仍是 1），失败整体回滚，条目也不建；
-//   - 删除条目：有页时一并移出（unlink 带 item_deleted: true）。
+// 条目的页的写（requirements 5.9；2026-10-19 起页只来自来源文件夹，归类这边不能单独挂页、移页、排页序）：
+//   - 归档（archive.go）一次建很多件，批量写挂接；
+//   - 重新归档（seal.go）把页换成来源文件夹现在的文件，撤销归档（DeleteItem）一并移出全部页，都走 [applyPages]；
+//   - 一个文件只在一个条目里：要新挂上的文件已经在别的条目里 409 `file_cataloged`，details {ids, items}（在哪：
+//     条目、档号、件号、题名、节点名称链、第几页、状态）。
 //
-// 加锁（requirements 3.6，硬性要求）：归类树锁（共享）→ 条目行（新建时是节点行，再插入条目）→ 有新挂上或移出的页时
-// 才拿文件树锁（共享）→ 这些文件的 files 行（只锁这个项目里的，id 升序）→ 用新语句重读 folder_files。只换页号时
-// 不拿文件树锁、不锁 files 行（这些页在这个条目里，条目行已经锁住；已归类的文件也删不掉）。拿着文件树锁的事务（审核、
-// 文件目录、上传）从不等归类的锁和行，所以等条目行的挂接不会把审核拖住。
+// 加锁（requirements 3.6）：调用方先拿归类树锁（共享）和条目行。撤销归档（lockFiles）在归类的锁和行之后再拿文件树锁
+// （共享）和移出的文件的 files 行（id 升序），锁后重读 folder_files。重新归档已经按"文件树锁 → 来源文件夹行"锁住了
+// 来源文件夹（封存检查和读文件清单互斥，见 seal.go），不再锁 files 行：files 行在 folders 行之前，锁了文件夹再锁
+// files 行会和"先锁 files 行再锁文件夹"的删除、移动成环；往这个文件夹里放、拿文件都要先锁文件夹行。
 //
 // 日志：新挂上的每页一条 link、移出的每页一条 unlink（先 unlink 再 link），detail {item_id, item_no, archive_no, title,
-// page_no, file_name, folder_path, version_no, review_status}，删除条目时另带 item_deleted: true；留下的页相对顺序变了
+// page_no, file_name, folder_path, version_no, review_status}，撤销归档时另带 item_deleted: true；留下的页相对顺序变了
 // 写一条 archive_item / reorder 审计 {page_count, linked, unlinked, moved: [{file_id, file_name, from_page, to_page}]}，
 // 只记挪动过的页（最长递增子序列之外），插入、移出引起的顺延不算。
-//
-// 事件（提交后）：有挂上、移出的页时先发 files.changed（这些文件直接所在的文件夹 + file_ids），再发 catalog.changed
-// {category_ids: [所在节点], item_ids: [条目]}；只换页号时只发 catalog.changed。
 
 // pageChange 是 applyPages 做了的事。
 type pageChange struct {
@@ -53,9 +47,17 @@ func (c *pageChange) filesEvent(projectID uuid.UUID) []events.Event {
 	return []events.Event{events.FilesChanged(projectID, c.FolderIDs, c.FileIDs)}
 }
 
-// applyPages 在调用方的事务里把条目 it 的页换成 wanted（已经 checkPageList 过）。调用前要拿着归类树锁（共享）、锁住
-// 条目行（新建时是节点行，条目已插入）。不改条目行本身（row_version 由调用方处理）。itemDeleted：删除条目时一并移出。
-func applyPages(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.UUID, it *itemRow, wanted []uuid.UUID, itemDeleted bool) (*pageChange, error) {
+// pageOpts 是 applyPages 的选项。
+type pageOpts struct {
+	// itemDeleted：撤销归档时一并移出（日志带 item_deleted）。
+	itemDeleted bool
+	// lockFiles：有挂上、移出时拿文件树锁和这些文件的 files 行（撤销归档）；重新归档已经锁住来源文件夹，不锁。
+	lockFiles bool
+}
+
+// applyPages 在调用方的事务里把条目 it 的页换成 wanted（按页序，不重复）。调用前要拿着归类树锁（共享）、锁住条目行。
+// 不改条目行本身（row_version 由调用方处理）。
+func applyPages(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.UUID, it *itemRow, wanted []uuid.UUID, opt pageOpts) (*pageChange, error) {
 	current, err := itemPageList(ctx, tx, it.ID)
 	if err != nil {
 		return nil, err
@@ -67,7 +69,7 @@ func applyPages(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.UUID,
 	}
 	touched := p.touched()
 	locked := map[uuid.UUID]bool{}
-	if len(touched) > 0 {
+	if len(touched) > 0 && opt.lockFiles {
 		// 文件树锁在归类的锁和行之后（requirements 3.6）。
 		if err := project.LockFileTree(ctx, tx, projectID, false); err != nil {
 			return nil, err
@@ -89,12 +91,12 @@ func applyPages(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.UUID,
 		return nil, err
 	}
 
-	// 要新挂上的：不存在、已删除、不在这个项目里 404；已经在别的条目里 409 file_cataloged。筛选和加锁之后才在这个项目
-	// 里出现的文件（不在已锁住的集合里）也按 404，只挂锁住了 files 行的文件。
+	// 要新挂上的：不存在、已删除、不在这个项目里 404（重新归档的页来自锁住的来源文件夹，走不到）；已经在别的条目里
+	// 409 file_cataloged。拿 files 行锁时只挂锁住了的文件。
 	var missing []uuid.UUID
 	linkedIDs := fileIDsOf(p.Linked)
 	for _, id := range linkedIDs {
-		if f := files[id]; f == nil || !f.Live || !locked[id] {
+		if f := files[id]; f == nil || !f.Live || (opt.lockFiles && !locked[id]) {
 			missing = append(missing, id)
 		}
 	}
@@ -135,7 +137,7 @@ func applyPages(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.UUID,
 				out.FolderIDs = append(out.FolderIDs, f.FolderID)
 			}
 		}
-		if itemDeleted {
+		if opt.itemDeleted {
 			d["item_deleted"] = true
 		}
 		out.FileIDs = append(out.FileIDs, m.FileID)
@@ -203,10 +205,10 @@ func checkNotElsewhere(ctx context.Context, q db.Querier, itemID uuid.UUID, link
 		name = "「" + f.FileName + "」"
 	}
 	at := fmt.Sprintf("%s第 %d 页", itemLabel(first.ItemNo, first.ArchiveNo), first.PageNo)
-	msg := fmt.Sprintf("文件%s已经挂在%s，一个文件只能在一个条目里；要挂到这里先从原条目移出", name, at)
+	msg := fmt.Sprintf("文件%s还在%s里（一个文件只能在一个条目里）；它是从那一件的来源文件夹移过来的，先重新归档那一件", name, at)
 	if len(ids) > 1 {
-		msg = fmt.Sprintf("有 %d 个文件已经挂在别的条目里（例如%s在%s），一个文件只能在一个条目里；要挂到这里先从原条目移出",
-			len(ids), name, at)
+		msg = fmt.Sprintf("有 %d 个文件还在别的条目里（例如%s在%s，一个文件只能在一个条目里）；它们是从修改中的文件夹移过来的，"+
+			"先重新归档那几件", len(ids), name, at)
 	}
 	return httpx.Conflict("file_cataloged", msg).WithDetails(map[string]any{"ids": ids, "items": items})
 }
@@ -233,71 +235,6 @@ func elsewhereDetails(ctx context.Context, q db.Querier, rows []*placementRow) (
 	out := make([]CatalogedElsewhere, len(rows))
 	for i, r := range rows {
 		out[i] = CatalogedElsewhere{FileID: r.FileID, placementBase: r.base(names[r.CategoryID])}
-	}
-	return out, nil
-}
-
-// PageInput 是 `PUT /api/archive-items/{id}/files` 的输入。
-type PageInput struct {
-	RowVersion int
-	FileIDs    []uuid.UUID
-}
-
-// ReplacePages 整体替换条目的页。检查顺序：参数 400 → 条目 404 → 定稿 409 item_locked → row_version 409 conflict →
-// 要挂的文件 404（details.ids）→ 409 file_cataloged。
-func (s *Service) ReplacePages(ctx context.Context, operatorID, id uuid.UUID, in PageInput) (*Item, error) {
-	if err := checkRowVersion(in.RowVersion); err != nil {
-		return nil, err
-	}
-	if err := checkPageList(in.FileIDs); err != nil {
-		return nil, err
-	}
-	cur, err := getItem(ctx, s.pool, id)
-	if err != nil {
-		return nil, err
-	}
-	if cur == nil {
-		return nil, errItemNotFound
-	}
-	projectID := cur.ProjectID
-	st, err := loadSettings(ctx, s.pool, projectID)
-	if err != nil {
-		return nil, err
-	}
-	var out *Item
-	err = s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
-		if err := project.LockCatalogTree(ctx, tx, projectID, false); err != nil {
-			return err
-		}
-		r, err := lockItem(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if r == nil || r.Deleted {
-			return errItemNotFound
-		}
-		if r.Status == statusLocked {
-			return errLockedEdit("改页序、挂接或移出")
-		}
-		if r.RowVersion != in.RowVersion {
-			return staleVersion(r.RowVersion)
-		}
-		ch, err := applyPages(ctx, tx, projectID, operatorID, r, in.FileIDs, false)
-		if err != nil {
-			return err
-		}
-		if ch.Plan.changed() {
-			if err := touchItem(ctx, tx, id, operatorID); err != nil {
-				return err
-			}
-			ev.Add(ch.filesEvent(projectID)...)
-			ev.Add(events.CatalogChanged(projectID, []uuid.UUID{r.CategoryID}, []uuid.UUID{id}))
-		}
-		out, err = readItem(ctx, tx, st, id)
-		return err
-	})
-	if err != nil {
-		return nil, err
 	}
 	return out, nil
 }

@@ -106,6 +106,7 @@ type scopeItem struct {
 	Title         string
 	ExtraFields   map[string]any
 	Status        string
+	SourceStatus  string
 	RowVersion    int
 	PageCount     int
 	Unapproved    int
@@ -131,7 +132,7 @@ func scopeItems(ctx context.Context, q db.Querier, projectID uuid.UUID, ids []uu
     (array_agg(review_status ORDER BY page_no) FILTER (WHERE review_status <> 'approved'))[1:5] AS ex_status
   FROM pages GROUP BY item_id
 )
-SELECT a.id, a.category_id, a.item_no, a.archive_no, a.title, a.extra_fields, a.status, a.row_version,
+SELECT a.id, a.category_id, a.item_no, a.archive_no, a.title, a.extra_fields, a.status, a.source_status, a.row_version,
   COALESCE(g.page_count, 0), COALESCE(g.unapproved, 0), g.ex_page, g.ex_file, g.ex_name, g.ex_status
 FROM archive_items a
 JOIN archive_categories c ON c.id = a.category_id
@@ -149,7 +150,7 @@ ORDER BY c.path_code, a.item_no, a.id`, projectID, ids)
 		var exFile []uuid.UUID
 		var exName, exStatus []string
 		if err := rows.Scan(&it.ID, &it.CategoryID, &it.ItemNo, &it.ArchiveNo, &it.Title, &it.ExtraFields, &it.Status,
-			&it.RowVersion, &it.PageCount, &it.Unapproved, &exPage, &exFile, &exName, &exStatus); err != nil {
+			&it.SourceStatus, &it.RowVersion, &it.PageCount, &it.Unapproved, &exPage, &exFile, &exName, &exStatus); err != nil {
 			return nil, err
 		}
 		for i := range exPage {

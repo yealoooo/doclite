@@ -35,7 +35,7 @@ func TestImagesBundle(t *testing.T) {
 	item2 := testItem("a-2025-0001", p4) // 不区分大小写和第一件重名
 	item2.Status, item2.FieldValues = "draft", []string{"2024", ""}
 	item3 := testItem("CON.1", p5) // 保留名
-	item3.Status, item3.FieldValues = "done", []string{"", "=1+1"}
+	item3.Status, item3.FieldValues = "draft", []string{"", "=1+1"}
 	job := &Job{Format: FormatImages, FieldNames: []string{"年度", "件号"}, Items: []Item{item1, item2, item3}}
 
 	var progress []Progress
@@ -139,9 +139,9 @@ func TestImagesBundle(t *testing.T) {
 	}
 	wantRows := [][]string{
 		{"序号", "档号", "题名", "年度", "件号", "页数", "状态", "分类路径"},
-		{"1", "A-2025-0001", "题名 A-2025-0001", "2025", "0012", "3", "已定稿", "文书 / 2025"},
-		{"2", "a-2025-0001", "题名 a-2025-0001", "2024", "", "1", "草稿"},
-		{"3", "CON.1", "题名 CON.1", "", "=1+1", "1", "已完成"},
+		{"1", "A-2025-0001", "题名 A-2025-0001", "2025", "0012", "3", "已锁定", "文书 / 2025"},
+		{"2", "a-2025-0001", "题名 a-2025-0001", "2024", "", "1", "未锁定"},
+		{"3", "CON.1", "题名 CON.1", "", "=1+1", "1", "未锁定"},
 	}
 	if len(xrows) != len(wantRows) {
 		t.Fatalf("目录.xlsx 有 %d 行", len(xrows))

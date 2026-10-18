@@ -25,6 +25,7 @@ type precheckResult struct {
 	NotReadyCount     int         `json:"not_ready_count"`
 	NotReadyPageCount int         `json:"not_ready_page_count"`
 	ReasonCounts      struct {
+		SourceModifying  int `json:"source_modifying"`
 		NotLocked        int `json:"not_locked"`
 		NoArchiveNo      int `json:"no_archive_no"`
 		NoPages          int `json:"no_pages"`
@@ -74,59 +75,58 @@ func TestExportPrecheck(t *testing.T) {
 	t.Parallel()
 	c := newCatalogEnv(t, "EXP")
 	_, _, _, _, org := c.mkChain()
-	// 定稿不要求全部页通过（造"已定稿但有页没通过"的条目）。
+	// 锁定不要求全部页通过（造"已锁定但有页没通过"的条目）。
 	c.setSettings(map[string]any{"catalog": map[string]any{"lock_requires_approved": false}})
 	lock := func(id uuid.UUID) {
 		t.Helper()
-		c.act(id, "mark-done").Expect(http.StatusOK)
 		c.act(id, "lock").Expect(http.StatusOK)
 	}
-	// A：就绪（2 页通过，定稿）；B：定稿，第 2 页待审；C：已完成没定稿；D：草稿没有页；
+	// A：就绪（2 页通过，锁定）；B：锁定，第 2 页待审；C：未锁定；D：修改中，唯一的页的文件删掉了（导出不算它）；
 	// E：在只有全宗的节点下（缺级，没有档号），1 页通过。
-	a := c.mkItem(org.ID, map[string]any{"title": "A"})
-	c.addPage(a.ID, "approved")
-	c.addPage(a.ID, "approved")
+	fa, _ := c.mkFolder(uuid.Nil, "A", "approved", "approved")
+	a := c.archiveOne(org.ID, fa, "")
 	lock(a.ID)
-	b := c.mkItem(org.ID, map[string]any{"title": "B"})
-	c.addPage(b.ID, "approved")
-	bPending := c.addPage(b.ID, "pending")
+	fb, bFiles := c.mkFolder(uuid.Nil, "B", "approved", "pending")
+	bPending := bFiles[1]
+	b := c.archiveOne(org.ID, fb, "")
 	lock(b.ID)
 	cc := c.mkItem(org.ID, map[string]any{"title": "C"})
-	c.addPage(cc.ID, "approved")
-	c.act(cc.ID, "mark-done").Expect(http.StatusOK)
 	d := c.mkItem(org.ID, map[string]any{"title": "D"})
+	c.unseal(d.ID).Expect(http.StatusOK)
+	c.admin.Delete("/api/folder-files/" + QueryValue[uuid.UUID](c.Env, `SELECT id FROM folder_files WHERE file_id = $1`,
+		d.Pages[0].FileID).String()).Expect(http.StatusNoContent)
 	fonds2 := c.mkCat(nil, "fonds", "Z2", "全宗二")
 	e := c.mkItem(fonds2.ID, map[string]any{"title": "E"})
-	c.addPage(e.ID, "approved")
 	if e.ArchiveNo != nil {
 		t.Fatalf("E 应该没有档号：%s", *e.ArchiveNo)
 	}
 	short := func(v itemView, codes string) string { return v.ID.String()[:8] + ":" + codes }
+	const dReasons = "source_modifying,not_locked,no_pages"
 
 	precheck := func(body map[string]any) precheckResult {
 		t.Helper()
 		return Decode[precheckResult](c.admin.Post("/api/projects/"+c.pid.String()+"/export-tasks:precheck", body).Expect(http.StatusOK))
 	}
 	cases := []struct {
-		name                         string
-		body                         map[string]any
-		items, pages, ready, rpages  int
-		notLocked, noNo, noPages, na int
-		reasons                      []string
-		scopeIDs                     []uuid.UUID
+		name                              string
+		body                              map[string]any
+		items, pages, ready, rpages       int
+		mod, notLocked, noNo, noPages, na int
+		reasons                           []string
+		scopeIDs                          []uuid.UUID
 	}{
 		{name: "节点子树、只导出通过的（默认）", body: map[string]any{"scope_type": "category", "scope_ids": []uuid.UUID{org.ID}, "export_format": "pdf"},
-			items: 4, pages: 5, ready: 1, rpages: 2, notLocked: 2, noPages: 1, na: 1,
-			reasons: []string{short(b, "pages_not_approved"), short(cc, "not_locked"), short(d, "not_locked,no_pages")}},
+			items: 4, pages: 5, ready: 1, rpages: 2, mod: 1, notLocked: 2, noPages: 1, na: 1,
+			reasons: []string{short(b, "pages_not_approved"), short(cc, "not_locked"), short(d, dReasons)}},
 		{name: "不勾只导出通过的", body: map[string]any{"scope_type": "category", "scope_ids": []uuid.UUID{org.ID}, "export_format": "images", "only_approved": false},
-			items: 4, pages: 5, ready: 2, rpages: 4, notLocked: 2, noPages: 1,
-			reasons: []string{short(cc, "not_locked"), short(d, "not_locked,no_pages")}},
+			items: 4, pages: 5, ready: 2, rpages: 4, mod: 1, notLocked: 2, noPages: 1,
+			reasons: []string{short(cc, "not_locked"), short(d, dReasons)}},
 		{name: "根节点（整个项目），子树重叠算一次", body: map[string]any{"scope_type": "category", "scope_ids": []uuid.UUID{c.rootID, org.ID}, "export_format": "pdf"},
-			items: 5, pages: 6, ready: 1, rpages: 2, notLocked: 3, noNo: 1, noPages: 1, na: 1,
-			reasons: []string{short(b, "pages_not_approved"), short(cc, "not_locked"), short(d, "not_locked,no_pages"), short(e, "not_locked,no_archive_no")}},
+			items: 5, pages: 6, ready: 1, rpages: 2, mod: 1, notLocked: 3, noNo: 1, noPages: 1, na: 1,
+			reasons: []string{short(b, "pages_not_approved"), short(cc, "not_locked"), short(d, dReasons), short(e, "not_locked,no_archive_no")}},
 		{name: "条目（去重，按导出顺序）", body: map[string]any{"scope_type": "item", "scope_ids": []uuid.UUID{d.ID, a.ID, a.ID}, "export_format": "pdf"},
-			items: 2, pages: 2, ready: 1, rpages: 2, notLocked: 1, noPages: 1,
-			reasons: []string{short(d, "not_locked,no_pages")}, scopeIDs: []uuid.UUID{d.ID, a.ID}},
+			items: 2, pages: 2, ready: 1, rpages: 2, mod: 1, notLocked: 1, noPages: 1,
+			reasons: []string{short(d, dReasons)}, scopeIDs: []uuid.UUID{d.ID, a.ID}},
 	}
 	for _, tc := range cases {
 		p := precheck(tc.body)
@@ -135,7 +135,8 @@ func TestExportPrecheck(t *testing.T) {
 			t.Errorf("%s：件数页数 %+v", tc.name, p)
 		}
 		rc := p.ReasonCounts
-		if rc.NotLocked != tc.notLocked || rc.NoArchiveNo != tc.noNo || rc.NoPages != tc.noPages || rc.PagesNotApproved != tc.na {
+		if rc.SourceModifying != tc.mod || rc.NotLocked != tc.notLocked || rc.NoArchiveNo != tc.noNo || rc.NoPages != tc.noPages ||
+			rc.PagesNotApproved != tc.na {
 			t.Errorf("%s：原因件数 %+v", tc.name, rc)
 		}
 		if got := strings.Join(p.reasonList(), " "); got != strings.Join(tc.reasons, " ") {
@@ -155,8 +156,11 @@ func TestExportPrecheck(t *testing.T) {
 		r.Pages[0].FileID != bPending || r.Pages[0].ReviewStatus != "pending" || r.Message != "有 1 页不是审核通过（第 2 页：待审）" {
 		t.Errorf("pages_not_approved：%+v", r)
 	}
-	if r := p.NotReady[1].Reasons[0]; r.ItemStatus == nil || *r.ItemStatus != "done" || !strings.Contains(r.Message, "没有定稿") {
+	if r := p.NotReady[1].Reasons[0]; r.ItemStatus == nil || *r.ItemStatus != "draft" || !strings.Contains(r.Message, "没有锁定") {
 		t.Errorf("not_locked：%+v", r)
+	}
+	if r := p.NotReady[2].Reasons[0]; r.Code != "source_modifying" || !strings.Contains(r.Message, "重新归档") {
+		t.Errorf("source_modifying：%+v", r)
 	}
 	if names := p.NotReady[0].CategoryNames; len(names) != 5 || names[4] != "办公室" {
 		t.Errorf("category_names：%v", names)
@@ -182,10 +186,10 @@ func TestExportPrecheck(t *testing.T) {
 		t.Fatalf("409 不该写任务：%d", n)
 	}
 
-	// require_locked_item = false：没定稿的也能导出（D 仍然没有页）。
+	// require_locked_item = false：没锁定的也能导出；修改中的照样不就绪（D 仍然没有页）。
 	c.setSettings(map[string]any{"catalog": map[string]any{"lock_requires_approved": false}, "export": map[string]any{"require_locked_item": false}})
 	p = precheck(cases[0].body)
-	if p.RequireLockedItem || p.ReadyItemCount != 2 || strings.Join(p.reasonList(), " ") != short(b, "pages_not_approved")+" "+short(d, "no_pages") {
+	if p.RequireLockedItem || p.ReadyItemCount != 2 || strings.Join(p.reasonList(), " ") != short(b, "pages_not_approved")+" "+short(d, "source_modifying,no_pages") {
 		t.Errorf("require_locked_item=false：%+v %v", p, p.reasonList())
 	}
 

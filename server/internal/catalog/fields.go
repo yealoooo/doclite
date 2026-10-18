@@ -19,8 +19,7 @@ import (
 //   - 草稿只查格式：text ≤ max_length、不能有控制字符（换行、回车、制表符可以），date 是 YYYY / YYYY-MM /
 //     YYYY-MM-DD 的真实日期，enum 在选项里；值不是字符串的 400；
 //   - 旧值规则：提交的值和库里存的一样（规整之后）就不校验、原样保留；设置里没有的 key 只能清空或原样提交；
-//   - 必填（含题名）在标记完成和定稿时查（[completionIssues]），现有的值也要合当前设置；已完成的条目改了著录后
-//     只再查必填是否为空（[requiredIssues]）；
+//   - 必填（含题名）在锁定时查（[completionIssues]，2026-10-19 去掉"已完成"），现有的值也要合当前设置；
 //   - 校验不过 400 `invalid_input`，`details.fields [{key, message}]` 一次列全（题名、设置里的顺序、设置里没有的
 //     按 key 排在最后），message 是"著录内容不对："加前 3 条。
 
@@ -212,22 +211,7 @@ func (s *settings) applyEdits(storedTitle string, stored map[string]any, e edits
 	return title, merged, issues
 }
 
-// requiredIssues：题名和必填的著录项不能为空（已完成的条目改著录时查）。
-func (s *settings) requiredIssues(title string, extra map[string]any) []FieldIssue {
-	var out []FieldIssue
-	if title == "" {
-		out = append(out, FieldIssue{Key: project.TitleKey, Message: "题名不能为空"})
-	}
-	for _, d := range s.fields {
-		v, ok := extra[d.Key]
-		if d.Required && !hasValue(v, ok) {
-			out = append(out, FieldIssue{Key: d.Key, Message: d.Label + "不能为空"})
-		}
-	}
-	return out
-}
-
-// completionIssues：标记完成、定稿时的检查——题名和必填的不能为空，现有的值要合现在的设置（设置里已经没有的不管）。
+// completionIssues：锁定时的检查——题名和必填的不能为空，现有的值要合现在的设置（设置里已经没有的不管）。
 func (s *settings) completionIssues(title string, extra map[string]any) []FieldIssue {
 	var out []FieldIssue
 	if title == "" {

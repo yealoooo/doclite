@@ -223,7 +223,7 @@ FROM file_snapshots WHERE file_id = $1 AND version_no = 1`, cp.FileID, c.Snapsho
 	admin.Post(ff(c.FolderFileID)+"/copy", map[string]any{"folder_id": y.ID}).Expect(201)
 
 	// 删除：已归类 409；取消进行中的分配；再删 404。
-	env.catalog(p.ID, c.FileID)
+	env.catalog(p.ID, mkdir(admin, p.RootFolderID, "来源").ID, c.FileID)
 	admin.Delete(ff(c.FolderFileID)).ExpectError(409, "file_cataloged")
 	rev := env.openReview(p.ID, a.FileID)
 	admin.Delete(ff(a.FolderFileID)).Expect(204)

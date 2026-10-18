@@ -141,11 +141,10 @@ func (e *exportEnv) approvedPages(n int, name string) []uuid.UUID {
 	return ids
 }
 
-// lockedItem 在 cat 下建一个带这些页的条目，标记完成并定稿。
+// lockedItem 把这些文件移进一个新文件夹、归档到 cat 并锁定。
 func (e *exportEnv) lockedItem(cat uuid.UUID, title string, fileIDs ...uuid.UUID) itemView {
 	e.t.Helper()
 	it := e.cat.mkItem(cat, map[string]any{"title": title, "file_ids": fileIDs})
-	e.cat.act(it.ID, "mark-done").Expect(http.StatusOK)
 	e.cat.act(it.ID, "lock").Expect(http.StatusOK)
 	return e.cat.item(it.ID)
 }

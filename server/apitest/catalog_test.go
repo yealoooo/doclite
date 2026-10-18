@@ -10,37 +10,50 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestPermsCatalog 是归类接口的菜单权限（解锁要 catalog 和 review_assign 两个都有；归类信息、设置能进项目即可；
-// 看板要 dashboard）。
+// TestPermsCatalog 是归类接口的菜单权限（归类的全部操作含解锁只要 catalog，用户 2026-10-19；归类信息、设置能进项目
+// 即可；看板要 dashboard）。
 func TestPermsCatalog(t *testing.T) {
 	t.Parallel()
 	env := NewEnv(t)
 	CheckPerms(t, env, `
-	                                                   admin  manager  cataloger  review_assign  catalog+review_assign  reviewer  dashboard  none
-	GET    /api/projects/{pid}/catalog-settings          Y      Y         Y           Y               Y                    Y        Y          Y
-	POST   /api/projects/{pid}/catalog-placements        Y      Y         Y           Y               Y                    Y        Y          Y
-	GET    /api/files/{fid}/catalog                      Y      Y         Y           Y               Y                    Y        Y          Y
-	GET    /api/projects/{pid}/catalog-summary           Y      Y         -           -               -                    -        Y          -
-	GET    /api/projects/{pid}/archive-categories        Y      Y         Y           -               Y                    -        -          -
-	POST   /api/projects/{pid}/archive-categories        Y      Y         Y           -               Y                    -        -          -
-	PATCH  /api/projects/{pid}/archive-categories/{id}   Y      Y         Y           -               Y                    -        -          -
-	DELETE /api/projects/{pid}/archive-categories/{id}   Y      Y         Y           -               Y                    -        -          -
-	GET    /api/archive-categories/{id}/items            Y      Y         Y           -               Y                    -        -          -
-	POST   /api/archive-categories/{id}/items            Y      Y         Y           -               Y                    -        -          -
-	GET    /api/archive-items/{id}                       Y      Y         Y           -               Y                    -        -          -
-	PATCH  /api/archive-items/{id}                       Y      Y         Y           -               Y                    -        -          -
-	DELETE /api/archive-items/{id}                       Y      Y         Y           -               Y                    -        -          -
-	PUT    /api/archive-items/{id}/files                 Y      Y         Y           -               Y                    -        -          -
-	POST   /api/archive-items/{id}/mark-done             Y      Y         Y           -               Y                    -        -          -
-	POST   /api/archive-items/{id}/back-to-draft         Y      Y         Y           -               Y                    -        -          -
-	POST   /api/archive-items/{id}/lock                  Y      Y         Y           -               Y                    -        -          -
-	POST   /api/archive-items/{id}/unlock                Y      Y         -           -               Y                    -        -          -
-	POST   /api/projects/{pid}/archive-items:lock        Y      Y         Y           -               Y                    -        -          -
-	POST   /api/projects/{pid}/archive-items:renumber    Y      Y         Y           -               Y                    -        -          -
+	                                                   admin  manager  cataloger  review_assign  reviewer  dashboard  none
+	GET    /api/projects/{pid}/catalog-settings          Y      Y         Y           Y             Y        Y          Y
+	POST   /api/projects/{pid}/catalog-placements        Y      Y         Y           Y             Y        Y          Y
+	GET    /api/files/{fid}/catalog                      Y      Y         Y           Y             Y        Y          Y
+	GET    /api/projects/{pid}/catalog-summary           Y      Y         -           -             -        Y          -
+	GET    /api/projects/{pid}/archive-categories        Y      Y         Y           -             -        -          -
+	POST   /api/projects/{pid}/archive-categories        Y      Y         Y           -             -        -          -
+	PATCH  /api/projects/{pid}/archive-categories/{id}   Y      Y         Y           -             -        -          -
+	DELETE /api/projects/{pid}/archive-categories/{id}   Y      Y         Y           -             -        -          -
+	GET    /api/archive-categories/{id}/items            Y      Y         Y           -             -        -          -
+	POST   /api/archive-categories/{id}/items:from-folders Y    Y         Y           -             -        -          -
+	GET    /api/archive-items/{id}                       Y      Y         Y           -             -        -          -
+	PATCH  /api/archive-items/{id}                       Y      Y         Y           -             -        -          -
+	DELETE /api/archive-items/{id}                       Y      Y         Y           -             -        -          -
+	POST   /api/archive-items/{id}/lock                  Y      Y         Y           -             -        -          -
+	POST   /api/archive-items/{id}/unlock                Y      Y         Y           -             -        -          -
+	POST   /api/archive-items/{id}/unseal                Y      Y         Y           -             -        -          -
+	GET    /api/archive-items/{id}/reseal-preview        Y      Y         Y           -             -        -          -
+	POST   /api/archive-items/{id}/reseal                Y      Y         Y           -             -        -          -
+	POST   /api/projects/{pid}/archive-items:lock        Y      Y         Y           -             -        -          -
+	POST   /api/projects/{pid}/archive-items:renumber    Y      Y         Y           -             -        -          -
 	`)
 
-	// 项目授权：有菜单但进不了项目 403（以资源 id 为参数的接口也一样），授权后放行。
+	// 去掉的接口：405 / 404（不再有新建空条目、按页挂接、标记完成、退回草稿）。
+	admin := env.Admin()
 	d := env.CreateProject("PC")
+	for _, r := range []*Response{
+		admin.Post("/api/archive-categories/"+d.CategoryRootID.String()+"/items", map[string]any{}),
+		admin.Put("/api/archive-items/"+uuid.NewString()+"/files", map[string]any{}),
+		admin.Post("/api/archive-items/"+uuid.NewString()+"/mark-done", map[string]any{}),
+		admin.Post("/api/archive-items/"+uuid.NewString()+"/back-to-draft", map[string]any{}),
+	} {
+		if r.Status != http.StatusNotFound && r.Status != http.StatusMethodNotAllowed {
+			t.Errorf("去掉的接口应是 404 / 405：%d %s", r.Status, r.Body)
+		}
+	}
+
+	// 项目授权：有菜单但进不了项目 403（以资源 id 为参数的接口也一样），授权后放行。
 	cat := env.As("cataloger")
 	path := "/api/projects/" + d.ID.String() + "/archive-categories"
 	cat.Get(path).ExpectError(http.StatusForbidden, "forbidden")
@@ -166,7 +179,7 @@ func TestCatalogCategories(t *testing.T) {
 	_ = z2
 }
 
-// TestItemStatusTable 是条目状态表（requirements 5.9）：每个动作在 draft、done、locked 下的结果。
+// TestItemStatusTable 是条目状态表（requirements 5.9）：每个动作在 draft·sealed、draft·modifying、locked 下的结果。
 func TestItemStatusTable(t *testing.T) {
 	t.Parallel()
 	c := newCatalogEnv(t, "ST")
@@ -174,14 +187,13 @@ func TestItemStatusTable(t *testing.T) {
 	other := c.mkCat(&ret, "org", "RSC", "人事处")
 	admin := c.admin
 
-	// newItem 造一个处在 status 的条目，都有一页审核通过的（定稿要有页、有档号、页都通过）。
-	newItem := func(status string) itemView {
+	// newItem 造一个处在 state 的条目（一页审核通过的，锁定要有页、有档号、页都通过）。
+	newItem := func(state string) itemView {
 		it := c.mkItem(org.ID, map[string]any{"title": "条目"})
-		c.addPage(it.ID, "approved")
-		if status != "draft" {
-			c.act(it.ID, "mark-done").Expect(200)
-		}
-		if status == "locked" {
+		switch state {
+		case "modifying":
+			c.unseal(it.ID).Expect(200)
+		case "locked":
 			c.act(it.ID, "lock").Expect(200)
 		}
 		return c.item(it.ID)
@@ -189,7 +201,7 @@ func TestItemStatusTable(t *testing.T) {
 	type outcome struct {
 		status int
 		code   string // 错误码；成功时为空
-		after  string // 成功后的状态（删除为空）
+		after  string // 成功后的"状态·封存状态"（删除为空）
 	}
 	ok := func(after string) outcome { return outcome{status: 200, after: after} }
 	fail := func(status int, code string) outcome { return outcome{status: status, code: code} }
@@ -197,46 +209,46 @@ func TestItemStatusTable(t *testing.T) {
 		body["row_version"] = it.RowVersion
 		return admin.Patch("/api/archive-items/"+it.ID.String(), body)
 	}
+	act := func(it itemView, action string) *Response {
+		return admin.Post("/api/archive-items/"+it.ID.String()+"/"+action, map[string]any{"row_version": it.RowVersion})
+	}
+	const sealed, modifying, locked = "draft·sealed", "draft·modifying", "locked·sealed"
+	states := map[string]string{"sealed": sealed, "modifying": modifying, "locked": locked}
 	actions := []struct {
 		name string
 		do   func(it itemView) *Response
 		want map[string]outcome
 	}{
 		{"改著录", func(it itemView) *Response { return edit(it, map[string]any{"title": "新题名"}) },
-			map[string]outcome{"draft": ok("draft"), "done": ok("done"), "locked": fail(409, "item_locked")}},
+			map[string]outcome{"sealed": ok(sealed), "modifying": ok(modifying), "locked": fail(409, "item_locked")}},
 		{"移动", func(it itemView) *Response { return edit(it, map[string]any{"category_id": other.ID}) },
-			map[string]outcome{"draft": ok("draft"), "done": ok("done"), "locked": fail(409, "item_locked")}},
+			map[string]outcome{"sealed": ok(sealed), "modifying": ok(modifying), "locked": fail(409, "item_locked")}},
 		{"改件号", func(it itemView) *Response { return edit(it, map[string]any{"item_no": 100 + it.ItemNo}) },
-			map[string]outcome{"draft": ok("draft"), "done": ok("done"), "locked": fail(409, "item_locked")}},
-		{"改页序", func(it itemView) *Response {
-			// 前面插一页（挂上新文件，原来的页顺延）。
-			ids := append([]uuid.UUID{c.mkFile(uuid.Nil, "approved")}, it.pageIDs()...)
-			return admin.Put(filesPath(it.ID), map[string]any{"row_version": it.RowVersion, "file_ids": ids})
-		}, map[string]outcome{"draft": ok("draft"), "done": ok("done"), "locked": fail(409, "item_locked")}},
-		{"删除", func(it itemView) *Response {
+			map[string]outcome{"sealed": ok(sealed), "modifying": ok(modifying), "locked": fail(409, "item_locked")}},
+		{"解除封存", func(it itemView) *Response { return act(it, "unseal") },
+			map[string]outcome{"sealed": ok(modifying), "modifying": fail(409, "invalid_state"), "locked": fail(409, "item_locked")}},
+		{"重新归档", func(it itemView) *Response { return act(it, "reseal") },
+			map[string]outcome{"sealed": fail(409, "invalid_state"), "modifying": ok(sealed), "locked": fail(409, "item_locked")}},
+		{"锁定", func(it itemView) *Response { return act(it, "lock") },
+			map[string]outcome{"sealed": ok(locked), "modifying": fail(409, "invalid_state"), "locked": fail(409, "invalid_state")}},
+		{"解锁", func(it itemView) *Response { return act(it, "unlock") },
+			map[string]outcome{"sealed": fail(409, "invalid_state"), "modifying": fail(409, "invalid_state"), "locked": ok(sealed)}},
+		{"撤销归档", func(it itemView) *Response {
 			return admin.Delete("/api/archive-items/" + it.ID.String() + "?row_version=" + strconv.Itoa(it.RowVersion))
-		}, map[string]outcome{"draft": {status: 204}, "done": {status: 204}, "locked": fail(409, "item_locked")}},
-		{"标记完成", func(it itemView) *Response { return c.act(it.ID, "mark-done") },
-			map[string]outcome{"draft": ok("done"), "done": fail(409, "invalid_state"), "locked": fail(409, "item_locked")}},
-		{"退回草稿", func(it itemView) *Response { return c.act(it.ID, "back-to-draft") },
-			map[string]outcome{"draft": fail(409, "invalid_state"), "done": ok("draft"), "locked": fail(409, "item_locked")}},
-		{"定稿", func(it itemView) *Response { return c.act(it.ID, "lock") },
-			map[string]outcome{"draft": fail(409, "invalid_state"), "done": ok("locked"), "locked": fail(409, "invalid_state")}},
-		{"解锁", func(it itemView) *Response { return c.act(it.ID, "unlock") },
-			map[string]outcome{"draft": fail(409, "invalid_state"), "done": fail(409, "invalid_state"), "locked": ok("done")}},
+		}, map[string]outcome{"sealed": {status: 204}, "modifying": {status: 204}, "locked": fail(409, "item_locked")}},
 	}
 	for _, a := range actions {
-		for _, status := range []string{"draft", "done", "locked"} {
-			want := a.want[status]
-			it := newItem(status)
+		for _, state := range []string{"sealed", "modifying", "locked"} {
+			want := a.want[state]
+			it := newItem(state)
 			res := a.do(it)
 			if res.Status != want.status || (want.code != "" && res.Code() != want.code) {
-				t.Errorf("%s / %s：%d %s，期望 %d %s；%s", a.name, status, res.Status, res.Code(), want.status, want.code, res.Body)
+				t.Errorf("%s / %s：%d %s，期望 %d %s；%s", a.name, state, res.Status, res.Code(), want.status, want.code, res.Body)
 				continue
 			}
 			if want.code != "" {
-				if got := c.item(it.ID); got.Status != status || got.RowVersion != it.RowVersion {
-					t.Errorf("%s / %s：失败后条目变了：%s v%d", a.name, status, got.Status, got.RowVersion)
+				if got := c.item(it.ID); got.Status+"·"+got.SourceStatus != states[state] || got.RowVersion != it.RowVersion {
+					t.Errorf("%s / %s：失败后条目变了：%s·%s v%d", a.name, state, got.Status, got.SourceStatus, got.RowVersion)
 				}
 				continue
 			}
@@ -245,16 +257,21 @@ func TestItemStatusTable(t *testing.T) {
 				continue
 			}
 			got := Decode[itemView](res)
-			if got.Status != want.after || got.RowVersion != it.RowVersion+1 {
-				t.Errorf("%s / %s：→ %s v%d，期望 %s v%d", a.name, status, got.Status, got.RowVersion, want.after, it.RowVersion+1)
+			if got.Status+"·"+got.SourceStatus != want.after || got.RowVersion != it.RowVersion+1 {
+				t.Errorf("%s / %s：→ %s·%s v%d，期望 %s v%d", a.name, state, got.Status, got.SourceStatus, got.RowVersion, want.after, it.RowVersion+1)
 			}
 		}
 	}
 	// row_version 过期 409 conflict（状态先于版本）；缺 row_version 400；没有变化的 PATCH 不加版本。
 	it := c.mkItem(org.ID, map[string]any{"title": "版本"})
 	admin.Patch("/api/archive-items/"+it.ID.String(), map[string]any{"row_version": it.RowVersion + 1, "title": "x"}).ExpectError(409, "conflict")
-	admin.Post("/api/archive-items/"+it.ID.String()+"/mark-done", map[string]any{"row_version": 99}).ExpectError(409, "conflict")
+	admin.Post("/api/archive-items/"+it.ID.String()+"/lock", map[string]any{"row_version": 99}).ExpectError(409, "conflict")
+	admin.Post("/api/archive-items/"+it.ID.String()+"/unseal", map[string]any{"row_version": 99}).ExpectError(409, "conflict")
 	admin.Post("/api/archive-items/"+it.ID.String()+"/unlock", map[string]any{"row_version": 99}).ExpectError(409, "invalid_state")
+	admin.Post("/api/archive-items/"+it.ID.String()+"/reseal", map[string]any{"row_version": 99}).ExpectError(409, "invalid_state")
+	admin.Post("/api/archive-items/"+it.ID.String()+"/unseal", map[string]any{}).ExpectError(400, "invalid_input")
+	admin.Post("/api/archive-items/"+it.ID.String()+"/unseal", map[string]any{"row_version": it.RowVersion,
+		"reason": strings.Repeat("因", 201)}).ExpectError(400, "invalid_input")
 	admin.Patch("/api/archive-items/"+it.ID.String(), map[string]any{"title": "x"}).ExpectError(400, "invalid_input")
 	admin.Patch("/api/archive-items/"+it.ID.String(), map[string]any{"row_version": 0}).ExpectError(400, "invalid_input")
 	same := Decode[itemView](admin.Patch("/api/archive-items/"+it.ID.String(), map[string]any{"row_version": it.RowVersion, "title": " 版本 "}).Expect(200))
@@ -263,88 +280,95 @@ func TestItemStatusTable(t *testing.T) {
 	}
 	admin.Delete("/api/archive-items/"+it.ID.String()+"?row_version=9").ExpectError(409, "conflict")
 
-	// 解锁要 catalog 和 review_assign：只有 catalog 的归类员 403。
-	locked := newItem("locked")
-	env := c.Env
-	env.GrantProject(c.pid, env.PersonaID("cataloger"))
-	env.As("cataloger").Post("/api/archive-items/"+locked.ID.String()+"/unlock", map[string]any{"row_version": locked.RowVersion}).
-		ExpectError(403, "forbidden")
+	// 解锁只要 catalog（用户 2026-10-19）：归类员也能解锁；解锁后是未锁定、封存。
+	lk := newItem("locked")
+	c.GrantProject(c.pid, c.PersonaID("cataloger"))
+	got := Decode[itemView](c.As("cataloger").Post("/api/archive-items/"+lk.ID.String()+"/unlock",
+		map[string]any{"row_version": lk.RowVersion}).Expect(200))
+	if got.Status != "draft" || got.SourceStatus != "sealed" || got.LockedAt != nil {
+		t.Fatalf("归类员解锁：%+v", got)
+	}
 }
 
-// TestItemLock：定稿的前置条件（≥ 1 页、档号不空、全部页通过）、定稿时间和审计、批量定稿。
+// TestItemLock：锁定的前置条件（不在修改中、必填在锁定时查、档号不空、全部页通过）、锁定时间和审计、批量锁定。
 func TestItemLock(t *testing.T) {
 	t.Parallel()
 	c := newCatalogEnv(t, "LK")
 	_, _, year, _, org := c.mkChain()
 	admin := c.admin
-
-	done := func(cat uuid.UUID, title string) itemView {
-		it := c.mkItem(cat, map[string]any{"title": title})
-		c.act(it.ID, "mark-done").Expect(200)
-		return c.item(it.ID)
-	}
 	msgOf := func(r *Response) string { return errOf(r).Message }
 
-	noPages := done(org.ID, "没有页")
-	if m := msgOf(c.act(noPages.ID, "lock").ExpectError(409, "invalid_state")); !strings.Contains(m, "没有挂接任何页") {
-		t.Fatalf("没有页：%s", m)
-	}
-	pending := done(org.ID, "有页待审")
-	c.addPage(pending.ID, "approved")
-	c.addPage(pending.ID, "pending")
-	c.addPage(pending.ID, "rejected")
+	// 有页没审核通过：3 页（通过、待审、驳回）。
+	f, _ := c.mkFolder(uuid.Nil, "有页待审", "approved", "pending", "rejected")
+	pending := c.archiveOne(org.ID, f, "")
 	if m := msgOf(c.act(pending.ID, "lock").ExpectError(409, "invalid_state")); !strings.Contains(m, "有 2 页还没审核通过（例如第 2 页）") {
 		t.Fatalf("没审核通过：%s", m)
 	}
-	noNo := done(year.ID, "缺级")
-	c.addPage(noNo.ID, "approved")
+	noNo := c.mkItem(year.ID, map[string]any{"title": "缺级"})
 	if m := msgOf(c.act(noNo.ID, "lock").ExpectError(409, "invalid_state")); !strings.Contains(m, "没有档号") || !strings.Contains(m, "保管期限、机构") {
 		t.Fatalf("没有档号：%s", m)
 	}
-	// 详情：页数、各审核状态的页数、页的文件名和文件夹路径。
+	// 修改中不能锁定（409，先于著录检查）。
+	mod := c.mkItem(org.ID, map[string]any{"title": "修改中"})
+	c.unseal(mod.ID).Expect(200)
+	if m := msgOf(c.act(mod.ID, "lock").ExpectError(409, "invalid_state")); !strings.Contains(m, "修改中") {
+		t.Fatalf("修改中：%s", m)
+	}
+	// 必填在锁定时查：题名清空、必填著录项没填 → 400 details.fields；草稿时随便改。
+	c.setSettings(map[string]any{"item_fields": []any{map[string]any{"key": "author", "label": "责任者", "type": "text", "required": true}}})
+	req := c.mkItem(org.ID, map[string]any{"title": "必填"})
+	c.patchItem(req.ID, map[string]any{"title": ""}).Expect(200)
+	if e := errOf(c.act(req.ID, "lock").ExpectError(400, "invalid_input")); len(e.Details.Fields) != 2 ||
+		e.Details.Fields[0].Key != "title" || e.Details.Fields[1].Key != "author" {
+		t.Fatalf("必填：%+v", e)
+	}
+	c.patchItem(req.ID, map[string]any{"title": "必填", "extra_fields": map[string]any{"author": "张三"}}).Expect(200)
+	c.act(req.ID, "lock").Expect(200)
+	c.setSettings(map[string]any{})
+
+	// 详情：页数、各审核状态的页数、页的文件名和文件夹路径、来源文件夹。
 	d := c.item(pending.ID)
 	if d.PageCount != 3 || d.PageCounts["pending"] != 1 || d.PageCounts["rejected"] != 1 || len(d.Pages) != 3 ||
-		d.Pages[1].PageNo != 2 || d.Pages[1].ReviewStatus != "pending" || d.Pages[0].FolderPath != "LK 项目" {
-		t.Fatalf("页：%+v", d)
+		d.Pages[1].PageNo != 2 || d.Pages[1].ReviewStatus != "pending" || d.Pages[0].FolderPath != "LK 项目/有页待审" ||
+		d.SourceFolderID != f || d.SourceFolderPath != "LK 项目/有页待审" || d.SourceStatus != "sealed" || d.Title != "有页待审" {
+		t.Fatalf("详情：%+v", d)
 	}
 
-	// 关掉"定稿要求全部页通过"后可以定稿；定稿时间来自 lock 审计，审计带 archive_no、page_count。
+	// 关掉"锁定要求全部页通过"后可以锁定；锁定时间来自 lock 审计，审计带 archive_no、page_count。
 	c.setSettings(map[string]any{"catalog": map[string]any{"lock_requires_approved": false}})
 	lk := Decode[itemView](c.act(pending.ID, "lock").Expect(200))
 	if lk.Status != "locked" || lk.LockedAt == nil || lk.ArchiveNo == nil {
-		t.Fatalf("定稿：%+v", lk)
+		t.Fatalf("锁定：%+v", lk)
 	}
 	detail := QueryValue[map[string]any](c.Env, `SELECT detail FROM audit_logs WHERE target_id = $1 AND action = 'lock'`, pending.ID)
 	if detail["page_count"] != float64(3) || detail["archive_no"] != *lk.ArchiveNo || detail["lock_requires_approved"] != false {
 		t.Fatalf("lock 审计：%v", detail)
 	}
 	ul := Decode[itemView](c.act(pending.ID, "unlock").Expect(200))
-	if ul.Status != "done" || ul.LockedAt != nil {
+	if ul.Status != "draft" || ul.LockedAt != nil {
 		t.Fatalf("解锁：%+v", ul)
 	}
 	c.setSettings(map[string]any{})
 
-	// 批量定稿：不存在的 404（details.ids）；有一个不满足就整体不做（409，details.ids 列全部）；已定稿的跳过。
-	ok1 := done(org.ID, "可以定稿 1")
-	c.addPage(ok1.ID, "approved")
-	ok2 := done(org.ID, "可以定稿 2")
-	c.addPage(ok2.ID, "approved")
-	draft := c.mkItem(org.ID, map[string]any{"title": "草稿"})
+	// 批量锁定：不存在的 404（details.ids）；有一个不满足就整体不做（409，details.ids 列全部）；已锁定的跳过。
+	ok1 := c.mkItem(org.ID, map[string]any{"title": "可以锁定 1"})
+	ok2 := c.mkItem(org.ID, map[string]any{"title": "可以锁定 2"})
 	lockPath := "/api/projects/" + c.pid.String() + "/archive-items:lock"
 	ghost := uuid.New()
 	e := errOf(admin.Post(lockPath, map[string]any{"item_ids": []uuid.UUID{ok1.ID, ghost}}).ExpectError(404, "not_found"))
 	if len(e.Details.IDs) != 1 || e.Details.IDs[0] != ghost {
 		t.Fatalf("404 details：%+v", e)
 	}
-	e = errOf(admin.Post(lockPath, map[string]any{"item_ids": []uuid.UUID{ok1.ID, draft.ID, noPages.ID, ok2.ID}}).ExpectError(409, "invalid_state"))
-	if len(e.Details.IDs) != 2 || !slices.Contains(e.Details.IDs, draft.ID) || !slices.Contains(e.Details.IDs, noPages.ID) ||
-		!strings.Contains(e.Message, "有 2 个条目不能定稿（1 个不是“已完成”，1 个没有页）") {
+	e = errOf(admin.Post(lockPath, map[string]any{"item_ids": []uuid.UUID{ok1.ID, mod.ID, noNo.ID, ok2.ID}}).ExpectError(409, "invalid_state"))
+	if len(e.Details.IDs) != 2 || !slices.Contains(e.Details.IDs, mod.ID) || !slices.Contains(e.Details.IDs, noNo.ID) ||
+		!strings.Contains(e.Message, "有 2 个条目不能锁定（1 个修改中（要先重新归档），1 个没有档号）") {
 		t.Fatalf("409：%+v", e)
 	}
-	if c.item(ok1.ID).Status != "done" {
-		t.Fatal("整体不做：ok1 被定稿了")
+	if c.item(ok1.ID).Status != "draft" {
+		t.Fatal("整体不做：ok1 被锁定了")
 	}
 	c.act(ok1.ID, "lock").Expect(200)
+	s := openStream(t, admin, c.pid)
 	var res struct {
 		Locked  int         `json:"locked"`
 		Skipped int         `json:"skipped"`
@@ -352,10 +376,17 @@ func TestItemLock(t *testing.T) {
 	}
 	admin.Post(lockPath, map[string]any{"item_ids": []uuid.UUID{ok2.ID, ok1.ID, ok2.ID}}).Expect(200).JSON(&res)
 	if res.Locked != 1 || res.Skipped != 1 || len(res.ItemIDs) != 1 || res.ItemIDs[0] != ok2.ID || c.item(ok2.ID).Status != "locked" {
-		t.Fatalf("批量定稿：%+v", res)
+		t.Fatalf("批量锁定：%+v", res)
+	}
+	// 锁定改了来源文件夹显示的归档状态：先 folders.changed（来源文件夹）再 catalog.changed。
+	if ev := s.next(t); ev["type"] != "folders.changed" || !slices.Equal(idsOf(ev["folder_ids"]), strIDs(ok2.SourceFolderID)) {
+		t.Fatalf("锁定的事件：%v", ev)
+	}
+	if ev := s.next(t); ev["type"] != "catalog.changed" {
+		t.Fatalf("锁定的事件：%v", ev)
 	}
 	if n := QueryValue[int](c.Env, `SELECT count(*) FROM audit_logs WHERE target_id = $1 AND action = 'lock' AND detail->>'batch' = 'true'`, ok2.ID); n != 1 {
-		t.Fatalf("批量定稿的审计：%d", n)
+		t.Fatalf("批量锁定的审计：%d", n)
 	}
 	admin.Post(lockPath, map[string]any{"item_ids": []uuid.UUID{}}).ExpectError(400, "invalid_input")
 	many := make([]uuid.UUID, 501)

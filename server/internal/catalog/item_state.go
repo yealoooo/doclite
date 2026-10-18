@@ -17,105 +17,84 @@ import (
 	"doclite/server/internal/project"
 )
 
-// 条目的状态（requirements 5.9 的状态表，用户决定 Q5）：
+// 条目的状态（requirements 5.9 的状态表，2026-10-19）：status 只有 draft（未锁定）/ locked（已锁定），
+// source_status 是 sealed（封存）/ modifying（修改中，一定是 draft）：
 //
-//	动作 \ 状态              draft                 done                 locked
-//	改著录、移动、改件号、删除  可以                  可以，保持 done       409 item_locked
-//	标记完成 / 退回草稿        → done（查必填）/ 409   409 / → draft        409 item_locked
-//	定稿 / 解锁               409 invalid_state     → locked / 409       409 / → done
+//	动作 \ 状态                  draft · sealed      draft · modifying       locked（一定 sealed）
+//	改著录、移动、改件号            可以                可以                    409 item_locked
+//	解除封存（seal.go）            → modifying         409 invalid_state       409 item_locked
+//	重新归档（seal.go）            409 invalid_state   → sealed                409 item_locked
+//	锁定                          → locked（查前置）   409 invalid_state       409 invalid_state
+//	解锁                          409 invalid_state   409 invalid_state       → draft
+//	撤销归档（删除）                可以                可以                    409 item_locked
 //
-// 定稿的前置条件：已完成、著录合格（400 + details.fields）、≥ 1 页、档号不空、lock_requires_approved 时全部页审核
-// 通过（后三条 409 `invalid_state`，message 写明）。审核状态按定稿这一刻读，不锁文件（审核不等归类，归类也不等审核）。
-// 批量定稿 1–500 个，已定稿的跳过，有一个不满足就整体不做（409，details.ids 列全部，message 按原因计数）。
-// 审计 archive_item：mark_done、back_to_draft、lock（另带 archive_no、page_count、lock_requires_approved，批量带
-// batch: true）、unlock（另带 archive_no）。"定稿后有新版本"用最近一条 lock 审计的时间，所以它不能省。
+// 锁定的前置条件：封存（不在修改中）、著录合格（含必填，400 + details.fields）、≥ 1 页、档号不空、
+// lock_requires_approved 时全部页审核通过（409 `invalid_state`，message 写明）。审核状态按锁定这一刻读，不锁文件
+// （审核不等归类，归类也不等审核）。批量锁定 1–500 个，已锁定的跳过，有一个不满足就整体不做（409，details.ids 列全部，
+// message 按原因计数）。审计 archive_item：lock（另带 archive_no、page_count、lock_requires_approved，批量带
+// batch: true）、unlock（另带 archive_no）。"锁定后有新版本"用最近一条 lock 审计的时间，所以它不能省。
+// 锁定、解锁改了来源文件夹显示的归档状态，另发 folders.changed（来源文件夹）。
 
 const (
 	statusDraft  = "draft"
-	statusDone   = "done"
 	statusLocked = "locked"
 
-	// MaxLockBatch 是批量定稿一次最多的条目数。
+	sourceSealed    = "sealed"
+	sourceModifying = "modifying"
+
+	// MaxLockBatch 是批量锁定一次最多的条目数。
 	MaxLockBatch = 500
 )
 
 // 单个条目的状态动作（路径的最后一段）。
 const (
-	ActionMarkDone    = "mark-done"
-	ActionBackToDraft = "back-to-draft"
-	ActionLock        = "lock"
-	ActionUnlock      = "unlock"
+	ActionLock   = "lock"
+	ActionUnlock = "unlock"
 )
 
-func statusLabel(s string) string {
-	switch s {
-	case statusDraft:
-		return "草稿"
-	case statusDone:
-		return "已完成"
-	case statusLocked:
-		return "已定稿"
-	}
-	return s
-}
-
 func errLockedEdit(what string) error {
-	return httpx.Conflict("item_locked", fmt.Sprintf("条目已定稿，不能%s；要先解锁（需要项目负责人）", what))
+	return httpx.Conflict("item_locked", fmt.Sprintf("条目已锁定，不能%s；要先解锁", what))
 }
 
 func invalidState(msg string) error { return httpx.Conflict(httpx.CodeInvalidState, msg) }
 
-// transition 是状态表：动作在这个状态下允许时返回新状态。
-func transition(action, status string) (string, error) {
+const msgModifying = "条目修改中（来源文件夹解除了封存），不能锁定；改完先重新归档"
+
+// transition 是状态表的锁定、解锁两行：动作在这个状态下允许时返回新状态。
+func transition(action string, r *itemRow) (string, error) {
 	switch action {
-	case ActionMarkDone:
-		switch status {
-		case statusDraft:
-			return statusDone, nil
-		case statusDone:
-			return "", invalidState("条目已经是“已完成”")
-		}
-		return "", errLockedEdit("标记完成")
-	case ActionBackToDraft:
-		switch status {
-		case statusDone:
-			return statusDraft, nil
-		case statusDraft:
-			return "", invalidState("条目已经是草稿")
-		}
-		return "", errLockedEdit("退回草稿")
 	case ActionLock:
-		switch status {
-		case statusDone:
-			return statusLocked, nil
-		case statusDraft:
-			return "", invalidState("条目还是草稿，要先“标记完成”才能定稿")
+		switch {
+		case r.Status == statusLocked:
+			return "", invalidState("条目已经锁定了")
+		case r.SourceStatus == sourceModifying:
+			return "", invalidState(msgModifying)
 		}
-		return "", invalidState("条目已经定稿了")
+		return statusLocked, nil
 	case ActionUnlock:
-		if status == statusLocked {
-			return statusDone, nil
+		if r.Status == statusLocked {
+			return statusDraft, nil
 		}
-		return "", invalidState("条目没有定稿，不用解锁")
+		return "", invalidState("条目没有锁定，不用解锁")
 	}
 	return "", httpx.NotFound("动作")
 }
 
-// 定稿不满足的原因（批量定稿按它计数）。
+// 锁定不满足的原因（批量锁定按它计数）。
 const (
-	blockNotDone     = "不是“已完成”"
+	blockModifying   = "修改中（要先重新归档）"
 	blockFields      = "著录不全或和现在的设置不符"
 	blockNoPages     = "没有页"
 	blockNoArchiveNo = "没有档号"
 	blockUnapproved  = "有页没审核通过"
 )
 
-var blockOrder = []string{blockNotDone, blockFields, blockNoPages, blockNoArchiveNo, blockUnapproved}
+var blockOrder = []string{blockModifying, blockFields, blockNoPages, blockNoArchiveNo, blockUnapproved}
 
-// lockBlocker 是条目不能定稿的第一个原因（kind 为空表示可以定稿）。fields 是著录的问题（kind 为 blockFields 时）。
+// lockBlocker 是条目不能锁定的第一个原因（kind 为空表示可以锁定）。fields 是著录的问题（kind 为 blockFields 时）。
 func lockBlocker(ctx context.Context, q db.Querier, st *settings, r *itemRow, ps pageStats) (kind, message string, fields []FieldIssue, err error) {
-	if r.Status != statusDone {
-		return blockNotDone, fmt.Sprintf("条目是“%s”，要先“标记完成”才能定稿", statusLabel(r.Status)), nil, nil
+	if r.SourceStatus == sourceModifying {
+		return blockModifying, msgModifying, nil, nil
 	}
 	if issues := st.completionIssues(r.Title, r.ExtraFields); len(issues) > 0 {
 		msgs := make([]string, 0, len(issues))
@@ -125,7 +104,7 @@ func lockBlocker(ctx context.Context, q db.Querier, st *settings, r *itemRow, ps
 		return blockFields, "著录不全或和现在的设置不符：" + strings.Join(msgs, "；"), issues, nil
 	}
 	if ps.Pages == 0 {
-		return blockNoPages, "条目还没有挂接任何页，不能定稿", nil, nil
+		return blockNoPages, "条目没有页，不能锁定", nil, nil
 	}
 	if r.ArchiveNo == nil {
 		why := ""
@@ -140,16 +119,16 @@ func lockBlocker(ctx context.Context, q db.Querier, st *settings, r *itemRow, ps
 		if reason != nil {
 			why = "：" + reason.Message
 		}
-		return blockNoArchiveNo, "条目没有档号，不能定稿" + why, nil, nil
+		return blockNoArchiveNo, "条目没有档号，不能锁定" + why, nil, nil
 	}
 	if st.lockRequiresApproved && ps.NotApproved > 0 {
-		return blockUnapproved, fmt.Sprintf("条目有 %d 页还没审核通过（例如第 %d 页），项目设置要求全部页审核通过才能定稿",
+		return blockUnapproved, fmt.Sprintf("条目有 %d 页还没审核通过（例如第 %d 页），项目设置要求全部页审核通过才能锁定",
 			ps.NotApproved, ps.FirstNotOK), nil, nil
 	}
 	return "", "", nil, nil
 }
 
-// ItemAction 是单个条目的状态动作：标记完成、退回草稿、定稿、解锁。
+// ItemAction 是单个条目的状态动作：锁定、解锁。
 func (s *Service) ItemAction(ctx context.Context, operatorID, id uuid.UUID, action string, rowVersion int) (*Item, error) {
 	if err := checkRowVersion(rowVersion); err != nil {
 		return nil, err
@@ -178,7 +157,7 @@ func (s *Service) ItemAction(ctx context.Context, operatorID, id uuid.UUID, acti
 		if r == nil || r.Deleted {
 			return errItemNotFound
 		}
-		next, err := transition(action, r.Status)
+		next, err := transition(action, r)
 		if err != nil {
 			return err
 		}
@@ -187,10 +166,6 @@ func (s *Service) ItemAction(ctx context.Context, operatorID, id uuid.UUID, acti
 		}
 		detail := map[string]any{"before": map[string]any{"status": r.Status}, "after": map[string]any{"status": next}}
 		switch action {
-		case ActionMarkDone:
-			if issues := st.completionIssues(r.Title, r.ExtraFields); len(issues) > 0 {
-				return fieldsError(issues)
-			}
 		case ActionLock:
 			if issues := st.completionIssues(r.Title, r.ExtraFields); len(issues) > 0 {
 				return fieldsError(issues)
@@ -215,13 +190,14 @@ func (s *Service) ItemAction(ctx context.Context, operatorID, id uuid.UUID, acti
 			return err
 		}
 		if err := audit.Write(ctx, tx, audit.Entry{ProjectID: &projectID, OperatorID: audit.Operator(operatorID),
-			TargetType: audit.TargetArchiveItem, TargetID: id, Action: strings.ReplaceAll(action, "-", "_"),
+			TargetType: audit.TargetArchiveItem, TargetID: id, Action: action,
 			Detail: detail}); err != nil {
 			return err
 		}
 		if out, err = readItem(ctx, tx, st, id); err != nil {
 			return err
 		}
+		ev.Add(events.FoldersChanged(projectID, sourceIDs(r)...))
 		ev.Add(events.CatalogChanged(projectID, []uuid.UUID{r.CategoryID}, []uuid.UUID{id}))
 		return nil
 	})
@@ -231,12 +207,12 @@ func (s *Service) ItemAction(ctx context.Context, operatorID, id uuid.UUID, acti
 	return out, nil
 }
 
-// LockResult 是批量定稿的结果。
+// LockResult 是批量锁定的结果。
 type LockResult struct {
 	Locked int `json:"locked"`
-	// Skipped 是原来就定稿了、跳过的个数。
+	// Skipped 是原来就锁定了、跳过的个数。
 	Skipped int `json:"skipped"`
-	// ItemIDs 是这次定稿的条目（按 id 排）。
+	// ItemIDs 是这次锁定的条目（按 id 排）。
 	ItemIDs []uuid.UUID `json:"item_ids"`
 }
 
@@ -246,13 +222,13 @@ func dedupSorted(ids []uuid.UUID) []uuid.UUID {
 	return slices.Compact(out)
 }
 
-// LockItems 批量定稿（一个事务）。
+// LockItems 批量锁定（一个事务）。
 func (s *Service) LockItems(ctx context.Context, operatorID, projectID uuid.UUID, ids []uuid.UUID) (*LockResult, error) {
 	if len(ids) == 0 {
 		return nil, httpx.Invalid("至少要选一个条目")
 	}
 	if len(ids) > MaxLockBatch {
-		return nil, httpx.Invalid("一次最多定稿 %d 个条目，这次有 %d 个", MaxLockBatch, len(ids))
+		return nil, httpx.Invalid("一次最多锁定 %d 个条目，这次有 %d 个", MaxLockBatch, len(ids))
 	}
 	uniq := dedupSorted(ids)
 	st, err := loadSettings(ctx, s.pool, projectID)
@@ -325,7 +301,7 @@ func (s *Service) LockItems(ctx context.Context, operatorID, projectID uuid.UUID
 					parts = append(parts, fmt.Sprintf("%d 个%s", counts[k], k))
 				}
 			}
-			return httpx.Conflict(httpx.CodeInvalidState, fmt.Sprintf("有 %d 个条目不能定稿（%s），这次一个都没有定稿%s",
+			return httpx.Conflict(httpx.CodeInvalidState, fmt.Sprintf("有 %d 个条目不能锁定（%s），这次一个都没有锁定%s",
 				len(failed), strings.Join(parts, "，"), example)).WithDetails(map[string]any{"ids": failed})
 		}
 		if err := setItemsStatus(ctx, tx, todoIDs, statusLocked, operatorID); err != nil {
@@ -344,6 +320,7 @@ func (s *Service) LockItems(ctx context.Context, operatorID, projectID uuid.UUID
 			return err
 		}
 		out.Locked, out.ItemIDs = len(todo), todoIDs
+		ev.Add(events.FoldersChanged(projectID, sourceIDs(todo...)...))
 		ev.Add(events.CatalogChanged(projectID, catIDs, todoIDs))
 		return nil
 	})
@@ -362,7 +339,7 @@ type RenumberResult struct {
 	ArchiveNoConflicts int       `json:"archive_no_conflicts"`
 }
 
-// Renumber 按项目现在的模板重新生成 categoryID 子树（nil 是整个项目）里未定稿条目的档号（归类树排他锁）。
+// Renumber 按项目现在的模板重新生成 categoryID 子树（nil 是整个项目）里未锁定条目的档号（归类树排他锁）。
 func (s *Service) Renumber(ctx context.Context, operatorID, projectID uuid.UUID, categoryID *uuid.UUID) (*RenumberResult, error) {
 	st, err := loadSettings(ctx, s.pool, projectID)
 	if err != nil {

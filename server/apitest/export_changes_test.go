@@ -81,21 +81,30 @@ func TestExportFreezeAndChanges(t *testing.T) {
 	e.mgr.Post("/api/files/"+a.pages[0].String()+"/reopen", nil).Expect(http.StatusOK)
 	reject(e.rv1, a.pages[0]).Expect(http.StatusOK)
 	rescan(e.scan, a.pages[0], "A-rescan.tif", unique(sampleBytes(t, "tiff-g4-1bit.tif"), "EXF-rescan")).Expect(http.StatusCreated)
-	// B：移出第 2 页。
+	// 改页都走"解锁 → 解除封存 → 在文件目录里改 → 重新归档"。
+	// B：第 2 页移出来源文件夹（放回盒 1）。
 	unlock(b)
-	e.cat.putPages(b.v.ID, b.pages[0]).Expect(http.StatusOK)
-	// C 的第 2 页挪到 D 的末尾。
+	e.cat.unseal(b.v.ID).Expect(http.StatusOK)
+	e.cat.moveFiles(e.box.ID, b.pages[1])
+	e.cat.reseal(b.v.ID).Expect(http.StatusOK)
+	// C 的第 2 页挪到 D 的末尾（先重新归档 C，它才离开 C）。
 	unlock(c)
 	unlock(d)
-	e.cat.putPages(c.v.ID, c.pages[0]).Expect(http.StatusOK)
-	e.cat.putPages(d.v.ID, d.pages[0], d.pages[1], c.pages[1]).Expect(http.StatusOK)
-	// E：第 1、2 页换位置。
+	e.cat.unseal(c.v.ID).Expect(http.StatusOK)
+	e.cat.unseal(d.v.ID).Expect(http.StatusOK)
+	e.cat.moveFiles(d.v.SourceFolderID, c.pages[1])
+	e.cat.reseal(c.v.ID).Expect(http.StatusOK)
+	e.cat.reseal(d.v.ID).Expect(http.StatusOK)
+	// E：第 1 页移出去再移回来（排到最后），只有它挪过。
 	unlock(ee)
-	e.cat.putPages(ee.v.ID, ee.pages[1], ee.pages[0], ee.pages[2]).Expect(http.StatusOK)
+	e.cat.unseal(ee.v.ID).Expect(http.StatusOK)
+	e.cat.moveFiles(e.box.ID, ee.pages[0])
+	e.cat.moveFiles(ee.v.SourceFolderID, ee.pages[0])
+	e.cat.reseal(ee.v.ID).Expect(http.StatusOK)
 	// F：改题名。
 	unlock(f)
 	e.cat.patchItem(f.v.ID, map[string]any{"title": "F 改过"}).Expect(http.StatusOK)
-	// G：删除（页一并移出）。
+	// G：撤销归档（页一并移出）。
 	unlock(g)
 	e.admin.Delete("/api/archive-items/" + g.v.ID.String()).Expect(http.StatusNoContent)
 
@@ -174,7 +183,7 @@ func TestExportFreezeAndChanges(t *testing.T) {
 		t.Errorf("now：%+v", it)
 	}
 
-	// 补交：范围是有变更、没删除的条目（server 在同一个快照里算）。A 现在有页待审、B–F 没定稿，先都处理好。
+	// 补交：范围是有变更、没删除的条目（server 在同一个快照里算）。A 现在有页待审、B–F 没锁定，先都处理好。
 	pre := map[string]any{"resubmit_of": task.ID, "export_format": "images"}
 	p := Decode[precheckResult](e.mgr.Post(e.url("/export-tasks:precheck"), pre).Expect(http.StatusOK))
 	if p.ScopeType != "item" || p.ResubmitOf == nil || *p.ResubmitOf != task.ID || p.ItemCount != 6 || p.ReadyItemCount != 0 ||

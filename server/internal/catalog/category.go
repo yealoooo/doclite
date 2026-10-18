@@ -21,7 +21,7 @@ import (
 //   - 编码 1–32 字，规则见 names.ValidateCategoryCode（分隔符来自当前模板），只在新建和改编码时校验；同一层按编码
 //     判重（区分大小写，409 `conflict`）；名称去首尾空白 1–100 字，不能有控制字符，同层可重名；
 //   - 根节点不能改名、改编码、改类型、移动、删除（409 `invalid_state`），原样提交按没有变化处理；
-//   - 移动、改编码、改类型：归类树排他锁；子树里有定稿的条目 409 `item_locked`；否则同一个事务里重算子树里未定稿
+//   - 移动、改编码、改类型：归类树排他锁；子树里有锁定的条目 409 `item_locked`；否则同一个事务里重算子树里未锁定
 //     条目的档号（numbering.go 的 renumberSubtree），撞号的留空；移进自己的子树 409 `tree_cycle`；
 //   - 删除：软删除整棵子树（排他锁），子树里还有未删除的条目 409 `category_not_empty`；
 //   - 新建子节点的 path_code 由父节点 last_child_no 原子分配，不回收，每层 ≤ 99999（409 `tree_full`）；
@@ -308,7 +308,7 @@ func (s *Service) UpdateCategory(ctx context.Context, operatorID, projectID, id 
 			}
 			if n > 0 {
 				return httpx.Conflict("item_locked", fmt.Sprintf(
-					"「%s」下面（含下级节点）有 %d 个已定稿的条目（例如「%s」第 %d 件），不能移动、改编码或改类型；先解锁这些条目",
+					"「%s」下面（含下级节点）有 %d 个已锁定的条目（例如「%s」第 %d 件），不能移动、改编码或改类型；先解锁这些条目",
 					node.Name, n, ex.CategoryName, ex.ItemNo))
 			}
 		}

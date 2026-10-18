@@ -259,10 +259,3 @@ SELECT $1, $2, t.file_id, t.page_no, $3 FROM unnest($4::uuid[], $5::int[]) AS t(
 		projectID, itemID, linkedBy, ids, pages)
 	return err
 }
-
-// touchItem 记一次条目自己的变化（页序）：row_version + 1。
-func touchItem(ctx context.Context, q db.Querier, id, operatorID uuid.UUID) error {
-	_, err := q.Exec(ctx, `UPDATE archive_items SET row_version = row_version + 1, updated_by = $2, updated_at = now() WHERE id = $1`,
-		id, operatorID)
-	return err
-}

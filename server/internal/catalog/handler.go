@@ -11,7 +11,7 @@ import (
 	"doclite/server/internal/platform/httpx"
 )
 
-// Handler 是归类的接口（M4-1 的归类树、条目、著录、定稿；M4-2 的挂接、归类信息、看板）：
+// Handler 是归类的接口（归类树、条目、著录、锁定；M9-1 的整个文件夹归档和封存；归类信息、看板）：
 //
 // 能进项目即可：
 //
@@ -31,18 +31,19 @@ import (
 //	                                                                    → 200 UpdatedCategory
 //	DELETE /api/projects/{pid}/archive-categories/{id}                  → 204
 //	GET    /api/archive-categories/{id}/items?limit=&cursor=            → 200 ItemList
-//	POST   /api/archive-categories/{id}/items  {title?, extra_fields?, file_ids?} → 201 Item（可以没有请求体）
+//	POST   /api/archive-categories/{id}/items:from-folders  {folder_ids, titles?, dry_run?}
+//	                                                                    → 200 ArchiveResult（预览）/ 201（归档）
 //	GET    /api/archive-items/{id}                                      → 200 Item
 //	PATCH  /api/archive-items/{id}  {row_version, title?, extra_fields?, category_id?, item_no?} → 200 Item
-//	DELETE /api/archive-items/{id}?row_version=                         → 204（有页时一并移出）
-//	PUT    /api/archive-items/{id}/files  {row_version, file_ids}       → 200 Item（整体替换页，页号 1..n）
-//	POST   /api/archive-items/{id}/mark-done | back-to-draft | lock  {row_version} → 200 Item
+//	DELETE /api/archive-items/{id}?row_version=                         → 204（撤销归档，页一并移出）
+//	POST   /api/archive-items/{id}/lock | unlock  {row_version}         → 200 Item
+//	POST   /api/archive-items/{id}/unseal  {row_version, reason?}       → 200 Item（解除封存）
+//	GET    /api/archive-items/{id}/reseal-preview                       → 200 ResealPreview
+//	POST   /api/archive-items/{id}/reseal  {row_version}                → 200 Item（重新归档）
 //	POST   /api/projects/{pid}/archive-items:lock  {item_ids}           → 200 LockResult
 //	POST   /api/projects/{pid}/archive-items:renumber  {category_id?}   → 200 RenumberResult（可以没有请求体）
 //
-// catalog 和 review_assign：
-//
-//	POST   /api/archive-items/{id}/unlock  {row_version}                → 200 Item
+// 归类的全部操作（含解锁）只要 catalog + 能进项目（用户 2026-10-19）。
 type Handler struct {
 	svc *Service
 }
@@ -66,19 +67,17 @@ func (h *Handler) Routes(r *httpx.Router, g *auth.Gate) {
 
 	inCategory := g.InProject(cat, h.categoryProject)
 	r.Handle("GET /api/archive-categories/{id}/items", inCategory, h.listItems)
-	r.Handle("POST /api/archive-categories/{id}/items", inCategory, h.createItem)
+	r.Handle("POST /api/archive-categories/{id}/items:from-folders", inCategory, h.archiveFolders)
 
 	inItem := g.InProject(cat, h.itemProject)
 	r.Handle("GET /api/archive-items/{id}", inItem, h.getItem)
 	r.Handle("PATCH /api/archive-items/{id}", inItem, h.updateItem)
 	r.Handle("DELETE /api/archive-items/{id}", inItem, h.deleteItem)
-	r.Handle("PUT /api/archive-items/{id}/files", inItem, h.putFiles)
-	r.Handle("POST /api/archive-items/{id}/mark-done", inItem, h.action(ActionMarkDone))
-	r.Handle("POST /api/archive-items/{id}/back-to-draft", inItem, h.action(ActionBackToDraft))
 	r.Handle("POST /api/archive-items/{id}/lock", inItem, h.action(ActionLock))
-	// 解锁要同时有 catalog 和 review_assign（用户决定 Q5）。
-	r.Handle("POST /api/archive-items/{id}/unlock",
-		g.InProject(g.AllMenus(auth.MenuCatalog, auth.MenuReviewAssign), h.itemProject), h.action(ActionUnlock))
+	r.Handle("POST /api/archive-items/{id}/unlock", inItem, h.action(ActionUnlock))
+	r.Handle("POST /api/archive-items/{id}/unseal", inItem, h.unseal)
+	r.Handle("GET /api/archive-items/{id}/reseal-preview", inItem, h.resealPreview)
+	r.Handle("POST /api/archive-items/{id}/reseal", inItem, h.reseal)
 
 	r.Handle("POST /api/projects/{pid}/archive-items:lock", g.InProject(cat, inProject), h.lockItems)
 	r.Handle("POST /api/projects/{pid}/archive-items:renumber", g.InProject(cat, inProject), h.renumber)
@@ -223,27 +222,31 @@ func (h *Handler) listItems(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-type createItemRequest struct {
-	Title       *string        `json:"title"`
-	ExtraFields map[string]any `json:"extra_fields"`
-	FileIDs     []uuid.UUID    `json:"file_ids"`
+type archiveRequest struct {
+	FolderIDs []uuid.UUID          `json:"folder_ids"`
+	Titles    map[uuid.UUID]string `json:"titles"`
+	DryRun    bool                 `json:"dry_run"`
 }
 
-func (h *Handler) createItem(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) archiveFolders(w http.ResponseWriter, r *http.Request) error {
 	id, err := httpx.PathUUID(r, "id")
 	if err != nil {
 		return err
 	}
-	var req createItemRequest
-	if _, err := httpx.ReadOptionalJSON(r, &req); err != nil {
+	var req archiveRequest
+	if err := httpx.ReadJSON(r, &req); err != nil {
 		return err
 	}
-	out, err := h.svc.CreateItem(r.Context(), auth.Current(r.Context()).UserID, auth.ProjectID(r.Context()), id,
-		ItemInput{Title: req.Title, Fields: req.ExtraFields, FileIDs: req.FileIDs})
+	out, err := h.svc.ArchiveFolders(r.Context(), auth.Current(r.Context()).UserID, auth.ProjectID(r.Context()), id,
+		ArchiveInput{FolderIDs: req.FolderIDs, Titles: req.Titles, DryRun: req.DryRun})
 	if err != nil {
 		return err
 	}
-	httpx.WriteJSON(w, http.StatusCreated, out)
+	status := http.StatusCreated
+	if req.DryRun {
+		status = http.StatusOK
+	}
+	httpx.WriteJSON(w, status, out)
 	return nil
 }
 
@@ -372,38 +375,67 @@ func (h *Handler) renumber(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-// 挂接、归类信息、看板
-// ---------------------------------------------------------------------------
-
-type putFilesRequest struct {
-	RowVersion *int         `json:"row_version"`
-	FileIDs    *[]uuid.UUID `json:"file_ids"`
+type unsealRequest struct {
+	RowVersion *int    `json:"row_version"`
+	Reason     *string `json:"reason"`
 }
 
-func (h *Handler) putFiles(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) unseal(w http.ResponseWriter, r *http.Request) error {
 	id, err := httpx.PathUUID(r, "id")
 	if err != nil {
 		return err
 	}
-	var req putFilesRequest
+	var req unsealRequest
 	if err := httpx.ReadJSON(r, &req); err != nil {
 		return err
 	}
 	if req.RowVersion == nil {
 		return errMissingRowVersion
 	}
-	if req.FileIDs == nil {
-		return httpx.Invalid("缺少 file_ids（条目的全部页，按页序；空列表是清空）")
-	}
-	out, err := h.svc.ReplacePages(r.Context(), auth.Current(r.Context()).UserID, id,
-		PageInput{RowVersion: *req.RowVersion, FileIDs: *req.FileIDs})
+	out, err := h.svc.Unseal(r.Context(), auth.Current(r.Context()).UserID, id, *req.RowVersion, req.Reason)
 	if err != nil {
 		return err
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
 	return nil
 }
+
+func (h *Handler) resealPreview(w http.ResponseWriter, r *http.Request) error {
+	id, err := httpx.PathUUID(r, "id")
+	if err != nil {
+		return err
+	}
+	out, err := h.svc.ResealPreview(r.Context(), auth.ProjectID(r.Context()), id)
+	if err != nil {
+		return err
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+	return nil
+}
+
+func (h *Handler) reseal(w http.ResponseWriter, r *http.Request) error {
+	id, err := httpx.PathUUID(r, "id")
+	if err != nil {
+		return err
+	}
+	var req rowVersionRequest
+	if err := httpx.ReadJSON(r, &req); err != nil {
+		return err
+	}
+	if req.RowVersion == nil {
+		return errMissingRowVersion
+	}
+	out, err := h.svc.Reseal(r.Context(), auth.Current(r.Context()).UserID, id, *req.RowVersion)
+	if err != nil {
+		return err
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// 归类信息、看板
+// ---------------------------------------------------------------------------
 
 type placementsRequest struct {
 	FileIDs *[]uuid.UUID `json:"file_ids"`

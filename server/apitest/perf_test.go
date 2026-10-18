@@ -148,14 +148,20 @@ SELECT %s, $1, file_id, reviewer_id, $2,
   CASE WHEN review_status = 'rejected' THEN '{blur}'::text[] ELSE '{}'::text[] END,
   CASE WHEN review_status = 'pending' THEN NULL ELSE now() END
 FROM perf_plan WHERE review_status <> 'unassigned'`, perfID("0f", "n"), perfID("0d", "n")),
-		// 条目：BGS 2000 件全部定稿；RSC 400 件草稿、已完成、定稿轮着。
-		fmt.Sprintf(`INSERT INTO archive_items (id, project_id, category_id, item_level, item_no, archive_no, title, status, row_version, created_by)
-SELECT %s, $1, $2, 'item', k, 'Z1-WS·2025-Y-BGS-' || lpad(k::text, 4, '0'), '文件 ' || k, 'locked', 3, $3
-FROM generate_series(1, %d) k`, perfID("1a", "k"), perfExportItem),
-		fmt.Sprintf(`INSERT INTO archive_items (id, project_id, category_id, item_level, item_no, archive_no, title, status, row_version, created_by)
+		// 条目的来源文件夹（M9-1 起条目都要有）：第 1 个上层文件夹下另建 2400 个（只为满足约束，页不在里面）。
+		fmt.Sprintf(`INSERT INTO folders (id, project_id, parent_id, folder_name, path_code, sort_no, created_by)
+SELECT %s, $1, %s, '件 ' || k, $2 || '00001.' || lpad((50 + k)::text, 5, '0') || '.', 50 + k, $3
+FROM generate_series(1, %d) k`, perfID("0g", "k"), perfID("0a", "1"), perfExportItem+perfOtherItem),
+		// 条目：BGS 2000 件全部锁定；RSC 400 件未锁定、修改中、锁定轮着。
+		fmt.Sprintf(`INSERT INTO archive_items (id, project_id, category_id, item_level, item_no, archive_no, title, status, row_version,
+  created_by, source_folder_id)
+SELECT %s, $1, $2, 'item', k, 'Z1-WS·2025-Y-BGS-' || lpad(k::text, 4, '0'), '文件 ' || k, 'locked', 3, $3, %s
+FROM generate_series(1, %d) k`, perfID("1a", "k"), perfID("0g", "k"), perfExportItem),
+		fmt.Sprintf(`INSERT INTO archive_items (id, project_id, category_id, item_level, item_no, archive_no, title, status, row_version,
+  created_by, source_folder_id, source_status)
 SELECT %s, $1, $2, 'item', k, 'Z1-WS·2025-Y-RSC-' || lpad(k::text, 4, '0'), '人事文件 ' || k,
-  (ARRAY['draft', 'done', 'locked'])[k %% 3 + 1], 2, $3
-FROM generate_series(1, %d) k`, perfID("1b", "k"), perfOtherItem),
+  (ARRAY['draft', 'draft', 'locked'])[k %% 3 + 1], 2, $3, %s, (ARRAY['sealed', 'modifying', 'sealed'])[k %% 3 + 1]
+FROM generate_series(1, %d) k`, perfID("1b", "k"), perfID("0g", fmt.Sprintf("(%d + k)", perfExportItem)), perfOtherItem),
 		`INSERT INTO archive_item_files (project_id, archive_item_id, file_id, page_no, linked_by)
 SELECT $1, item_id, file_id, page_no, $2 FROM perf_plan WHERE item_id IS NOT NULL`,
 	}
@@ -168,6 +174,7 @@ SELECT $1, item_id, file_id, page_no, $2 FROM perf_plan WHERE item_id IS NOT NUL
 		{profile, prefix, adminID},
 		{p.ID, adminID},
 		{p.ID, adminID},
+		{p.ID, rootPath, adminID},
 		{p.ID, bgs.ID, adminID},
 		{p.ID, rsc.ID, adminID},
 		{p.ID, adminID},

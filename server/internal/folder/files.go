@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"doclite/server/internal/catalog"
 	"doclite/server/internal/file"
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/events"
@@ -18,6 +19,8 @@ import (
 
 // 文件的整理（id 是 folder_files 的 id）：改名、移动、复制、删除、批量移动、批量删除（requirements 5.5）。
 // 加锁：文件树共享锁 → files 行（id 升序）→ 锁住之后重读 folder_files → folders 行（id 升序）→（复制时）源存储配置行。
+// 锁住 folders 行之后做封存检查（catalog.SealedCheck：改名查所在的文件夹，移动查源和目标，复制查目标，删除查所在的
+// 文件夹），再查已归类。
 // 只改 folder_files（硬性规则 3）；文件的操作写 file_logs（detail 存当时的名字和文件夹路径）；提交后发 files.changed。
 
 // MaxBulkIDs 是批量移动、删除一次最多的文件数。
@@ -107,6 +110,14 @@ func (s *Service) UpdateEntry(ctx context.Context, userID, projectID, id uuid.UU
 			dest = locked[*in.FolderID]
 			if dest == nil || dest.Deleted || dest.ProjectID != projectID {
 				return errTargetNotFound
+			}
+			if err := catalog.SealedCheck(ctx, tx, "移入移出文件", src.ID, dest.ID); err != nil {
+				return err
+			}
+		}
+		if rename {
+			if err := catalog.SealedCheck(ctx, tx, "给里面的文件改名", src.ID); err != nil {
+				return err
 			}
 		}
 		paths, err := folderPaths(ctx, tx, lockIDs)
@@ -208,6 +219,9 @@ func (s *Service) CopyEntry(ctx context.Context, userID, projectID, id uuid.UUID
 		if dest == nil || dest.Deleted || dest.ProjectID != projectID {
 			return errTargetNotFound
 		}
+		if err := catalog.SealedCheck(ctx, tx, "复制文件进去", dest.ID); err != nil {
+			return err
+		}
 		src, err := file.Current(ctx, tx, e.FileID)
 		if err != nil {
 			return err
@@ -275,7 +289,8 @@ func (s *Service) CopyEntry(ctx context.Context, userID, projectID, id uuid.UUID
 	return out, nil
 }
 
-// DeleteEntry 软删除一个文件：已归类的 409 file_cataloged；取消进行中的分配；记 delete。
+// DeleteEntry 软删除一个文件：所在文件夹封存 409 folder_archived；已归类的 409 file_cataloged（修改中的条目的页
+// 除外）；取消进行中的分配；记 delete。
 func (s *Service) DeleteEntry(ctx context.Context, userID, projectID, id uuid.UUID) error {
 	return s.deleteEntries(ctx, userID, projectID, []uuid.UUID{id}, false)
 }
@@ -301,17 +316,20 @@ func (s *Service) deleteEntries(ctx context.Context, userID, projectID uuid.UUID
 		for i, e := range entries {
 			fileIDs[i] = e.FileID
 		}
+		folderIDs := uniqueFolders(entries)
+		locked, err := lockFolders(ctx, tx, folderIDs...)
+		if err != nil {
+			return err
+		}
+		if err := catalog.SealedCheck(ctx, tx, "删除里面的文件", folderIDs...); err != nil {
+			return err
+		}
 		cataloged, err := catalogedAmong(ctx, tx, fileIDs)
 		if err != nil {
 			return err
 		}
 		if len(cataloged) > 0 {
 			return catalogedError(entries, cataloged, bulk)
-		}
-		folderIDs := uniqueFolders(entries)
-		locked, err := lockFolders(ctx, tx, folderIDs...)
-		if err != nil {
-			return err
 		}
 		paths, err := folderPaths(ctx, tx, folderIDs)
 		if err != nil {
@@ -456,6 +474,17 @@ func (s *Service) MoveEntries(ctx context.Context, userID uuid.UUID, scope *Bulk
 		dest := locked[folderID]
 		if dest == nil || dest.Deleted || dest.ProjectID != projectID {
 			return errTargetNotFound
+		}
+		var touched []uuid.UUID
+		for _, e := range entries {
+			if e.FolderID != dest.ID {
+				touched = append(touched, e.FolderID)
+			}
+		}
+		if len(touched) > 0 {
+			if err := catalog.SealedCheck(ctx, tx, "移入移出文件", append(touched, dest.ID)...); err != nil {
+				return err
+			}
 		}
 		paths, err := folderPaths(ctx, tx, folderIDs)
 		if err != nil {

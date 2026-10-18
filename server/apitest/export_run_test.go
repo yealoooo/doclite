@@ -18,7 +18,7 @@ import (
 	"doclite/server/internal/platform/s3"
 )
 
-// TestExportRunAndDownload：端到端。样本经接口上传、分配、通过、建条目挂接、定稿 → 预检 → 导出 PDF 和原图包 → 执行器
+// TestExportRunAndDownload：端到端。样本经接口上传、分配、通过、整个文件夹归档、锁定 → 预检 → 导出 PDF 和原图包 → 执行器
 // 生成并分片上传 → 下载（预签名地址带 Content-Disposition）→ 核对 zip 里的文件、清单和明细、sha256、file_logs、
 // 审计、事件；过期后下载 409、到期清理删对象。
 func TestExportRunAndDownload(t *testing.T) {
@@ -46,7 +46,6 @@ func TestExportRunAndDownload(t *testing.T) {
 	it1 := e.cat.mkItem(e.org.ID, map[string]any{"title": "第一件", "extra_fields": map[string]any{"resp": "办公室"}, "file_ids": ids[:2]})
 	it2 := e.cat.mkItem(e.org.ID, map[string]any{"title": "第二件", "file_ids": ids[2:]})
 	for _, it := range []itemView{it1, it2} {
-		e.cat.act(it.ID, "mark-done").Expect(http.StatusOK)
 		e.cat.act(it.ID, "lock").Expect(http.StatusOK)
 	}
 	it1, it2 = e.cat.item(it1.ID), e.cat.item(it2.ID)

@@ -13,13 +13,14 @@ import (
 // 项目看板（requirements 5.10，用户决定 Q6）：一个文件夹整棵子树、直接放在里面的、每个子文件夹各自子树的
 // "审核状态 × 归类状态"矩阵，加上可导出数。每次实时聚合，不建汇总表；只读，在一个只读快照里。
 //   - 审核状态：folder_files.review_status（unassigned、pending、approved、rejected）；
-//   - 归类状态：未归类（没有挂接行）、已归类未定稿（条目 draft、done）、已定稿（条目 locked）；
-//   - 可导出：export.require_locked_item 为 true 时是已定稿的，false 时是全部已归类的，按审核状态分开（"只导出审核
-//     通过的"是导出时勾选的，看板的主 KPI 取 exportable.approved）；
+//   - 归档状态：未归档（没有挂接行）、已归档未锁定（条目 draft，含修改中）、已锁定（条目 locked）；JSON 的键沿用
+//     uncataloged、unlocked、locked；
+//   - 可导出：require_locked_item 为 true 时是已锁定的，false 时是已归档、不在修改中的（修改中的导出预检不就绪），
+//     按审核状态分开（"只导出审核通过的"是导出时勾选的，看板的主 KPI 取 exportable.approved）；
 //   - 只含未删除的文件（所在文件夹也未删除）。
 //
-// KPI 由界面从 counts 取：已上传 total、通过 review.approved、待重扫 review.rejected、已归类 catalog.cataloged、
-// 已定稿 catalog.locked、可导出 exportable.approved（主）/ exportable.total（次）。
+// KPI 由界面从 counts 取：已上传 total、通过 review.approved、待重扫 review.rejected、已归档 catalog.cataloged、
+// 已锁定 catalog.locked、可导出 exportable.approved（主）/ exportable.total（次）。
 
 // ReviewCounts 是按审核状态的计数（和审核的按文件夹计数相同）。
 type ReviewCounts struct {
@@ -93,7 +94,7 @@ type SummaryCounts struct {
 	Exportable ReviewCounts `json:"exportable"`
 }
 
-// add 记 n 个文件：审核状态 reviewStatus，所在条目的状态 itemStatus（未归类为 nil）。
+// add 记 n 个文件：审核状态 reviewStatus，所在条目的状态 itemStatus（未归档为 nil；修改中的是 "modifying"）。
 func (c *SummaryCounts) add(reviewStatus string, itemStatus *string, n int, requireLocked bool) {
 	row := c.Matrix.row(reviewStatus)
 	if row == nil {
@@ -116,7 +117,7 @@ func (c *SummaryCounts) add(reviewStatus string, itemStatus *string, n int, requ
 		c.Catalog.Unlocked += n
 	}
 	c.Catalog.Cataloged += n
-	if !requireLocked || *itemStatus == statusLocked {
+	if *itemStatus == statusLocked || (!requireLocked && *itemStatus != sourceModifying) {
 		c.Exportable.add(reviewStatus, n)
 	}
 }
@@ -246,10 +247,11 @@ type summaryBucket struct {
 	N            int
 }
 
-// summaryBuckets 按（分组、审核状态、条目状态）数 path 子树里未删除的文件。跨模块的读（folders、folder_files）。
+// summaryBuckets 按（分组、审核状态、条目状态：draft、locked、modifying）数 path 子树里未删除的文件。跨模块的读（folders、folder_files）。
 // ff.project_id 让 PG 能用 ix_folder_files_review 只读这个项目的文件；af.project_id 在哈希连接时只装这个项目的挂接。
 func summaryBuckets(ctx context.Context, q db.Querier, projectID uuid.UUID, path string) ([]summaryBucket, error) {
-	rows, err := q.Query(ctx, `SELECT left(f.path_code, length($2) + 6), ff.review_status, a.status, count(*)
+	rows, err := q.Query(ctx, `SELECT left(f.path_code, length($2) + 6), ff.review_status,
+  CASE WHEN a.source_status = 'modifying' THEN 'modifying' ELSE a.status END, count(*)
 FROM folders f
 JOIN folder_files ff ON ff.folder_id = f.id AND ff.project_id = $1 AND ff.deleted_at IS NULL
 LEFT JOIN archive_item_files af ON af.file_id = ff.file_id AND af.project_id = $1

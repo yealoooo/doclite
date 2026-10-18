@@ -30,7 +30,7 @@ func (c *catalogEnv) patchCat(id uuid.UUID, body map[string]any) *Response {
 }
 
 // TestArchiveNoGeneration：按模板和祖先链生成档号、件号 max+1（算上已删除的）、改件号、移动条目、改节点编码和类型
-// 时重算（定稿的不动、挡住）、按新模板重新生成。
+// 时重算（锁定的不动、挡住）、按新模板重新生成。
 func TestArchiveNoGeneration(t *testing.T) {
 	t.Parallel()
 	c := newCatalogEnv(t, "AN")
@@ -77,7 +77,7 @@ func TestArchiveNoGeneration(t *testing.T) {
 		t.Fatalf("最近的同类型节点：%s", str(e.ArchiveNo))
 	}
 
-	// 改节点编码：子树里未定稿的条目重算（row_version + 1，renumber 审计带 cause）。
+	// 改节点编码：子树里未锁定的条目重算（row_version + 1，renumber 审计带 cause）。
 	up := Decode[catNode](c.patchCat(org.ID, map[string]any{"category_code": "BG2"}).Expect(200))
 	if up.Renumbered != 1 || up.ArchiveNoConflicts != 0 {
 		t.Fatalf("改编码：%+v", up)
@@ -99,16 +99,14 @@ func TestArchiveNoGeneration(t *testing.T) {
 		t.Fatal("改回类型后档号没有恢复")
 	}
 
-	// 定稿的条目：子树里有它时移动、改编码、改类型都 409 item_locked，什么都不改。
-	c.addPage(a.ID, "approved")
-	c.act(a.ID, "mark-done").Expect(200)
+	// 锁定的条目：子树里有它时移动、改编码、改类型都 409 item_locked，什么都不改。
 	c.act(a.ID, "lock").Expect(200)
 	c.patchCat(org.ID, map[string]any{"category_code": "BG3"}).ExpectError(409, "item_locked")
 	c.patchCat(ret.ID, map[string]any{"category_type": "custom"}).ExpectError(409, "item_locked")
 	c.patchCat(org.ID, map[string]any{"parent_id": c.rootID}).ExpectError(409, "item_locked")
 	c.patchCat(org.ID, map[string]any{"category_name": "改名可以"}).Expect(200)
 
-	// 改模板不自动重算；按新模板重新生成：只改未定稿的，重复执行不变。
+	// 改模板不自动重算；按新模板重新生成：只改未锁定的，重复执行不变。
 	c.setSettings(map[string]any{"archive_no": map[string]any{"template": "{fonds}.{org}.{item_no:03}"}})
 	if str(c.item(d.ID).ArchiveNo) != prefix+"RSC-0001" {
 		t.Fatal("改模板不应自动重算")
@@ -147,9 +145,9 @@ func TestArchiveNoConflict(t *testing.T) {
 		*b.ArchiveNoReason.ConflictCategoryID != org.ID || *b.ArchiveNoReason.ConflictItemNo != 1 {
 		t.Fatalf("撞号：A %s，B %+v", str(a.ArchiveNo), b.ArchiveNoReason)
 	}
-	cr := QueryValue[map[string]any](c.Env, `SELECT detail FROM audit_logs WHERE target_id = $1 AND action = 'create'`, b.ID)
+	cr := QueryValue[map[string]any](c.Env, `SELECT detail FROM audit_logs WHERE target_id = $1 AND action = 'archive'`, b.ID)
 	if cr["after"].(map[string]any)["archive_no_conflict"].(map[string]any)["item_id"] != a.ID.String() {
-		t.Fatalf("create 审计：%v", cr)
+		t.Fatalf("archive 审计：%v", cr)
 	}
 
 	// A 改件号 9 → B 变成"未生成"；C2 里新建的 C 拿到这个号。
@@ -213,7 +211,7 @@ func TestArchiveNoConflict(t *testing.T) {
 	}
 }
 
-// TestArchiveNoIncomplete：缺级档号留空（能建不能定稿）、补齐上级后移进去有档号；模板解析不了时的处理。
+// TestArchiveNoIncomplete：缺级档号留空（能归档不能锁定）、补齐上级后移进去有档号；模板解析不了时的处理。
 func TestArchiveNoIncomplete(t *testing.T) {
 	t.Parallel()
 	c := newCatalogEnv(t, "IC")
@@ -226,29 +224,29 @@ func TestArchiveNoIncomplete(t *testing.T) {
 		!strings.Contains(r.Message, "年度、保管期限、机构") {
 		t.Fatalf("缺级：%+v", r)
 	}
-	c.act(it.ID, "mark-done").Expect(200)
-	c.addPage(it.ID, "approved")
 	if m := errOf(c.act(it.ID, "lock").ExpectError(409, "invalid_state")).Message; !strings.Contains(m, "没有档号") {
-		t.Fatalf("缺级不能定稿：%s", m)
+		t.Fatalf("缺级不能锁定：%s", m)
 	}
-	// 直接放在根节点下的条目：缺全部五级。
-	top := c.mkItem(c.rootID, nil)
+	// 直接放在根节点下的条目（归档后移过去）：缺全部五级。
+	top := c.mkItem(ws.ID, nil)
+	top = Decode[itemView](c.patchItem(top.ID, map[string]any{"category_id": c.rootID}).Expect(200))
 	if top.ArchiveNoReason == nil || len(top.ArchiveNoReason.Missing) != 5 {
 		t.Fatalf("根节点下：%+v", top.ArchiveNoReason)
 	}
-	// 补齐上级，移进去就有档号，可以定稿。
+	// 补齐上级，移进去就有档号，可以锁定。
 	year := c.mkCat(&ws, "year", "2025", "2025 年")
 	ret := c.mkCat(&year, "retention", "Y", "永久")
 	org := c.mkCat(&ret, "org", "BGS", "办公室")
 	it = Decode[itemView](c.patchItem(it.ID, map[string]any{"category_id": org.ID}).Expect(200))
-	if str(it.ArchiveNo) != "Z1-WS·2025-Y-BGS-0001" || it.ArchiveNoReason != nil || it.Status != "done" {
+	if str(it.ArchiveNo) != "Z1-WS·2025-Y-BGS-0001" || it.ArchiveNoReason != nil || it.Status != "draft" {
 		t.Fatalf("补齐后：%+v", it)
 	}
 	c.act(it.ID, "lock").Expect(200)
 	kj := c.mkCat(&fonds, "category", "KJ", "科技")
 	c.mkItem(kj.ID, nil)
+	pending, _ := c.mkFolder(uuid.Nil, "待归档", "approved")
 
-	// 模板解析不了（以前写入的设置，直接写库）：catalog-settings 给原因，编码按兜底的分隔符校验；新建、重新生成、
+	// 模板解析不了（以前写入的设置，直接写库）：catalog-settings 给原因，编码按兜底的分隔符校验；归档、重新生成、
 	// 改编码（要重算）409 invalid_state；只改名可以；详情的原因是 template_invalid。
 	c.Exec(`UPDATE projects SET settings = '{"archive_no": {"template": "{fonds}-{bad}"}}' WHERE id = $1`, c.pid)
 	var st struct {
@@ -260,7 +258,7 @@ func TestArchiveNoIncomplete(t *testing.T) {
 	if st.Error == nil || len(st.Levels) != 0 || !slices.Contains(st.Forbidden, "_") || !slices.Contains(st.Forbidden, ".") {
 		t.Fatalf("模板解析不了的设置：%+v", st)
 	}
-	c.admin.Post("/api/archive-categories/"+ws.ID.String()+"/items", map[string]any{}).ExpectError(409, "invalid_state")
+	c.archive(ws.ID, map[string]any{"folder_ids": []uuid.UUID{pending}}).ExpectError(409, "invalid_state")
 	c.admin.Post("/api/projects/"+c.pid.String()+"/archive-items:renumber", nil).ExpectError(409, "invalid_state")
 	c.patchCat(kj.ID, map[string]any{"category_code": "KJ2"}).ExpectError(409, "invalid_state")
 	c.patchCat(ws.ID, map[string]any{"category_name": "文书档案"}).Expect(200)

@@ -6,12 +6,14 @@ import (
 
 	"github.com/google/uuid"
 
+	"doclite/server/internal/catalog"
 	"doclite/server/internal/platform/db"
 )
 
 // folder 的 SQL：folders、folder_files。
 //
-// 跨模块的读（只读）：projects（是否已删除）、file_snapshots（当前版本号）、archive_item_files（是否已归类）。
+// 跨模块的读（只读）：projects（是否已删除）、file_snapshots（当前版本号）、archive_item_files、archive_items（是否
+// 已归类、条目是否修改中）。封存检查和文件夹的归档信息经 catalog 的包级函数（SealedCheck、FolderArchives）。
 // 跨模块的写（例外）：删除文件时把进行中的分配（file_reviews 里 open 的行）改成 cancelled——删除必须在同一个事务里
 // 取消分配（requirements 5.5、5.8），而 internal/review 引用本包，这里不能反过来调它。files、file_snapshots、file_logs
 // 经 internal/file 的包级函数写。
@@ -143,6 +145,8 @@ type SubfolderEntry struct {
 	// FolderCount、FileCount 是未删除的直接子文件夹数、文件数。
 	FolderCount int `json:"folder_count"`
 	FileCount   int `json:"file_count"`
+	// Archive 是归档信息（是某个未删除条目的来源时；否则为 null）。
+	Archive *catalog.FolderArchive `json:"archive"`
 }
 
 // FileEntry 是 children 里的一个文件（folder_files 的一行）。
@@ -282,13 +286,15 @@ func collectIDs(ctx context.Context, q db.Querier, sql string, args ...any) ([]u
 	return out, rows.Err()
 }
 
-// catalogedAmong 是这些文件里已归类的（archive_item_files 里有它），按给的顺序。
+// catalogedAmong 是这些文件里删不掉的已归类文件（在某个条目里、条目不在修改中），按给的顺序。修改中的条目的页
+// 可以删（来源文件夹和未归档的一样可以整理，重新归档时移出）。
 func catalogedAmong(ctx context.Context, q db.Querier, fileIDs []uuid.UUID) ([]uuid.UUID, error) {
 	if len(fileIDs) == 0 {
 		return nil, nil
 	}
 	return collectIDs(ctx, q, `SELECT t.id FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, i)
-WHERE EXISTS (SELECT 1 FROM archive_item_files af WHERE af.file_id = t.id) ORDER BY t.i`, fileIDs)
+WHERE EXISTS (SELECT 1 FROM archive_item_files af JOIN archive_items a ON a.id = af.archive_item_id
+              WHERE af.file_id = t.id AND a.source_status <> 'modifying') ORDER BY t.i`, fileIDs)
 }
 
 // softDeleteFolders 软删除这些文件夹。

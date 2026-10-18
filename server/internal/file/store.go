@@ -88,7 +88,7 @@ func insertFile(ctx context.Context, q db.Querier, id uuid.UUID) error {
 }
 
 // InsertSnapshot 在调用方的事务里插入快照（只追加，硬性规则 2）。created_at 用 clock_timestamp()（插入的这一刻）：
-// 事务可能等了锁，用事务开始的 now() 会早于别的事务里刚发生的事（例如条目定稿），"定稿后有新版本"会漏标。
+// 事务可能等了锁，用事务开始的 now() 会早于别的事务里刚发生的事（例如条目锁定），"锁定后有新版本"会漏标。
 func InsertSnapshot(ctx context.Context, q db.Querier, s *NewSnapshot) error {
 	_, err := q.Exec(ctx, `INSERT INTO file_snapshots (id, file_id, version_no, snapshot_type, storage_profile_id, storage_key,
   cover_key, content_sha256, file_size, mime_type, upload_name, width_px, height_px, dpi, color_mode, created_by, created_at)

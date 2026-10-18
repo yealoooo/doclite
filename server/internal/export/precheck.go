@@ -11,9 +11,10 @@ import (
 	"doclite/server/internal/platform/httpx"
 )
 
-// 预检（requirements 5.11"预检"，用户决定 Q7）：就绪 =（require_locked_item 时）已定稿、档号不空、≥ 1 页、（勾了
-// "只导出审核通过的"时）全部页 approved。原因码 not_locked、no_archive_no、no_pages、pages_not_approved（带不是通过
-// 的页数和前 5 页）。不就绪的条目最多列 500 件；件数、页数、各原因件数是全部的。单任务 ≤ 20 万页（按就绪的页数）。
+// 预检（requirements 5.11"预检"，用户决定 Q7）：就绪 = 不在修改中、（require_locked_item 时）已锁定、档号不空、
+// ≥ 1 页、（勾了"只导出审核通过的"时）全部页 approved。原因码 source_modifying（来源文件夹修改中，2026-10-19，不管
+// require_locked_item）、not_locked、no_archive_no、no_pages、pages_not_approved（带不是通过的页数和前 5 页）。不就绪的
+// 条目最多列 500 件；件数、页数、各原因件数是全部的。单任务 ≤ 20 万页（按就绪的页数）。
 
 // 审核状态的叫法（"第 3 页：待审"）。
 var reviewLabels = map[string]string{"unassigned": "待分配", "pending": "待审", "approved": "通过", "rejected": "驳回"}
@@ -26,7 +27,7 @@ func reviewLabel(s string) string {
 }
 
 // 条目状态的叫法。
-var itemStatusLabels = map[string]string{"draft": "草稿", "done": "已完成", "locked": "已定稿"}
+var itemStatusLabels = map[string]string{"draft": "未锁定", "locked": "已锁定"}
 
 // PageRef 是不就绪原因里举例的一页。
 type PageRef struct {
@@ -62,19 +63,20 @@ type NotReadyItem struct {
 
 // ReasonCounts 是各原因涉及的件数（一件可以有几种原因）。
 type ReasonCounts struct {
+	SourceModifying  int `json:"source_modifying"`
 	NotLocked        int `json:"not_locked"`
 	NoArchiveNo      int `json:"no_archive_no"`
 	NoPages          int `json:"no_pages"`
 	PagesNotApproved int `json:"pages_not_approved"`
 }
 
-// summary："3 件没有定稿，1 件没有档号"。
+// summary："1 件修改中，3 件没有锁定，1 件没有档号"。
 func (c ReasonCounts) summary() string {
 	var parts []string
 	for _, x := range []struct {
 		n    int
 		what string
-	}{{c.NotLocked, "没有定稿"}, {c.NoArchiveNo, "没有档号"}, {c.NoPages, "没有页"}, {c.PagesNotApproved, "有页不是审核通过"}} {
+	}{{c.SourceModifying, "修改中（来源文件夹解除了封存）"}, {c.NotLocked, "没有锁定"}, {c.NoArchiveNo, "没有档号"}, {c.NoPages, "没有页"}, {c.PagesNotApproved, "有页不是审核通过"}} {
 		if x.n > 0 {
 			parts = append(parts, fmt.Sprintf("%d 件%s", x.n, x.what))
 		}
@@ -105,13 +107,17 @@ type Precheck struct {
 	PageLimitMessage  *string        `json:"page_limit_message"`
 }
 
-// notReadyReasons 是一个条目不能导出的原因（顺序：定稿、档号、页、审核）；就绪时为空。
+// notReadyReasons 是一个条目不能导出的原因（顺序：修改中、锁定、档号、页、审核）；就绪时为空。
 func notReadyReasons(it *scopeItem, requireLocked, onlyApproved bool) []NotReadyReason {
 	var out []NotReadyReason
+	if it.SourceStatus == "modifying" {
+		out = append(out, NotReadyReason{Code: "source_modifying",
+			Message: "来源文件夹解除了封存、正在修改，要先重新归档"})
+	}
 	if requireLocked && it.Status != "locked" {
 		st := it.Status
 		out = append(out, NotReadyReason{Code: "not_locked", ItemStatus: &st,
-			Message: fmt.Sprintf("没有定稿（现在是“%s”），项目设置要求导出的条目已定稿", itemStatusLabels[st])})
+			Message: fmt.Sprintf("没有锁定（现在是“%s”），项目设置要求导出的条目已锁定", itemStatusLabels[st])})
 	}
 	if it.ArchiveNo == nil || *it.ArchiveNo == "" {
 		out = append(out, NotReadyReason{Code: "no_archive_no", Message: "没有档号（条目详情里有原因）"})
@@ -166,6 +172,8 @@ func evaluate(req *request, requireLocked bool, items []*scopeItem) (*Precheck, 
 		p.NotReadyPageCount += it.PageCount
 		for _, r := range reasons {
 			switch r.Code {
+			case "source_modifying":
+				p.ReasonCounts.SourceModifying++
 			case "not_locked":
 				p.ReasonCounts.NotLocked++
 			case "no_archive_no":

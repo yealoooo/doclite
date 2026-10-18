@@ -26,8 +26,9 @@ import (
 //  1. [Service.Receive]：原图流式写进临时文件同时算 sha（超限 413、sha 不符 400）→ 读文件头 → 校验封面；
 //  2. 预判重复：同一文件夹里 upload_name 和 sha 都相同 → 200 返回已有文件（断网重试）；同项目里当前版本 sha 相同 →
 //     409 duplicate_content；
-//  3. 事务外把原图和封面传到默认存储（key 按硬性规则 7）；
-//  4. 短事务：文件树共享锁 → 目标文件夹行（领名字和 sort_no）→ 存储配置行（仍是 active 的默认）→ 内容锁 →
+//  3. 文件夹已封存（归档了）409 folder_archived（这里不加锁先查一次，第 4 步锁住文件夹行之后再查）；事务外把原图和
+//     封面传到默认存储（key 按硬性规则 7）；
+//  4. 短事务：文件树共享锁 → 目标文件夹行（封存检查，领名字和 sort_no）→ 存储配置行（仍是 active 的默认）→ 内容锁 →
 //     锁内复查重 → 写 files、快照 v1 original、folder_files（待分配）、upload 日志；
 //  5. 删临时文件；提交后发 files.changed。
 //
@@ -108,6 +109,9 @@ func orphans(ctx context.Context, target *storage.Target, keys ...string) {
 func (s *Service) Ingest(ctx context.Context, projectID, folderID, userID uuid.UUID, u *Upload) (*IngestResponse, bool, error) {
 	if r, err := s.precheck(ctx, s.pool, projectID, folderID, u); r != nil || err != nil {
 		return r, false, err
+	}
+	if err := s.folders.CheckUpload(ctx, folderID); err != nil {
+		return nil, false, err
 	}
 	target, err := s.storage.DefaultTarget(ctx)
 	if err != nil {

@@ -2,6 +2,10 @@ package apitest
 
 import (
 	"context"
+	"net/http"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,11 +13,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"doclite/server/internal/file"
 	"doclite/server/internal/project"
 )
 
-// 挂接的并发（requirements 3.6、5.9；CLAUDE.md 点名的"多人同时挂接""审核和归类同时操作"）。
+// 归档的并发（requirements 3.6、5.9；CLAUDE.md 点名的"多人同时归档""同一文件夹同时归档和上传""审核和归类同时操作"）。
 
 // waitLockWaiters 等到这个测试库里至少有 n 个会话在等锁（pg_stat_activity 的 wait_event_type = 'Lock'），查询文本
 // 符合 pattern（LIKE）。最多等 5 秒。
@@ -33,8 +36,8 @@ WHERE datname = current_database() AND wait_event_type = 'Lock' AND state = 'act
 	}
 }
 
-// holdFileRow 开一个手工事务锁住这个文件的 files 行（测试结束时回滚）。
-func holdFileRow(t *testing.T, pool *pgxpool.Pool, fid uuid.UUID) pgx.Tx {
+// holdFolderRow 开一个手工事务锁住这个文件夹行（和归档、文件目录的写操作同一种锁；测试结束时回滚）。
+func holdFolderRow(t *testing.T, pool *pgxpool.Pool, folderID uuid.UUID) pgx.Tx {
 	t.Helper()
 	ctx := context.Background()
 	tx, err := pool.Begin(ctx)
@@ -42,109 +45,111 @@ func holdFileRow(t *testing.T, pool *pgxpool.Pool, fid uuid.UUID) pgx.Tx {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
-	if err := file.LockFiles(ctx, tx, []uuid.UUID{fid}); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT id FROM folders WHERE id = $1 FOR NO KEY UPDATE`, folderID); err != nil {
 		t.Fatal(err)
 	}
 	return tx
 }
 
-type raceResult struct {
-	itemID uuid.UUID
-	res    *Response
-}
-
-// TestCatalogLinkRace：两个条目同时抢同一个文件，只有一个成功（另一个 409 file_cataloged，整体不做）。
-// 先用手工事务锁住这个文件的 files 行，让两边都排在它后面，放开后同时去抢。
-func TestCatalogLinkRace(t *testing.T) {
+// TestCatalogArchiveRace：两个人同时把同一个文件夹归档到两个节点，只有一个成功（另一个跳过 archived、一件都建不出
+// 409 invalid_state）。先用手工事务锁住文件夹行，让两边都排在它后面，放开后同时去抢。
+func TestCatalogArchiveRace(t *testing.T) {
 	t.Parallel()
 	c := newCatalogEnv(t, "RC")
 	_, _, _, ret, org := c.mkChain()
 	org2 := c.mkCat(&ret, "org", "RSC", "人事处")
+	f, _ := c.mkFolder(uuid.Nil, "抢", "approved", "approved")
 
-	// PUT 页：两个条目各自整体替换成 [f]。
-	x := c.mkItem(org.ID, map[string]any{"title": "X"})
-	y := c.mkItem(org.ID, map[string]any{"title": "Y"})
-	f := c.mkFile(uuid.Nil, "approved")
-	hold := holdFileRow(t, c.Pool, f)
-	results := make(chan raceResult, 2)
-	for _, it := range []itemView{x, y} {
-		go func() {
-			results <- raceResult{it.ID, c.admin.Put(filesPath(it.ID), map[string]any{"row_version": it.RowVersion, "file_ids": []uuid.UUID{f}})}
-		}()
+	hold := holdFolderRow(t, c.Pool, f)
+	results := make(chan *Response, 2)
+	for _, cat := range []uuid.UUID{org.ID, org2.ID} {
+		go func() { results <- c.archive(cat, map[string]any{"folder_ids": []uuid.UUID{f}}) }()
 	}
-	waitLockWaiters(t, c.Env, "%FROM files WHERE id = ANY%", 2)
+	waitLockWaiters(t, c.Env, "%FROM folders WHERE id = ANY%FOR NO KEY UPDATE%", 2)
 	if err := hold.Rollback(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	var winner uuid.UUID
 	ok, lost := 0, 0
 	for range 2 {
 		r := <-results
 		switch {
-		case r.res.Status == 200:
-			ok++
-			winner = r.itemID
-		case r.res.Status == 409 && r.res.Code() == "file_cataloged":
-			lost++
-		default:
-			t.Fatalf("意外的结果：%d %s", r.res.Status, r.res.Body)
-		}
-	}
-	if ok != 1 || lost != 1 {
-		t.Fatalf("PUT：成功 %d、409 %d", ok, lost)
-	}
-	if n := QueryValue[int](c.Env, `SELECT count(*)::int FROM archive_item_files WHERE file_id = $1 AND archive_item_id = $2`, f, winner); n != 1 {
-		t.Fatal("文件没有挂在成功的那个条目里")
-	}
-	if n := QueryValue[int](c.Env, `SELECT count(*)::int FROM file_logs WHERE file_id = $1 AND action = 'link'`, f); n != 1 {
-		t.Fatalf("link 日志 %d 条", n)
-	}
-
-	// 带 file_ids 新建（两个节点各建一个）：只有一个建成，另一个整体回滚、条目不建。
-	g := c.mkFile(uuid.Nil, "approved")
-	hold = holdFileRow(t, c.Pool, g)
-	created := make(chan *Response, 2)
-	for _, cat := range []uuid.UUID{org.ID, org2.ID} {
-		go func() {
-			created <- c.admin.Post("/api/archive-categories/"+cat.String()+"/items", map[string]any{"title": "抢", "file_ids": []uuid.UUID{g}})
-		}()
-	}
-	waitLockWaiters(t, c.Env, "%FROM files WHERE id = ANY%", 2)
-	if err := hold.Rollback(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	ok, lost = 0, 0
-	for range 2 {
-		r := <-created
-		switch {
 		case r.Status == 201:
 			ok++
-		case r.Status == 409 && r.Code() == "file_cataloged":
+		case r.Status == 409 && r.Code() == "invalid_state" && strings.Contains(string(r.Body), `"reason":"archived"`):
 			lost++
 		default:
 			t.Fatalf("意外的结果：%d %s", r.Status, r.Body)
 		}
 	}
-	if ok != 1 || lost != 1 || QueryValue[int](c.Env, `SELECT count(*)::int FROM archive_items WHERE title = '抢'`) != 1 {
-		t.Fatalf("新建：成功 %d、409 %d", ok, lost)
+	if ok != 1 || lost != 1 {
+		t.Fatalf("成功 %d、409 %d", ok, lost)
+	}
+	if n := QueryValue[int](c.Env, `SELECT count(*)::int FROM archive_items WHERE source_folder_id = $1`, f); n != 1 {
+		t.Fatalf("文件夹对应了 %d 件", n)
+	}
+	if n := QueryValue[int](c.Env, `SELECT count(*)::int FROM file_logs WHERE action = 'link'`); n != 2 {
+		t.Fatalf("link 日志 %d 条", n)
 	}
 }
 
-// TestCatalogLinkDoesNotBlockReview：审核和挂接同时进行不互相等（requirements 3.6 的加锁顺序）。
-// 一个只拿归类锁的长事务占着条目行（像批量定稿、改著录）；这时 PUT 页在等条目行，手里只有归类树的共享锁、没有文件
-// 树锁，所以：移动文件夹（文件树排他锁）不排在它后面，再后面的审核通过（真实接口，文件树共享锁 → files 行）也不用等。
-// 加锁顺序反过来（先文件树锁再等条目行）时，移动文件夹会排在 PUT 后面，审核又排在移动后面，这个测试失败。
+// TestCatalogArchiveUploadRace：同一个文件夹同时归档和上传（requirements 3.6"封存检查和归档读文件清单要互斥"）。
+// 两边都排在手工事务锁住的文件夹行后面，放开后谁先都行，但结果必须满足：归档成功，条目的页 = 文件夹里未删除的文件；
+// 上传要么成功（先到，成了这一件的页），要么 409 folder_archived（后到，什么都没写）。做两轮。
+func TestCatalogArchiveUploadRace(t *testing.T) {
+	t.Parallel()
+	e := newReviewEnv(t, "AU")
+	c := &catalogEnv{Env: e.Env, t: t, pid: e.p.ID, rootID: e.p.CategoryRootID, folder: e.p.RootFolderID,
+		adminID: e.UserID(AdminUsername), admin: e.admin}
+	_, _, _, _, org := c.mkChain()
+	outcomes := map[int]int{}
+	for round := range 2 {
+		f := mkdir(e.admin, e.p.RootFolderID, "件 "+strconv.Itoa(round)).ID
+		e.upload(f, "first.tif")
+		data := unique(sampleBytes(t, "tiff-g4-1bit.tif"), "AU-race-"+strconv.Itoa(round))
+
+		hold := holdFolderRow(t, c.Pool, f)
+		archived := make(chan *Response, 1)
+		uploaded := make(chan *Response, 1)
+		go func() { archived <- c.archive(org.ID, map[string]any{"folder_ids": []uuid.UUID{f}}) }()
+		go func() { uploaded <- e.scan.Upload(f, "second.tif", data, nil) }()
+		waitLockWaiters(t, c.Env, "%FROM folders%WHERE%id = ANY%FOR NO KEY UPDATE%", 2)
+		if err := hold.Rollback(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		ar, up := <-archived, <-uploaded
+		res := Decode[archiveResult](ar.Expect(http.StatusCreated))
+		if up.Status != http.StatusCreated && (up.Status != http.StatusConflict || up.Code() != "folder_archived") {
+			t.Fatalf("第 %d 轮：上传 %d %s", round, up.Status, up.Body)
+		}
+		outcomes[up.Status]++
+		it := c.item(*res.Items[0].ItemID)
+		live := QueryValue[[]uuid.UUID](c.Env, `SELECT coalesce(array_agg(file_id ORDER BY sort_no, file_name), '{}')
+FROM folder_files WHERE folder_id = $1 AND deleted_at IS NULL`, f)
+		if !slices.Equal(it.pageIDs(), live) || len(live) != map[int]int{201: 2, 409: 1}[up.Status] {
+			t.Fatalf("第 %d 轮（上传 %d）：条目的页 %v，文件夹里 %v", round, up.Status, it.pageIDs(), live)
+		}
+	}
+	t.Logf("两轮的上传结果：%v", outcomes)
+}
+
+// TestCatalogResealDoesNotBlockReview：审核和重新归档同时进行不互相等（requirements 3.6 的加锁顺序）。
+// 一个只拿归类锁的长事务占着条目行（像批量锁定、改著录）；这时重新归档在等条目行，手里只有归类树的共享锁、没有
+// 文件树锁，所以：移动文件夹（文件树排他锁）不排在它后面，再后面的审核通过（真实接口，文件树共享锁 → files 行）也
+// 不用等。加锁顺序反过来（先文件树锁再等条目行）时，移动文件夹会排在重新归档后面，审核又排在移动后面，这个测试失败。
 // 被拖住的请求要一直等到第 5 步放开条目行，所以下面的时限只要比一次请求的正常耗时宽就行：开发库在远程，一次审核
 // 要好几次数据库往返，约 1 秒。
-func TestCatalogLinkDoesNotBlockReview(t *testing.T) {
+func TestCatalogResealDoesNotBlockReview(t *testing.T) {
 	t.Parallel()
 	e := newReviewEnv(t, "RV")
 	admin := e.admin
 	fonds := Decode[catNode](admin.Post("/api/projects/"+e.p.ID.String()+"/archive-categories",
 		map[string]any{"category_type": "fonds", "category_code": "Z1", "category_name": "全宗"}).Expect(201))
-	it := Decode[itemView](admin.Post("/api/archive-categories/"+fonds.ID.String()+"/items",
-		map[string]any{"title": "挂接中"}).Expect(201))
-	f := e.fileIn("pending", "p1.tif").FileID // 分给了 rv1、待审
+	f := e.fileIn("pending", "p1.tif").FileID // 在盒 1 里，分给了 rv1、待审
+	res := Decode[archiveResult](admin.Post("/api/archive-categories/"+fonds.ID.String()+"/items:from-folders",
+		map[string]any{"folder_ids": []uuid.UUID{e.box.ID}}).Expect(201))
+	itemID := *res.Items[0].ItemID
+	it := Decode[itemView](admin.Get("/api/archive-items/" + itemID.String()).Expect(200))
+	it = Decode[itemView](admin.Post("/api/archive-items/"+itemID.String()+"/unseal", map[string]any{"row_version": it.RowVersion}).Expect(200))
 	box := mkdir(admin, e.p.RootFolderID, "要移动的盒")
 	dest := mkdir(admin, e.p.RootFolderID, "目标")
 	ctx := context.Background()
@@ -158,18 +163,18 @@ func TestCatalogLinkDoesNotBlockReview(t *testing.T) {
 	if err := project.LockCatalogTree(ctx, hold, e.p.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := hold.Exec(ctx, `SELECT id FROM archive_items WHERE id = $1 FOR NO KEY UPDATE`, it.ID); err != nil {
+	if _, err := hold.Exec(ctx, `SELECT id FROM archive_items WHERE id = $1 FOR NO KEY UPDATE`, itemID); err != nil {
 		t.Fatal(err)
 	}
 
-	// 2. 挂接：在等条目行。
-	putDone := make(chan *Response, 1)
+	// 2. 重新归档：在等条目行。
+	resealDone := make(chan *Response, 1)
 	go func() {
-		putDone <- admin.Put(filesPath(it.ID), map[string]any{"row_version": it.RowVersion, "file_ids": []uuid.UUID{f}})
+		resealDone <- admin.Post("/api/archive-items/"+itemID.String()+"/reseal", map[string]any{"row_version": it.RowVersion})
 	}()
 	waitLockWaiters(t, e.Env, "%FOR NO KEY UPDATE OF i%", 1)
 
-	// 3. 移动文件夹（文件树排他锁）：不排在挂接后面。
+	// 3. 移动文件夹（文件树排他锁）：不排在重新归档后面。
 	moveDone := make(chan *Response, 1)
 	start := time.Now()
 	go func() {
@@ -179,11 +184,11 @@ func TestCatalogLinkDoesNotBlockReview(t *testing.T) {
 	case r := <-moveDone:
 		r.Expect(200)
 	case <-time.After(10 * time.Second):
-		t.Fatal("移动文件夹被等条目行的挂接拖住了")
+		t.Fatal("移动文件夹被等条目行的重新归档拖住了")
 	}
 	moveTook := time.Since(start)
 
-	// 4. 审核通过（真实接口）：不等挂接（要求 3 秒内返回）。
+	// 4. 审核通过（真实接口）：不等重新归档（要求 3 秒内返回）。
 	start = time.Now()
 	reviewDone := make(chan *Response, 1)
 	go func() {
@@ -193,30 +198,30 @@ func TestCatalogLinkDoesNotBlockReview(t *testing.T) {
 	case r := <-reviewDone:
 		r.Expect(200)
 	case <-time.After(10 * time.Second):
-		t.Fatal("审核被等条目行的挂接拖住了")
+		t.Fatal("审核被等条目行的重新归档拖住了")
 	}
 	reviewTook := time.Since(start)
 	if reviewTook > 3*time.Second {
 		t.Fatalf("审核等了 %v", reviewTook)
 	}
-	t.Logf("挂接等条目行期间：移动文件夹 %v，审核通过 %v", moveTook, reviewTook)
+	t.Logf("重新归档等条目行期间：移动文件夹 %v，审核通过 %v", moveTook, reviewTook)
 	select {
-	case r := <-putDone:
-		t.Fatalf("条目行放开之前挂接就返回了：%d %s", r.Status, r.Body)
+	case r := <-resealDone:
+		t.Fatalf("条目行放开之前重新归档就返回了：%d %s", r.Status, r.Body)
 	default:
 	}
 
-	// 5. 放开条目行：挂接完成，页是审核后的状态。
+	// 5. 放开条目行：重新归档完成，页是审核后的状态。
 	if err := hold.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 	select {
-	case r := <-putDone:
+	case r := <-resealDone:
 		got := Decode[itemView](r.Expect(200))
-		if len(got.Pages) != 1 || got.Pages[0].FileID != f || got.Pages[0].ReviewStatus != "approved" {
-			t.Fatalf("挂接的结果：%+v", got)
+		if len(got.Pages) != 1 || got.Pages[0].FileID != f || got.Pages[0].ReviewStatus != "approved" || got.SourceStatus != "sealed" {
+			t.Fatalf("重新归档的结果：%+v", got)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("条目行放开后挂接没有完成")
+		t.Fatal("条目行放开后重新归档没有完成")
 	}
 }
