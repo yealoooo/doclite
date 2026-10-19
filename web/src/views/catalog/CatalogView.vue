@@ -42,7 +42,6 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import { toast } from 'vue-sonner'
 
 import {
-  deleteArchiveCategory,
   getCatalogPlacements,
   getCatalogSettings,
   listArchiveItems,
@@ -50,10 +49,8 @@ import {
   MAX_ARCHIVE_FOLDERS,
   MAX_ITEMS_PAGE,
   MAX_LOCK_ITEMS,
-  renumberArchiveItems,
-  updateArchiveCategory,
 } from '@/api/catalog'
-import { ApiError, errorMessage, isApiError } from '@/api/http'
+import { ApiError, errorMessage, HANDLE_ALL, handledGlobally, isApiError } from '@/api/http'
 import type {
   ArchiveCategory,
   ArchiveItem,
@@ -81,13 +78,12 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import StreamStatus from '@/components/app/StreamStatus.vue'
 import { useCategoryTree } from '@/composables/useCategoryTree'
-import { useProjectStream } from '@/composables/useProjectStream'
+import { useEventBatch, useProjectStream } from '@/composables/useProjectStream'
 import { useSelection } from '@/composables/useSelection'
 import {
-  CATEGORY_TYPES,
   SAMPLE_CODES,
-  categoryTypeLabel,
   describeArchiveNoTemplate,
   formatItemNo,
   itemShortLabel,
@@ -98,16 +94,16 @@ import { newExportQuery } from '@/lib/export'
 import { useImageInfoStore } from '@/stores/image-info'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
-import { handledGlobally } from '@/views/review-assign/review-errors'
+import { chunk } from '@/lib/utils'
 
 import ArchiveDialog from './ArchiveDialog.vue'
-import { categoryOpErrorText } from './catalog-errors'
 import CategoryFormDialog from './CategoryFormDialog.vue'
 import { folderDrag, isFolderDrag } from './drag'
 import FolderPane from './FolderPane.vue'
 import ItemDetail from './ItemDetail.vue'
 import ItemList from './ItemList.vue'
 import { loadModifyingItems, type ModifyingItem } from './modifying'
+import { useCategoryOps } from './useCategoryOps'
 import ModifyingDialog from './ModifyingDialog.vue'
 import ResealDialog from './ResealDialog.vue'
 
@@ -148,7 +144,7 @@ async function loadSettings() {
   if (!pid) return
   const my = ++settingsSeq
   try {
-    const s = await getCatalogSettings(pid, true)
+    const s = await getCatalogSettings(pid, HANDLE_ALL)
     if (my !== settingsSeq || project.currentId !== pid) return
     settings.value = s
   } catch (e) {
@@ -243,13 +239,6 @@ function selectCategory(id: string) {
   void go(id)
 }
 
-/** 新建节点时默认的类型：上级的下一级（全宗 → 门类 → 年度 → 保管期限 → 机构 → 自定义）。 */
-function nextType(parent: ArchiveCategory | null): string {
-  if (!parent) return 'fonds'
-  const i = (CATEGORY_TYPES as readonly string[]).indexOf(parent.category_type)
-  return CATEGORY_TYPES[Math.min(i + 1, CATEGORY_TYPES.length - 1)] ?? 'custom'
-}
-
 // ---------- 件列表 ----------
 
 const PAGE = 500
@@ -319,7 +308,7 @@ async function loadMore() {
   const my = listSeq
   loadingMore.value = true
   try {
-    const res = await listArchiveItems(cid, { limit: PAGE, cursor }, true)
+    const res = await listArchiveItems(cid, { limit: PAGE, cursor }, HANDLE_ALL)
     if (my !== listSeq || categoryQuery.value !== cid) return
     const have = new Set(items.value.map((i) => i.id))
     items.value = [...items.value, ...res.items.filter((i) => !have.has(i.id))]
@@ -738,7 +727,7 @@ async function doBatchLock() {
   if (!pid || !ids.length || confirmBatch.loading) return
   confirmBatch.loading = true
   try {
-    const res = await lockArchiveItems(pid, ids, true)
+    const res = await lockArchiveItems(pid, ids, HANDLE_ALL)
     confirmBatch.open = false
     blockedIds.value = new Set()
     toast.success(`已锁定 ${res.locked} 件${res.skipped ? `，跳过 ${res.skipped} 件已锁定的` : ''}`)
@@ -761,170 +750,39 @@ async function doBatchLock() {
   }
 }
 
-// ---------- 归类节点的操作 ----------
+// ---------- 归类节点的操作（新建、修改、移动、删除、重新生成档号，useCategoryOps） ----------
 
-const formOpen = ref(false)
-const formParent = ref<ArchiveCategory | null>(null)
-const formNode = ref<ArchiveCategory | null>(null)
-const formDefaultType = ref('fonds')
-const formFocus = ref<'type' | 'code' | 'name'>('code')
-
-/** 右键菜单针对的节点（null：在空白处点的）。 */
-const menuNode = ref<ArchiveCategory | null>(null)
-
-function onTreeContextMenu(ev: MouseEvent) {
-  const el = (ev.target as HTMLElement | null)?.closest<HTMLElement>('[data-category-id]')
-  const id = el?.dataset.categoryId
-  menuNode.value = id ? (tree.nodes.get(id) ?? null) : null
-}
-
-function askCreate(parent: ArchiveCategory | null) {
-  formParent.value = parent
-  formNode.value = null
-  formDefaultType.value = nextType(parent)
-  formFocus.value = 'code'
-  formOpen.value = true
-}
-
-function askEdit(node: ArchiveCategory | null, focus: 'type' | 'code' | 'name' = 'name') {
-  if (!node) return
-  formParent.value = null
-  formNode.value = node
-  formFocus.value = focus
-  formOpen.value = true
-}
-
-/** 重算之后的提示：重新生成了几个档号、几个因为撞号为空。 */
-function renumberToast(head: string, renumbered: number, conflicts: number) {
-  if (conflicts > 0) {
-    toast.warning(`${head}；有 ${conflicts} 件因为撞号档号为空`, {
-      description: `${renumbered ? `重新生成了 ${renumbered} 个档号。` : ''}撞号的件档号为空、不能锁定，打开它们可以看到和谁撞了。`,
-    })
-  } else toast.success(renumbered ? `${head}，重新生成了 ${renumbered} 个档号` : head)
-}
-
-async function onCategoryCreated(node: ArchiveCategory) {
-  toast.success(`已新建「${node.category_name}」（${categoryTypeLabel(node.category_type)} ${node.category_code}）`)
-  const parentId = node.parent_id ?? tree.rootId.value
-  if (parentId) await tree.load(parentId).catch(() => null)
-  await go(node.id)
-}
-
-/** 节点改了编码、类型、位置之后：刷新树、当前列表和详情（档号可能都变了）。 */
-async function afterCategoryChanged(ids: (string | null | undefined)[]) {
-  await tree.refreshFor(ids.filter((x): x is string => !!x))
-  void loadList()
-  detailRefresh.value++
-}
-
-function onCategoryUpdated(node: UpdatedArchiveCategory, before: ArchiveCategory) {
-  const what = [
-    node.category_name !== before.category_name && '名称',
-    node.category_code !== before.category_code && '编码',
-    node.category_type !== before.category_type && '类型',
-  ].filter(Boolean)
-  renumberToast(`已修改「${node.category_name}」的${what.join('、') || '信息'}`, node.renumbered, node.archive_no_conflicts)
-  void afterCategoryChanged([node.id, node.parent_id ?? tree.rootId.value])
-}
-
-// 移动节点
-const movePicker = reactive({ open: false, node: null as ArchiveCategory | null })
-function askMove(node: ArchiveCategory | null) {
-  if (!node) return
-  movePicker.node = node
-  movePicker.open = true
-}
-async function doMove(target: PickedCategory) {
-  const pid = project.currentId
-  const node = movePicker.node
-  if (!pid || !node) return
-  try {
-    const res = await updateArchiveCategory(pid, node.id, { parent_id: target.id }, true)
-    renumberToast(
-      `已把「${node.category_name}」移到「${target.path || '顶层'}」`,
-      res.renumbered,
-      res.archive_no_conflicts,
-    )
-    // 先用响应更新树上的这个节点（新的位置），再刷新原来和现在的上级、定位到它。
-    await tree.afterMove(res, node.path_code, node.parent_id)
-    await tree.reveal(node.id).catch(() => null)
+const {
+  formOpen,
+  formParent,
+  formNode,
+  formDefaultType,
+  formFocus,
+  menuNode,
+  onTreeContextMenu,
+  askCreate,
+  askEdit,
+  onCategoryCreated,
+  onCategoryUpdated,
+  movePicker,
+  askMove,
+  doMove,
+  confirmDelete,
+  askDelete,
+  doDelete,
+  confirmRenumber,
+  askRenumber,
+  doRenumber,
+} = useCategoryOps({
+  tree,
+  projectId: () => project.currentId,
+  currentCategory: () => categoryQuery.value,
+  go,
+  afterChange() {
     void loadList()
     detailRefresh.value++
-  } catch (e) {
-    if (!handledGlobally(e)) toast.error(categoryOpErrorText(e))
-    if (isApiError(e, 'not_found')) void tree.refreshShown()
-  }
-}
-
-// 删除节点
-const confirmDelete = reactive({ open: false, loading: false, node: null as ArchiveCategory | null })
-function askDelete(node: ArchiveCategory | null) {
-  if (!node) return
-  if (node.item_count > 0) {
-    // 有条目的节点 server 会拒绝（409 category_not_empty），不用再确认一次。
-    toast.error(`「${node.category_name}」（含下级节点）下还有 ${node.item_count} 件，不能删除`, {
-      description: '请先把件移到别的节点，或撤销归档',
-    })
-    return
-  }
-  confirmDelete.node = node
-  confirmDelete.open = true
-}
-async function doDelete() {
-  const pid = project.currentId
-  const node = confirmDelete.node
-  if (!pid || !node || confirmDelete.loading) return
-  confirmDelete.loading = true
-  try {
-    await deleteArchiveCategory(pid, node.id, true)
-    confirmDelete.open = false
-    toast.success(`已删除「${node.category_name}」${node.child_count ? '（含下级节点）' : ''}`)
-    const cur = categoryQuery.value
-    const inside = !!cur && (cur === node.id || tree.isUnder(cur, node.id) === true)
-    await tree.refreshFor([node.parent_id ?? tree.rootId.value!])
-    if (inside) await go(node.parent_id && node.parent_id !== tree.rootId.value ? node.parent_id : null, null, true)
-  } catch (e) {
-    if (!handledGlobally(e)) toast.error(categoryOpErrorText(e))
-    if (e instanceof ApiError && e.status >= 400 && e.status < 500) {
-      confirmDelete.open = false
-      void tree.refreshShown()
-    }
-  } finally {
-    confirmDelete.loading = false
-  }
-}
-
-// 按新模板重新生成档号
-const confirmRenumber = reactive({ open: false, loading: false, categoryId: null as string | null, label: '' })
-function askRenumber(categoryId: string | null) {
-  confirmRenumber.categoryId = categoryId
-  confirmRenumber.label = categoryId
-    ? `「${tree.nodes.get(categoryId)?.category_name ?? '这个节点'}」（含下级节点）`
-    : '整个项目'
-  confirmRenumber.open = true
-}
-async function doRenumber() {
-  const pid = project.currentId
-  if (!pid || confirmRenumber.loading) return
-  confirmRenumber.loading = true
-  try {
-    const res = await renumberArchiveItems(pid, confirmRenumber.categoryId, true)
-    confirmRenumber.open = false
-    renumberToast(
-      `已按新模板重新生成${confirmRenumber.label}的档号${res.skipped_locked ? `（${res.skipped_locked} 个已锁定的没有动）` : ''}`,
-      res.renumbered,
-      res.archive_no_conflicts,
-    )
-    if (!res.renumbered && !res.archive_no_conflicts) toast.info('档号都和现在的模板一致，没有变化')
-    void loadList()
-    detailRefresh.value++
-  } catch (e) {
-    if (!handledGlobally(e)) toast.error(errorMessage(e))
-    if (e instanceof ApiError && e.status >= 400 && e.status < 500) confirmRenumber.open = false
-  } finally {
-    confirmRenumber.loading = false
-  }
-}
+  },
+})
 
 // ---------- 项目、节点（放在最后：immediate 的 watch 要用到上面声明的状态） ----------
 
@@ -977,20 +835,8 @@ const pendingFolderIds = new Set<string>()
 let pendingFolderIdsUnknown = false
 /** item_ids 为空或没带的事件（只有节点变了）里的 category_ids。 */
 const pendingStructCats = new Set<string>()
-let applyTimer: ReturnType<typeof setTimeout> | null = null
-let firstPendingAt = 0
-/** 正在跑一轮（同时最多一轮；跑的过程中新来的事件并到下一轮）。 */
-let applying = false
-const EVENT_DEBOUNCE_MS = 300
-const EVENT_MAX_WAIT_MS = 1000
-
-function scheduleApply() {
-  const now = Date.now()
-  if (!firstPendingAt) firstPendingAt = now
-  if (applyTimer) clearTimeout(applyTimer)
-  const wait = Math.min(EVENT_DEBOUNCE_MS, Math.max(0, firstPendingAt + EVENT_MAX_WAIT_MS - now))
-  applyTimer = setTimeout(() => void applyEvents(), wait)
-}
+/** 同时最多跑一轮；跑的过程中新来的事件并到下一轮（useEventBatch）。 */
+const batch = useEventBatch(applyOnce)
 
 function onEvent(e: ProjectEvent) {
   if (e.type === 'resync') pendingFull = true
@@ -1014,27 +860,7 @@ function onEvent(e: ProjectEvent) {
     if (e.folder_ids?.length) e.folder_ids.forEach((id) => pendingFolderIds.add(id))
     else pendingFolderIdsUnknown = true
   } else return
-  scheduleApply()
-}
-
-function hasPending(): boolean {
-  return pendingFull || pendingCatalog || pendingFilesAll || pendingFolders || pendingFiles.size > 0 || pendingFileFolders.size > 0
-}
-
-/** 定时器到了：跑一轮；上一轮还没跑完就等它跑完再说（事件都还在 pending 里）。 */
-async function applyEvents() {
-  applyTimer = null
-  firstPendingAt = 0
-  if (applying) return
-  applying = true
-  try {
-    await applyOnce()
-  } catch {
-    // 单个请求的失败各自处理过了。
-  } finally {
-    applying = false
-    if (alive && hasPending()) scheduleApply()
-  }
+  batch.schedule()
 }
 
 async function applyOnce() {
@@ -1125,8 +951,8 @@ async function refreshListIfFilesShown(fileIds: Set<string>) {
   const ids = [...fileIds]
   const shown = new Set(items.value.map((i) => i.id))
   try {
-    for (let i = 0; i < ids.length; i += 500) {
-      const res = await getCatalogPlacements(pid, ids.slice(i, i + 500), true)
+    for (const part of chunk(ids, 500)) {
+      const res = await getCatalogPlacements(pid, part, HANDLE_ALL)
       if (res.items.some((x) => x.placement && shown.has(x.placement.item_id))) {
         await loadList()
         return
@@ -1179,7 +1005,7 @@ const stream = useProjectStream(() => project.currentId, {
   onOpen: (first) => {
     if (!first) {
       pendingFull = true
-      scheduleApply()
+      batch.schedule()
     } else if (listLoadedAt > 0) {
       // 第一次连上时页面已经加载好了：补刷一次（加载和连接建立之间可能漏了事件）。
       void tree.refreshShown()
@@ -1187,9 +1013,6 @@ const stream = useProjectStream(() => project.currentId, {
       detailRefresh.value++
       paneRef.value?.refresh()
     }
-  },
-  onStopped: (err) => {
-    if (err.status === 403 || err.status === 404) void project.refresh()
   },
 })
 
@@ -1202,8 +1025,6 @@ onBeforeUnmount(() => {
   listSeq++
   projectSeq++
   modifyingSeq++
-  if (applyTimer) clearTimeout(applyTimer)
-  applyTimer = null
   discardAsk.resolve?.(false)
 })
 
@@ -1259,17 +1080,7 @@ const templateHint = computed(() => {
         <PencilLineIcon class="size-3.5" />修改中 {{ modifyingTotal }} 件，改完记得重新归档 ›
       </button>
       <div class="flex-1" />
-      <span
-        v-if="project.current"
-        class="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-        :title="stream.state.value === 'open' ? '已连接实时更新' : '实时更新已断开，正在重连'"
-      >
-        <span
-          class="size-1.5 rounded-full"
-          :class="stream.state.value === 'open' ? 'bg-ok' : stream.state.value === 'stopped' ? 'bg-destructive' : 'animate-pulse bg-warn'"
-        />
-        {{ stream.state.value === 'open' ? '实时' : stream.state.value === 'stopped' ? '已断开' : '连接中…' }}
-      </span>
+      <StreamStatus v-if="project.current" :state="stream.state.value" />
       <Button
         v-if="project.current && treeState === 'ready'"
         variant="outline"

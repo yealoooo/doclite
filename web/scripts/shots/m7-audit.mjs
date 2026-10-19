@@ -13,14 +13,7 @@
 // - 筛选栏操作（日期 = 今天、操作人 = admin、对象 = 文件夹、操作 = 删除）后地址栏同步、结果都符合；
 // - 不认识的对象类型、动作原样显示，存储迁移（快照改位置、开始、结束）、许可证的审计译成中文（页面里包一层 fetch，往列表
 //   响应里加五条假的，detail 照 server 写的样子）。
-//
-// 另有一张是 M7-3 的另一半（上传时拒绝导出不了的罕见编码）：在 DEMO-A 根目录下临时建一个文件夹，浏览器里上传
-// scripts/samples/encoding 的两个夹具（算术编码的 JPEG、JPEG 2000 压缩的 TIFF），上传面板里显示服务器给的
-// 原因，什么都没入库；做完删掉临时文件夹。
-
-import { readFile } from 'node:fs/promises'
-
-import { injectFiles, waitUploadDone } from '../lib/upload-samples.mjs'
+// （M7-3 的另一半"上传时拒绝罕见编码"原来在浏览器里上传看提示；M10-2 删掉了浏览器上传，由 server 的 API 测试覆盖。）
 
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
 const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
@@ -63,7 +56,6 @@ function today() {
 }
 
 let ctxPromise = null
-let tempFolder = null
 /** 登录 admin，取 DEMO-A，建、改、删一个文件夹留下三条审计（只做一次）。 */
 function context(page) {
   ctxPromise ??= (async () => {
@@ -177,8 +169,6 @@ async function injectFakeItems(page) {
     }
   })
 }
-
-const ENCODING_DIR = new URL('../samples/encoding/', import.meta.url)
 
 export default {
   out: '../docs/screenshots/m7',
@@ -339,49 +329,6 @@ export default {
           throw new Error(`不认识的字段应原样显示：${detail}`)
         }
         console.log('  断言：mystery_type / mystery_action 原样显示；文件快照 / 存储迁移、存储配置 / 开始迁移、迁移结束，许可证 / 替换许可证译成中文')
-      },
-    },
-
-    // 浏览器上传导出不了的罕见编码：服务器 400 invalid_image，上传面板里显示原因。
-    {
-      name: 'files-upload-rare-format',
-      user: admin,
-      path: '/system/audit',
-      waitUntil: 'networkidle2',
-      async prepare(page) {
-        const { origin, project } = await context(page)
-        tempFolder = await api(origin, 'POST', '/api/folders', {
-          parent_id: project.root_folder_id,
-          folder_name: `截图验证 M7-3 罕见格式 ${stamp()}`,
-          remark: 'M7-3 截图脚本临时建的，做完会删掉',
-        })
-        await page.goto(`${origin}/files?folder=${tempFolder.id}`, { waitUntil: 'networkidle2' })
-        await page.waitForSelector('[data-testid=files-page][data-list=ready]', { timeout: 15000 })
-        const files = [
-          { name: 'IMG_算术编码.jpg', data: await readFile(new URL('reject-jpeg-arith.jpg', ENCODING_DIR)) },
-          { name: 'IMG_JPEG2000.tif', data: await readFile(new URL('reject-tiff-jpeg2000.tif', ENCODING_DIR)) },
-        ]
-        await injectFiles(page, 'files', files)
-        const items = await waitUploadDone(page)
-        const want = {
-          'IMG_算术编码.jpg': '图片不合规：不支持的图片格式（算术编码的 JPEG），请换个保存格式重扫',
-          'IMG_JPEG2000.tif': '图片不合规：不支持的图片格式（JPEG 2000 压缩的 TIFF），请换个保存格式重扫',
-        }
-        for (const [name, text] of Object.entries(want)) {
-          const it = items.find((i) => i.name === name)
-          if (!it || it.state !== 'failed' || it.errorCode !== 'invalid_image' || !it.text.includes(text)) {
-            throw new Error(`${name} 应该被拒绝并显示「${text}」：${JSON.stringify(it)}`)
-          }
-        }
-        const children = await api(origin, 'GET', `/api/folders/${tempFolder.id}/children`)
-        if (children.files.length !== 0) throw new Error(`被拒绝的文件不应入库：${children.files.length} 个`)
-        console.log('  断言：算术编码的 JPEG、JPEG 2000 压缩的 TIFF 上传被拒，面板里显示原因，没有入库')
-      },
-      async after(page) {
-        if (!tempFolder) return
-        const { origin } = await context(page)
-        await api(origin, 'DELETE', `/api/folders/${tempFolder.id}`)
-        tempFolder = null
       },
     },
   ],

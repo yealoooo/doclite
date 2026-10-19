@@ -37,6 +37,7 @@ import {
 } from '@/lib/catalog'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
+import { HANDLE_ALL } from '@/api/http'
 
 import { type CatalogDraft, fieldProblems, newField, optionLines } from './catalog-draft'
 
@@ -125,7 +126,7 @@ async function loadCodes() {
         break
       }
       const batch = queue.splice(0, 4)
-      const lists = await Promise.all(batch.map((id) => listArchiveCategories(props.projectId, id, true)))
+      const lists = await Promise.all(batch.map((id) => listArchiveCategories(props.projectId, id, HANDLE_ALL)))
       if (my !== codesSeq) return
       for (const l of lists) {
         for (const c of l.items) {

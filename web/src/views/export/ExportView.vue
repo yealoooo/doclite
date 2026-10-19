@@ -22,10 +22,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 
 import { cancelExportTask, getExportDownload, MAX_SCOPE_IDS, probeExportTask } from '@/api/export'
-import { ApiError, isApiError } from '@/api/http'
+import { ApiError, HANDLE_ALL, isApiError } from '@/api/http'
 import type { ExportFormat, ExportTask, ProjectEvent } from '@/api/types'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import { Button } from '@/components/ui/button'
+import StreamStatus from '@/components/app/StreamStatus.vue'
 import { useProjectStream } from '@/composables/useProjectStream'
 import { openDownload } from '@/lib/download'
 import { formatBytes } from '@/lib/files'
@@ -133,7 +134,7 @@ async function openResubmitFromQuery(draft: NewExportDraft) {
   let src: ExportTask | null = byId.value.get(id) ?? null
   if (!src) {
     try {
-      src = await probeExportTask(id, true)
+      src = await probeExportTask(id, HANDLE_ALL)
     } catch {
       src = null
     }
@@ -345,9 +346,6 @@ const stream = useProjectStream(() => project.currentId, {
     if (!first) void refreshAll()
     else if (list.state.value === 'ready') void list.load()
   },
-  onStopped: (err) => {
-    if (err.status === 403 || err.status === 404) void project.refresh()
-  },
 })
 
 onBeforeUnmount(() => {
@@ -389,17 +387,7 @@ const counts = computed(() => {
       <h1 class="shrink-0 text-base font-semibold tracking-tight text-foreground">导出交付</h1>
       <span class="shrink-0 rounded-full bg-muted px-2 text-[11px] leading-5 text-muted-foreground">只导出已归档的文件</span>
       <div class="flex-1" />
-      <span
-        v-if="project.current"
-        class="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-        :title="stream.state.value === 'open' ? '已连接实时更新' : '实时更新已断开，正在重连'"
-      >
-        <span
-          class="size-1.5 rounded-full"
-          :class="stream.state.value === 'open' ? 'bg-ok' : stream.state.value === 'stopped' ? 'bg-destructive' : 'animate-pulse bg-warn'"
-        />
-        {{ stream.state.value === 'open' ? '实时' : stream.state.value === 'stopped' ? '已断开' : '连接中…' }}
-      </span>
+      <StreamStatus v-if="project.current" :state="stream.state.value" />
       <Button v-if="project.current" size="sm" data-testid="export-new-button" @click="openBlank">
         <PlusIcon />新建导出
       </Button>

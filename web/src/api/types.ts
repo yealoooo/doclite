@@ -557,9 +557,6 @@ export interface FolderFilesMoved {
   items: FolderFileMoved[]
 }
 
-/** 上传的提示（design §4.3）：DPI 低于 200、DPI 未知。 */
-export type UploadWarning = 'low_dpi' | 'dpi_unknown'
-
 /**
  * `POST /api/folders/{id}/files` 的响应（design §4.3、roadmap M1-7）：新建 201；
  * 同一文件夹里已有 upload_name 和 sha 都相同的文件（之前已上传过）200，是已有文件现在的信息。
@@ -1354,12 +1351,6 @@ export interface CatalogedElsewhere {
   title: string
   page_no: number
   item_status: ItemStatus
-}
-
-/** 409 `file_cataloged`（归档、重新归档时新增的文件已在别的条目里）的 details：`ids` 是 file_id。 */
-export interface FileCatalogedDetails {
-  ids: string[]
-  items: CatalogedElsewhere[]
 }
 
 // ---------- 导出（M4-1、M4-3 的接口；M4-5 用） ----------

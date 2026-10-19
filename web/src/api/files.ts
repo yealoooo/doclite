@@ -1,10 +1,8 @@
 // 按 file_id 访问的文件接口（M1-8，design §4.4）：看图（batch、snapshots）和文件日志。
 // 图片地址一律经 `lib/image-url.ts` 的 `imageSrc()` 使用，不直接放进 <img>。
 
-import { request, type RequestOptions } from './http'
+import { type Handle, request } from './http'
 import type { FileBatchResponse, FileLogs, FileSnapshots } from './types'
-
-type Handle = RequestOptions['handle']
 
 /** batch 一次最多的 file_id 数（超出 server 返回 400）。 */
 export const MAX_BATCH_IDS = 500

@@ -1,29 +1,14 @@
 // 侧栏收起（M7-11）：展开是原来的样子，收起是一条窄栏（只有图标，悬停显示名字）。
-// - 状态按本机记住（localStorage；读写都可能抛错，例如存储被禁用，失败时按展开、只在这一次有效）；
+// - 状态按本机记住（localStorage，读写失败时按展开、只在这一次有效）；
 // - 快捷键 ⌘B（macOS）/ Ctrl+B（其他系统）切换；焦点在输入框、文本框、下拉框、可编辑区域里时不触发（留给打字）。
 // 只在登录后的外框（AppLayout）里用；状态是模块级的，几个地方取到的是同一个。
 
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useLocalStorage } from '@vueuse/core'
+import { onBeforeUnmount, onMounted } from 'vue'
 
-const STORAGE_KEY = 'doclite.sidebar.collapsed'
+import { FLAG_SERIALIZER } from '@/lib/utils'
 
-function load(): boolean {
-  try {
-    return window.localStorage.getItem(STORAGE_KEY) === '1'
-  } catch {
-    return false
-  }
-}
-
-const collapsed = ref(load())
-
-watch(collapsed, (v) => {
-  try {
-    window.localStorage.setItem(STORAGE_KEY, v ? '1' : '0')
-  } catch {
-    // 存不下就只在这一次有效。
-  }
-})
+const collapsed = useLocalStorage('doclite.sidebar.collapsed', false, { serializer: FLAG_SERIALIZER })
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent)
 

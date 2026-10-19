@@ -12,7 +12,7 @@ import { computed, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 
 import { getFolder } from '@/api/folders'
-import { isApiError } from '@/api/http'
+import { HANDLE_ALL, isApiError } from '@/api/http'
 import type { FolderItem } from '@/api/types'
 import FolderPicker, { type PickedFolder } from '@/components/files/FolderPicker.vue'
 import { Button } from '@/components/ui/button'
@@ -24,6 +24,7 @@ import {
   type HotFolderStatus,
   type QueueStatus,
 } from '@/lib/scan-queue'
+import { formatClock } from '@/lib/format'
 import { shellErrorMessage } from '@/lib/shell'
 import { useProjectStore } from '@/stores/project'
 
@@ -88,7 +89,7 @@ async function loadTarget(id: string | null) {
     return
   }
   try {
-    const f = await getFolder(id, true)
+    const f = await getFolder(id, HANDLE_ALL)
     if (seq === targetSeq) target.value = toTarget(f)
   } catch (e) {
     if (seq !== targetSeq) return
@@ -250,13 +251,6 @@ async function pause() {
   }
 }
 
-function timeOf(ms: number | null | undefined): string {
-  if (!ms) return ''
-  const d = new Date(ms)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
-}
-
 /** 热文件夹的状态还没读到（页面刚打开）。 */
 const loading = computed(() => props.hotfolder === null)
 
@@ -303,7 +297,7 @@ const headline = computed(() => {
           <span class="size-1.5 rounded-full bg-ok" />
           <span>{{ props.hotfolder?.watching ? '实时监控目录' : `目录事件不可用，每 ${config?.scan_interval_secs ?? 15} 秒扫描一次` }}</span>
           <template v-if="props.hotfolder?.last_scan_at">
-            <span>·</span><span>上次全量扫描 {{ timeOf(props.hotfolder.last_scan_at) }}</span>
+            <span>·</span><span>上次全量扫描 {{ formatClock(props.hotfolder.last_scan_at) }}</span>
           </template>
         </p>
       </div>

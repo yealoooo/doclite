@@ -13,20 +13,21 @@
 // 截图脚本用的属性：根 data-testid=folder-pane（data-folder-id、data-state）；子文件夹行 pane-folder（data-folder-id、
 // data-selected、data-archive）；文件区 pane-files。
 import { ExternalLinkIcon, FolderIcon, LoaderCircleIcon } from '@lucide/vue'
-import { computed, ref, watch } from 'vue'
+import { computed, watch } from 'vue'
 import { toast } from 'vue-sonner'
 
 import { probeFolder } from '@/api/folders'
-import { errorMessage, isApiError } from '@/api/http'
-import type { FileEntry, FolderArchive, FolderChildren, FolderItem, SubfolderEntry } from '@/api/types'
+import { isApiError } from '@/api/http'
+import type { FileEntry, FolderArchive, SubfolderEntry } from '@/api/types'
 import FolderArchiveBadge from '@/components/catalog/FolderArchiveBadge.vue'
 import SealBanner from '@/components/catalog/SealBanner.vue'
 import FolderTree from '@/components/files/FolderTree.vue'
+import { useFolderBrowser } from '@/composables/useFolderBrowser'
 import { type TreeFolder, useFolderTree } from '@/composables/useFolderTree'
 import { useSelection } from '@/composables/useSelection'
 import { useImageInfoStore } from '@/stores/image-info'
-import { type Entry, fileKey, folderKey } from '@/views/files/entries'
-import FileGrid from '@/views/files/FileGrid.vue'
+import { type Entry, fileKey, folderKey } from '@/components/files/entries'
+import FileGrid from '@/components/files/FileGrid.vue'
 
 import { FOLDERS_MIME, folderDrag, setDragLabel } from './drag'
 
@@ -54,10 +55,37 @@ const emit = defineEmits<{
 const images = useImageInfoStore()
 const tree = useFolderTree()
 
-const folder = ref<FolderItem | null>(null)
-const children = ref<FolderChildren | null>(null)
-const state = ref<'loading' | 'ready' | 'error'>('loading')
-const loadError = ref('')
+const browser = useFolderBrowser({
+  tree,
+  rootId: () => props.rootFolderId,
+  fetchFolder: (id) => probeFolder(id, ['not_found', 'forbidden']),
+  onSwitch() {
+    selection.clear()
+    fileSelection.clear()
+  },
+  accept(detail) {
+    if (detail.project_id === props.projectId) return true
+    if (!leaveMissing(detail.id)) throw new Error('不在这个项目里')
+    return false
+  },
+  onOpenFailed(e, id) {
+    if (!(isApiError(e, 'not_found') || isApiError(e, 'forbidden'))) return false
+    return leaveMissing(id)
+  },
+  onGone(parent) {
+    toast.info('左边的文件夹已被删除，已回到上一级')
+    go(parent)
+  },
+})
+const { folder, children, state, error: loadError, crumbs } = browser
+
+/** 文件夹不存在、进不了、不在这个项目里：回到根文件夹（已经在根上时返回 false，显示错误）。 */
+function leaveMissing(id: string): boolean {
+  if (id === props.rootFolderId) return false
+  toast.info('左边的文件夹不存在或已被删除，已回到根文件夹')
+  emit('update:folderId', null)
+  return true
+}
 
 const currentId = computed(() => props.folderId ?? props.rootFolderId)
 const subfolders = computed(() => children.value?.folders ?? [])
@@ -71,89 +99,16 @@ watch(selectedFolders, (list) => emit('selection', list))
 const fileEntries = computed<Entry[]>(() => files.value.map((file) => ({ kind: 'file', key: fileKey(file.file_id), file })))
 const fileSelection = useSelection(() => fileEntries.value.map((e) => e.key))
 
-const crumbs = computed(() =>
-  folder.value ? [...folder.value.ancestors, { id: folder.value.id, folder_name: folder.value.folder_name, path_code: folder.value.path_code }] : [],
-)
-
-let openSeq = 0
-let listSeq = 0
-
 watch(
   () => props.projectId,
   () => {
     tree.reset({ id: props.rootFolderId, folder_name: props.projectName })
-    folder.value = null
-    children.value = null
+    browser.reset()
   },
   { immediate: true },
 )
 
-async function open(id: string) {
-  const my = ++openSeq
-  if (folder.value?.id !== id) {
-    folder.value = null
-    children.value = null
-    selection.clear()
-    fileSelection.clear()
-  }
-  state.value = 'loading'
-  try {
-    const detail = await probeFolder(id, ['not_found', 'forbidden'])
-    if (my !== openSeq) return
-    if (detail.project_id !== props.projectId) throw Object.assign(new Error('不在这个项目里'), { code: 'not_found' })
-    folder.value = detail
-    tree.rename(props.rootFolderId, detail.ancestors[0]?.folder_name ?? detail.folder_name)
-    void tree.revealPath(detail)
-    await reloadList()
-  } catch (e) {
-    if (my !== openSeq) return
-    if ((isApiError(e, 'not_found') || isApiError(e, 'forbidden') || (e as { code?: string }).code === 'not_found') && id !== props.rootFolderId) {
-      toast.info('左边的文件夹不存在或已被删除，已回到根文件夹')
-      emit('update:folderId', null)
-      return
-    }
-    state.value = 'error'
-    loadError.value = errorMessage(e)
-  }
-}
-
-async function reloadList() {
-  const id = folder.value?.id
-  if (!id) return
-  const my = ++listSeq
-  try {
-    const res = await tree.load(id)
-    if (my !== listSeq || folder.value?.id !== id) return
-    if (!res) {
-      toast.info('左边的文件夹已被删除，已回到上一级')
-      const parent = folder.value?.parent_id
-      emit('update:folderId', parent && parent !== props.rootFolderId ? parent : null)
-      return
-    }
-    children.value = res
-    state.value = 'ready'
-  } catch (e) {
-    if (my !== listSeq) return
-    if (children.value) state.value = 'ready'
-    else {
-      state.value = 'error'
-      loadError.value = errorMessage(e)
-    }
-  }
-}
-
-async function reloadCrumb() {
-  const id = folder.value?.id
-  if (!id) return
-  try {
-    const detail = await probeFolder(id, ['not_found', 'forbidden'])
-    if (folder.value?.id === id) folder.value = detail
-  } catch {
-    // 文件夹没了：reloadList 会处理。
-  }
-}
-
-watch(currentId, (id) => void open(id), { immediate: true })
+watch(currentId, (id) => void browser.open(id), { immediate: true })
 
 function go(id: string | null) {
   emit('update:folderId', id && id !== props.rootFolderId ? id : null)
@@ -232,25 +187,20 @@ function onFileOpen(entry: Entry) {
 
 /** folders.changed：树上已加载的、当前文件夹的列表、面包屑。`ids` 为 null 时不知道范围，全部刷新。 */
 function onFoldersChanged(ids: Set<string> | null) {
-  const cur = folder.value
-  const listAffected = !!cur && (!ids || ids.has(cur.id) || subfolders.value.some((f) => ids.has(f.id)))
-  if (ids) void tree.refresh(ids, listAffected ? cur?.id : null)
-  else void tree.refreshAll(cur?.id)
-  if (listAffected) void reloadList()
-  if (cur && (!ids || crumbs.value.some((c) => ids.has(c.id)))) void reloadCrumb()
+  browser.applyChanges(ids)
 }
 
 /** files.changed：当前文件夹里的文件变了就重取列表（页数、文件）。 */
 function onFilesChanged(folderIds: Set<string> | null) {
   const cur = folder.value
   if (!cur) return
-  if (!folderIds || folderIds.has(cur.id) || subfolders.value.some((f) => folderIds.has(f.id))) void reloadList()
+  if (!folderIds || folderIds.has(cur.id) || subfolders.value.some((f) => folderIds.has(f.id))) void browser.reload()
 }
 
 function refresh() {
   void tree.refreshAll(folder.value?.id)
-  void reloadList()
-  void reloadCrumb()
+  void browser.reload()
+  void browser.reloadCrumb()
 }
 
 defineExpose({
@@ -325,7 +275,7 @@ const folderKeyOf = folderKey
 
         <div v-if="state === 'error' && !children" class="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-xs">
           <p class="text-destructive">{{ loadError }}</p>
-          <button type="button" class="underline" @click="open(currentId)">重试</button>
+          <button type="button" class="underline" @click="browser.open(currentId)">重试</button>
         </div>
         <div v-else-if="!children" class="flex flex-1 items-center justify-center gap-2 text-xs text-muted-foreground">
           <LoaderCircleIcon class="size-3.5 animate-spin" />正在加载…

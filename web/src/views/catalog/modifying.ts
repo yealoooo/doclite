@@ -6,7 +6,8 @@ import { listModifyingItems } from '@/api/catalog'
 import type { ModifyingList } from '@/api/types'
 
 export type { ModifyingItem } from '@/api/types'
+import { HANDLE_ALL } from '@/api/http'
 
 export function loadModifyingItems(projectId: string): Promise<ModifyingList> {
-  return listModifyingItems(projectId, true)
+  return listModifyingItems(projectId, HANDLE_ALL)
 }

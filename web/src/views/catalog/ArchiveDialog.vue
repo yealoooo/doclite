@@ -14,7 +14,7 @@ import { LoaderCircleIcon } from '@lucide/vue'
 import { computed, reactive, ref, watch } from 'vue'
 
 import { archiveFolders } from '@/api/catalog'
-import { ApiError, errorMessage, isApiError } from '@/api/http'
+import { ApiError, errorMessage, HANDLE_ALL, isApiError } from '@/api/http'
 import type { ArchiveResult } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -52,7 +52,7 @@ async function load() {
   if (!cid || !props.folderIds.length) return
   busy.value = 'load'
   try {
-    const res = await archiveFolders(cid, { folder_ids: props.folderIds, dry_run: true }, true)
+    const res = await archiveFolders(cid, { folder_ids: props.folderIds, dry_run: true }, HANDLE_ALL)
     plan.value = res
     loadError.value = ''
     for (const k of Object.keys(titles)) delete titles[k]
@@ -110,7 +110,7 @@ async function confirm() {
     const res = await archiveFolders(
       cid,
       { folder_ids: props.folderIds, ...(Object.keys(changed).length ? { titles: changed } : {}) },
-      true,
+      HANDLE_ALL,
     )
     open.value = false
     emit('archived', res)

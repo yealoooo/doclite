@@ -4,6 +4,7 @@
 // shell_info、接口响应。
 
 import { formatBytes } from '@/lib/files'
+import { formatDateTime, pad2 } from '@/lib/format'
 import type { HotFolderStatus, QueueStatus } from '@/lib/scan-queue'
 import type { LocalDirs } from '@/lib/shell'
 
@@ -28,15 +29,11 @@ export interface DiagnosticsInput {
   capabilities: string[]
 }
 
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
-}
-
 function timeText(d: Date): string {
   const off = -d.getTimezoneOffset()
   const sign = off >= 0 ? '+' : '-'
-  const tz = `UTC${sign}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}（${tz}）`
+  const tz = `UTC${sign}${pad2(Math.floor(Math.abs(off) / 60))}:${pad2(Math.abs(off) % 60)}`
+  return `${formatDateTime(d, { seconds: true })}（${tz}）`
 }
 
 /** 拼成给人看的几行文字。 */

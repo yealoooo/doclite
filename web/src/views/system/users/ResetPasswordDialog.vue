@@ -5,7 +5,7 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import { resetPassword } from '@/api/system'
 import type { UserItem } from '@/api/types'
 import { Button } from '@/components/ui/button'
@@ -54,7 +54,7 @@ async function submit() {
   error.value = ''
   saving.value = true
   try {
-    await resetPassword(props.user.id, password.value, true)
+    await resetPassword(props.user.id, password.value, HANDLE_ALL)
     open.value = false
     if (isSelf.value) {
       const redirect = route.fullPath

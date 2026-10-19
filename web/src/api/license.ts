@@ -1,6 +1,6 @@
 // M7-1：许可证（菜单码 system.license）。
 
-import { request, type RequestOptions } from './http'
+import { type Handle, request } from './http'
 import type { LicenseState } from './types'
 
 /** 导入的错误码，由许可证页自己显示（不弹 toast）。 */
@@ -17,6 +17,6 @@ export function getLicense() {
 }
 
 /** 导入（或替换）：`text` 是 .lic 文件的全文。 */
-export function importLicense(text: string, handle?: RequestOptions['handle']) {
+export function importLicense(text: string, handle?: Handle) {
   return request<LicenseState>('/api/system/license', { method: 'PUT', body: { license: text }, handle })
 }

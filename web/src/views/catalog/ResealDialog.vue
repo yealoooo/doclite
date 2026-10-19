@@ -13,7 +13,7 @@ import { LoaderCircleIcon } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 
 import { getResealPreview, resealArchiveItem } from '@/api/catalog'
-import { ApiError, errorMessage, isApiError } from '@/api/http'
+import { ApiError, errorMessage, HANDLE_ALL, isApiError } from '@/api/http'
 import type { ArchiveItem, ResealPreview } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -47,7 +47,7 @@ async function load() {
   if (!id) return
   busy.value = 'load'
   try {
-    const p = await getResealPreview(id, true)
+    const p = await getResealPreview(id, HANDLE_ALL)
     if (props.itemId === id) {
       preview.value = p
       loadError.value = ''
@@ -73,7 +73,7 @@ async function confirm() {
   busy.value = 'reseal'
   note.value = ''
   try {
-    const res = await resealArchiveItem(p.item_id, p.row_version, true)
+    const res = await resealArchiveItem(p.item_id, p.row_version, HANDLE_ALL)
     open.value = false
     emit('resealed', res)
   } catch (e) {

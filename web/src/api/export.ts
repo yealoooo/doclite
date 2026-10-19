@@ -15,7 +15,7 @@
 // 注意 403 `forbidden` 走全局处理（刷新会话、跳无权提示页），调用前先确认有 export 菜单。每个函数的最后一个参数可以传
 // `handle`（见 http.ts）。
 
-import { request, requestQuiet, type RequestOptions } from './http'
+import { type Handle, request } from './http'
 import type {
   CreateExportTaskBody,
   ExportChanges,
@@ -26,8 +26,6 @@ import type {
   ExportTaskFiles,
   ExportTaskList,
 } from './types'
-
-type Handle = RequestOptions['handle']
 
 /** 手选的范围最多多少个节点或条目（server：1–5000）。 */
 export const MAX_SCOPE_IDS = 5000
@@ -67,7 +65,7 @@ export function getExportTask(id: string, handle?: Handle) {
  * 这时当作没有这个任务（预检会报 404），不是"你的权限变了"。
  */
 export function probeExportTask(id: string, handle?: Handle) {
-  return requestQuiet<ExportTask>(`/api/export-tasks/${id}`, { handle })
+  return request<ExportTask>(`/api/export-tasks/${id}`, { handle, quiet403: true })
 }
 
 /** 明细：按条目在导出里的序号、页号，keyset 分页；件号、档号、题名、快照都是建任务时冻结的。 */

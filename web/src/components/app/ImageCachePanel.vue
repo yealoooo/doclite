@@ -27,6 +27,7 @@ import {
   type CacheStats,
 } from '@/lib/image-cache'
 import { shellErrorMessage } from '@/lib/shell'
+import { HANDLE_ALL } from '@/api/http'
 
 const GB = 1024 ** 3
 
@@ -79,7 +80,7 @@ function gbText(bytes: number): string {
 
 async function loadProjects() {
   try {
-    const list = await listMyProjects(true)
+    const list = await listMyProjects(HANDLE_ALL)
     projects.value = new Map(list.map((p) => [p.id, p]))
   } catch {
     // 取不到项目名时只显示 id，不影响面板。

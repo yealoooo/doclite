@@ -16,7 +16,7 @@
 import { LoaderCircleIcon } from '@lucide/vue'
 import { computed, nextTick, ref, watch } from 'vue'
 
-import { errorMessage, isApiError } from '@/api/http'
+import { errorMessage, HANDLE_ALL, isApiError } from '@/api/http'
 import { createProject, getProject, updateProject, type UpdateProjectBody } from '@/api/projects'
 import type { ProjectDetail, ProjectItem, ProjectStatus } from '@/api/types'
 import { Button } from '@/components/ui/button'
@@ -138,7 +138,7 @@ async function loadDetail(id: string) {
   detailState.value = 'loading'
   detailError.value = ''
   try {
-    const d = await getProject(id, true)
+    const d = await getProject(id, HANDLE_ALL)
     if (my !== detailSeq) return
     // 第一次取到：基准从列表那一行换成详情。正常打开时取详情期间输入是禁用的，基本信息直接换成详情里的；只有
     // 取详情失败后改过、再点"重试"时才可能有我的修改，和 409 一样按字段合并并提示。
@@ -244,7 +244,7 @@ function catalogPart(settings: Record<string, unknown>): string {
  * 时抛出原来的错误。
  */
 async function mergeAfterConflict(id: string, old: Base, err: unknown): Promise<'retry' | 'notice'> {
-  const fresh = await getProject(id, true)
+  const fresh = await getProject(id, HANDLE_ALL)
   if (fresh.updated_at === old.updated_at) throw err
   const { changed, dropped } = mergeBasic(old, fresh)
   const before = detail.value
@@ -283,7 +283,7 @@ async function saveEdit(id: string): Promise<ProjectDetail | 'unchanged' | null>
     const body = changesAgainst(b)
     if (Object.keys(body).length === 0) return 'unchanged'
     try {
-      return await updateProject(id, { ...body, expected_updated_at: b.updated_at }, true)
+      return await updateProject(id, { ...body, expected_updated_at: b.updated_at }, HANDLE_ALL)
     } catch (err) {
       if (!isApiError(err, 'conflict')) throw err
       if ((await mergeAfterConflict(id, b, err)) === 'notice') return null
@@ -321,7 +321,7 @@ async function submit() {
           project_name: name.value.trim(),
           description: description.value.trim() || undefined,
         },
-        true,
+        HANDLE_ALL,
       )
     }
     emit('saved', saved)

@@ -1,10 +1,10 @@
-// M2-4 查看原图的截图脚本用的助手（scripts/shots/m2-viewer.mjs、m2-viewer-lan.mjs）。
+// M2-4 查看原图的截图脚本用的助手（scripts/shots/m2-viewer.mjs、m2-accept.mjs、m2-review.mjs）。
 //
 // - 接口：页面之外用 admin 调接口（登录、batch、建样本）；
 // - 样本（M9-3 起）：DEMO-A 下 `npm run seed` 建的「格式样本」（JPEG 彩色、灰度，TIFF LZW、G4 等，没有封面），外加本任务的
 //   专用文件夹"M2-4 查看器样本"（第一次运行时建好，之后复用、不删）：
 //   - 对比样本.png：v1 是 150 DPI（被驳回：模糊，带说明），v2 是 300 DPI 的重扫；
-//   - 超出预算 A0 300dpi.tif：1 位黑白无压缩 TIFF，9933×14043（约 1.4 亿像素，超过浏览器 1 亿像素的预算，17 MB）；
+//   - 超出预算 A0 300dpi.tif：1 位黑白无压缩 TIFF，9933×14043（约 1.4 亿像素，17 MB）；
 //   - 子文件夹"200 MB 切换"（ensureBench，只在要它的几张截图第一次运行时建）：a3-600-none-rgb.tif（7016×9921 RGB 无压缩，
 //     约 209 MB）、a4-300-none-gray.tif（2480×3508 灰度无压缩，8.7 MB）、a4-300-deflate-rgb.tif（同尺寸 Deflate 彩色，几百 KB），
 //     按这个顺序上传（切换文件的场景按"下一个"依次打开）。演示数据不放大文件，要这几张的截图建议在临时库上跑。
@@ -13,12 +13,9 @@
 //   （client/cmd/devshell）：封面、分块描述和块由 devshell 用客户端的 Go 代码（internal/imagecache、internal/tiles，
 //   和打包的壳同一份）现场下载、切块；来源记录同壳（devshell 转发 batch、snapshots 响应时记下），其余 404。
 //   截图脚本只拦截取图地址的请求做统计和故障注入（422、503、延迟）。
-// - 渲染进程的内存：按 ps 轮询这个浏览器的 renderer、GPU 进程的 RSS。
-// - 共用内存预算的模拟（M2-4 审查第 1 轮）：拦截对比样本的 snapshots 响应，把两个版本换成现场生成的大 TIFF
-//   （Deflate 压缩的彩色，文件只有几 MB，解码要几百 MB），原图地址也由截图脚本回答（interceptCompareTiffs）。
+// （M10-2 起浏览器里不看原图：浏览器里的 Worker、内存统计、共用内存预算的模拟这些助手删掉了。）
 
-import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { deflateSync } from 'node:zlib'
@@ -124,7 +121,7 @@ let benchPromise = null
 
 /**
  * "M2-4 查看器样本/200 MB 切换"：缺的按顺序现场生成、上传（第一次约 210 MB，之后复用），并补进 ctx.files（folder_key 是
- * bench）。只有要它的几张截图调用，别的截图（和 m2-viewer-lan）不会造大文件。
+ * bench）。只有要它的几张截图调用，别的截图不会造大文件。
  */
 export function ensureBench(ctx) {
   benchPromise ??= (async () => {
@@ -467,66 +464,6 @@ export async function settle(page, index = 0) {
 
 // ---------- 原图请求的计数（浏览器：S3 上的原图。壳里在页面里统计，见 installTauriMock 的 __shellImgStats） ----------
 
-/** S3 预签名的原图（不含封面）。 */
-export function isOriginalUrl(url) {
-  return /\/v\d+\.(jpg|png|tif)\?/.test(url) && !url.includes('.cover.')
-}
-
-/**
- * 跟踪"正在加载的原图"（浏览器里 S3 上原图的 GET，按 keyOf 分组）。返回 {maxConcurrent, started, finished, failed,
- * terminated, current()}：maxConcurrent 是同时在加载的不同原图的最大个数。
- */
-export function trackOriginals(page, keyOf) {
-  const inflight = new Map() // request → key
-  const state = { maxConcurrent: 0, failed: [], finished: [], started: [], terminated: [] }
-  const distinct = () => new Set(inflight.values()).size
-  page.on('request', (req) => {
-    const key = keyOf(req.url())
-    if (!key) return
-    inflight.set(req, key)
-    state.started.push({ key, url: req.url(), at: Date.now() })
-    state.maxConcurrent = Math.max(state.maxConcurrent, distinct())
-  })
-  const end = (list) => (req) => {
-    const key = inflight.get(req)
-    if (!key) return
-    inflight.delete(req)
-    list.push({ key, url: req.url(), at: Date.now(), error: req.failure()?.errorText })
-  }
-  page.on('requestfinished', end(state.finished))
-  page.on('requestfailed', end(state.failed))
-  // Worker 被 terminate 时，DevTools 收不到它的请求的 loadingFailed（实际已取消，见 netlogCancelled）：
-  // Worker 发出的请求（frame() 为 null）随 Worker 一起结束。
-  page.on('workerdestroyed', () => {
-    for (const [req, key] of inflight) {
-      if (req.frame() !== null) continue
-      inflight.delete(req)
-      state.terminated.push({ key, url: req.url(), at: Date.now() })
-    }
-  })
-  state.current = () => [...new Set(inflight.values())]
-  return state
-}
-
-/** Worker 的创建和销毁（页面的 workercreated、workerdestroyed）。 */
-export function trackWorkers(page) {
-  const state = { live: 0, maxLive: 0, created: 0, destroyed: 0, log: [] }
-  page.on('workercreated', (w) => {
-    if (!w.url().includes('tiff.worker')) return
-    state.created++
-    state.live++
-    state.maxLive = Math.max(state.maxLive, state.live)
-    state.log.push({ at: Date.now(), event: 'created' })
-  })
-  page.on('workerdestroyed', (w) => {
-    if (!w.url().includes('tiff.worker')) return
-    state.destroyed++
-    state.live--
-    state.log.push({ at: Date.now(), event: 'destroyed' })
-  })
-  return state
-}
-
 // ---------- 壳的模拟 ----------
 
 /**
@@ -646,99 +583,9 @@ export async function installShellMock(page, { fail = new Map(), dziDelayMs = 0 
   return stats
 }
 
-/** 浏览器里"正在加载的原图"的键：S3 原图的路径。 */
-export function browserOriginalKey(url) {
-  return isOriginalUrl(url) ? new URL(url).pathname : null
-}
-
 // ---------- NetLog：核对请求真的被取消了 ----------
 
-/**
- * 用一个单独的、开着 NetLog 的无头 Chrome 跑 `fn(page)`（DevTools 看不到被 terminate 的 Worker 的请求结束，
- * NetLog 是网络栈自己的记录），关掉浏览器后读 NetLog：返回 URL 里含 `match` 的请求 [{url, bytes, cancelled, netError}]。
- */
-export async function withNetLog(executablePath, dir, fn, match) {
-  const { default: puppeteer } = await import('puppeteer-core')
-  mkdirSync(dir, { recursive: true })
-  const file = path.join(dir, `netlog-${Date.now()}.json`)
-  const browser = await puppeteer.launch({
-    executablePath,
-    headless: true,
-    args: ['--no-proxy-server', '--lang=zh-CN', '--hide-scrollbars', `--log-net-log=${file}`],
-    defaultViewport: { width: 1440, height: 900 },
-  })
-  try {
-    await fn(await browser.newPage())
-  } finally {
-    await browser.close()
-  }
-  let text = readFileSync(file, 'utf8').trimEnd()
-  if (!text.endsWith('}')) text = `${text.replace(/,$/, '')}]}`
-  const log = JSON.parse(text)
-  const names = Object.fromEntries(Object.entries(log.constants.logEventTypes).map(([k, v]) => [v, k]))
-  const reqs = new Map()
-  for (const e of log.events) {
-    const name = names[e.type]
-    if (name === 'REQUEST_ALIVE' && e.phase === 1 && typeof e.params?.url === 'string' && e.params.url.includes(match)) {
-      reqs.set(e.source.id, { url: e.params.url, bytes: 0, cancelled: false, netError: null })
-    }
-    const r = reqs.get(e.source.id)
-    if (!r) continue
-    if (name === 'URL_REQUEST_JOB_FILTERED_BYTES_READ') r.bytes += e.params?.byte_count ?? 0
-    if (name === 'CANCELLED') r.cancelled = true
-    if (name === 'REQUEST_ALIVE' && e.phase === 2 && e.params?.net_error !== undefined) r.netError = e.params.net_error
-  }
-  return [...reqs.values()]
-}
-
 // ---------- 内存 ----------
-
-/**
- * 每隔 intervalMs 用 ps 取这个浏览器的 renderer、GPU 进程的 RSS，返回 {stop()}。stop() 返回（MB）：
- * renderer 这段时间里涨得最多的那个 renderer 进程（页面和它的 Worker 在同一个 renderer 进程里；别的上下文的
- * renderer 闲着，不涨）的峰值、开始时的值、结束时的值；gpu 是 GPU 进程的峰值。
- */
-export function sampleMemory(browser, intervalMs = 100) {
-  const root = browser.process()?.pid
-  assert(root, '取不到浏览器进程')
-  const renderers = new Map() // pid → {base, peak, last}
-  let gpuPeak = 0
-  const tick = () => {
-    let out = ''
-    try {
-      out = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,rss=,command='], { encoding: 'utf8', maxBuffer: 16 << 20 })
-    } catch {
-      return
-    }
-    const procs = out
-      .split('\n')
-      .map((l) => l.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/))
-      .filter(Boolean)
-      .map((m) => ({ pid: +m[1], ppid: +m[2], rss: +m[3] / 1024, cmd: m[4] }))
-    let gpu = 0
-    for (const p of procs) {
-      if (p.ppid !== root) continue
-      if (p.cmd.includes('--type=gpu-process')) gpu += p.rss
-      if (!p.cmd.includes('--type=renderer')) continue
-      const r = renderers.get(p.pid) ?? { base: p.rss, peak: 0, last: 0 }
-      r.peak = Math.max(r.peak, p.rss)
-      r.last = p.rss
-      renderers.set(p.pid, r)
-    }
-    gpuPeak = Math.max(gpuPeak, gpu)
-  }
-  tick()
-  const timer = setInterval(tick, intervalMs)
-  return {
-    stop() {
-      clearInterval(timer)
-      tick()
-      const best = [...renderers.values()].sort((a, b) => b.peak - b.base - (a.peak - a.base))[0] ?? { base: 0, peak: 0, last: 0 }
-      const round = Math.round
-      return { renderer: round(best.peak), rendererBase: round(best.base), rendererEnd: round(best.last), gpu: round(gpuPeak) }
-    },
-  }
-}
 
 /** 截图脚本的临时目录（壳模拟的原图和分块）。 */
 export function shotsTmp(name) {
@@ -832,79 +679,4 @@ export function syntheticTiff(W, H, seed = 0) {
     dataAt += stripData[i].length
   }
   return Buffer.concat([head, ...stripData])
-}
-
-/**
- * 浏览器里对比的两侧换成现场生成的大 TIFF：拦截 `GET /api/files/<fileId>/snapshots`（用 api 取真实的响应，把各个版本的
- * 原图换成 `sizes` 里对应的尺寸，封面不变），原图地址 `http://doclite-synthetic.test/<sid>.tif` 由这里回答（带 CORS 头）。
- * `sizes` 是函数（每次取 snapshots 时调，可以按场景换）→ [[左宽, 左高], [右宽, 右高]]。返回 {requests}：每张合成原图被
- * 请求的次数（sid → 次数）。页面要已经 setRequestInterception(true)（这里会打开）。
- */
-export async function interceptCompareTiffs(page, api, fileId, sizes) {
-  await page.setRequestInterception(true)
-  const files = new Map() // sid → Buffer
-  const requests = new Map()
-  page.on('request', (req) => {
-    const url = req.url()
-    if (req.isInterceptResolutionHandled?.()) return
-    if (new URL(url).pathname === `/api/files/${fileId}/snapshots`) {
-      api('GET', `/api/files/${fileId}/snapshots`)
-        .then((real) => {
-          const want = sizes()
-          const n = real.snapshots.length
-          real.snapshots.forEach((s, i) => {
-            const size = i === n - 1 ? want[1] : i === n - 2 ? want[0] : null
-            if (!size) return
-            const [W, H] = size
-            const tiff = syntheticTiff(W, H, i)
-            const sid = `${s.snapshot_id}`
-            files.set(sid, tiff)
-            Object.assign(s, {
-              mime_type: 'image/tiff',
-              width_px: W,
-              height_px: H,
-              file_size: tiff.length,
-              color_mode: 'color',
-              original_url: `http://doclite-synthetic.test/${sid}-${W}x${H}.tif?sig=1`,
-            })
-          })
-          return req.respond({ status: 200, contentType: 'application/json; charset=utf-8', body: JSON.stringify(real) })
-        })
-        .catch((e) => req.respond({ status: 500, contentType: 'text/plain', body: String(e?.message ?? e) }).catch(() => {}))
-      return
-    }
-    if (url.startsWith('http://doclite-synthetic.test/')) {
-      const sid = new URL(url).pathname.slice(1).split('-').slice(0, 5).join('-')
-      requests.set(sid, (requests.get(sid) ?? 0) + 1)
-      const body = files.get(sid)
-      req
-        .respond(
-          body
-            ? { status: 200, contentType: 'image/tiff', headers: { 'Access-Control-Allow-Origin': '*' }, body }
-            : { status: 404, contentType: 'text/plain', headers: { 'Access-Control-Allow-Origin': '*' }, body: 'no such synthetic tiff' },
-        )
-        .catch(() => {})
-      return
-    }
-    req.continue().catch(() => {})
-  })
-  return { requests }
-}
-
-/** 记下页面上各个查看器经过的加载步骤（data-step）和状态（data-state），{side, step|state} 的列表在 window.__viewerSteps。 */
-export async function recordViewerSteps(page) {
-  await page.evaluate(() => {
-    const log = []
-    window.__viewerSteps = log
-    const seen = (el) => {
-      const side = el.closest('[data-testid=compare-pane]')?.dataset.side ?? 'single'
-      log.push({ side, step: el.dataset.step ?? null, state: el.dataset.state, at: Math.round(performance.now()) })
-    }
-    new MutationObserver((ms) => {
-      for (const m of ms) {
-        const el = m.target
-        if (el instanceof HTMLElement && el.dataset.testid === 'image-viewer') seen(el)
-      }
-    }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['data-step', 'data-state'] })
-  })
 }

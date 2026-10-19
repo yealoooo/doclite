@@ -9,7 +9,9 @@ import { computed } from 'vue'
 
 import type { CatalogCounts } from '@/api/types'
 
-import { barWidth, exportableText, num, percentText } from './dashboard'
+import { formatCount } from '@/lib/format'
+
+import { barWidth, exportableText, percentText } from './dashboard'
 
 const props = defineProps<{
   counts: CatalogCounts
@@ -49,16 +51,16 @@ const steps = computed<Step[]>(() => {
       kind: 'approved',
       label: '审核通过',
       value: c.review.approved,
-      unit: `/ ${num(c.total)} 页 · ${percentText(c.review.approved, c.total)}`,
+      unit: `/ ${formatCount(c.total)} 页 · ${percentText(c.review.approved, c.total)}`,
       bar: barWidth(c.review.approved, c.total),
       color: 'bg-ok',
       rest: [
         { text: '待分配 ' },
-        { text: num(c.review.unassigned), em: true },
+        { text: formatCount(c.review.unassigned), em: true },
         { text: ' · 待审 ' },
-        { text: num(c.review.pending), em: true },
+        { text: formatCount(c.review.pending), em: true },
         { text: ' · 驳回 ' },
-        { text: num(c.review.rejected), em: true },
+        { text: formatCount(c.review.rejected), em: true },
       ],
       data: { total: c.total, unassigned: c.review.unassigned, pending: c.review.pending, rejected: c.review.rejected },
     },
@@ -66,12 +68,12 @@ const steps = computed<Step[]>(() => {
       kind: 'archived',
       label: '已归档',
       value: it.total,
-      unit: `件 · ${num(c.catalog.cataloged)} 页`,
+      unit: `件 · ${formatCount(c.catalog.cataloged)} 页`,
       bar: barWidth(c.catalog.cataloged, c.total),
       color: 'bg-violet-600',
       rest: [
-        { text: `${num(c.catalog.cataloged)} / ${num(c.total)} 页 · ${percentText(c.catalog.cataloged, c.total)}` },
-        ...(it.modifying ? [{ text: ' · 修改中 ' }, { text: num(it.modifying), em: true }, { text: ' 件' }] : []),
+        { text: `${formatCount(c.catalog.cataloged)} / ${formatCount(c.total)} 页 · ${percentText(c.catalog.cataloged, c.total)}` },
+        ...(it.modifying ? [{ text: ' · 修改中 ' }, { text: formatCount(it.modifying), em: true }, { text: ' 件' }] : []),
       ],
       data: { pages: c.catalog.cataloged, modifying: it.modifying },
     },
@@ -79,17 +81,17 @@ const steps = computed<Step[]>(() => {
       kind: 'locked',
       label: '已锁定',
       value: it.locked,
-      unit: `/ ${num(it.total)} 件`,
+      unit: `/ ${formatCount(it.total)} 件`,
       bar: barWidth(it.locked, it.total),
       color: 'bg-violet-900',
-      rest: [{ text: '未锁定 ' }, { text: num(it.total - it.locked), em: true }, { text: ' 件' }],
+      rest: [{ text: '未锁定 ' }, { text: formatCount(it.total - it.locked), em: true }, { text: ' 件' }],
       data: { total: it.total },
     },
     {
       kind: 'exportable',
       label: '可导出',
       value: it.exportable,
-      unit: `件 · ${num(it.exportable_pages)} 页`,
+      unit: `件 · ${formatCount(it.exportable_pages)} 页`,
       bar: barWidth(it.exportable_pages, c.total),
       color: 'bg-ok',
       rest: [{ text: ex.short }],
@@ -127,7 +129,7 @@ const steps = computed<Step[]>(() => {
         <span class="truncate">{{ s.label }}</span>
       </div>
       <div class="mt-1 flex flex-wrap items-baseline gap-x-1.5 leading-tight">
-        <span class="text-2xl font-semibold tracking-tight text-foreground tabular-nums" data-testid="flow-value">{{ num(s.value) }}</span>
+        <span class="text-2xl font-semibold tracking-tight text-foreground tabular-nums" data-testid="flow-value">{{ formatCount(s.value) }}</span>
         <span class="text-[13px] text-muted-foreground tabular-nums">{{ s.unit }}</span>
       </div>
       <div class="mt-2 mb-1.5 h-1.5 overflow-hidden rounded-full bg-muted">

@@ -21,12 +21,12 @@
 // - **条目范围的标题**：任务接口不带条目的档号，看得到的条目范围的任务取一次明细的第一页（limit 1）拿第一件的档号，
 //   冻结的数据不会变，取到就一直用。
 
-import { reactive, ref, shallowRef, watch } from 'vue'
+import { useDocumentVisibility } from '@vueuse/core'
+import { computed, reactive, ref, shallowRef, watch } from 'vue'
 
 import { getExportTask, getExportTaskChanges, listExportTaskFiles, listExportTasks, MAX_TASKS_PAGE } from '@/api/export'
-import { errorMessage, isApiError } from '@/api/http'
+import { errorMessage, HANDLE_ALL, isApiError } from '@/api/http'
 import type { ExportChanges, ExportTask } from '@/api/types'
-import { usePageVisible } from '@/composables/usePageVisible'
 import { itemName } from '@/lib/export'
 
 const PAGE_SIZE = 50
@@ -64,7 +64,9 @@ export function useExportTasks(projectId: () => string | null) {
   /** 列表的代次：换项目、整页重新加载时加一，旧的响应作废。 */
   let gen = 0
   let alive = true
-  const pageVisible = usePageVisible()
+  // 标签页在前台：切到后台时暂停按事件的重取，回到前台时补取一次（M4-5 审查第 1 轮）。
+  const visibility = useDocumentVisibility()
+  const pageVisible = computed(() => visibility.value !== 'hidden')
 
   /** 单个取回来的任务和发出请求的时间（整页重新加载时，比列表请求晚发出的以它为准）。 */
   const fetched = new Map<string, { task: ExportTask; startedAt: number }>()
@@ -106,7 +108,7 @@ export function useExportTasks(projectId: () => string | null) {
     const startedAt = Date.now()
     const limit = Math.min(MAX_TASKS_PAGE, Math.max(PAGE_SIZE, tasks.value.length))
     try {
-      const res = await listExportTasks(pid, { limit }, true)
+      const res = await listExportTasks(pid, { limit }, HANDLE_ALL)
       if (my !== gen || !alive) return
       appliedListAt = startedAt
       const inResponse = new Set(res.items.map((t) => t.id))
@@ -136,7 +138,7 @@ export function useExportTasks(projectId: () => string | null) {
     const my = gen
     loadingMore.value = true
     try {
-      const res = await listExportTasks(pid, { limit: PAGE_SIZE, cursor }, true)
+      const res = await listExportTasks(pid, { limit: PAGE_SIZE, cursor }, HANDLE_ALL)
       if (my !== gen || !alive) return
       const have = new Set(tasks.value.map((t) => t.id))
       tasks.value = [...tasks.value, ...res.items.filter((t) => !have.has(t.id))]
@@ -211,7 +213,7 @@ export function useExportTasks(projectId: () => string | null) {
         const startedAt = Date.now()
         lastFetch.set(id, startedAt)
         try {
-          const t = await getExportTask(id, true)
+          const t = await getExportTask(id, HANDLE_ALL)
           if (!alive || projectId() !== pid) return
           retries.delete(id)
           // 比已经用上的列表请求还早发出的，列表里的更新，不用它。
@@ -426,7 +428,7 @@ function useChangeCounts(projectId: () => string | null, pageVisible: { value: b
     }
     requests.value++
     try {
-      const data = await getExportTaskChanges(id, true)
+      const data = await getExportTaskChanges(id, HANDLE_ALL)
       if (my !== gen) return
       const cur = entries.get(id)!
       cur.data = data
@@ -526,7 +528,7 @@ function useFirstItemLabels(projectId: () => string | null) {
           ids.map(async (id) => {
             let label: string | null = null
             try {
-              const res = await listExportTaskFiles(id, { limit: 1 }, true)
+              const res = await listExportTaskFiles(id, { limit: 1 }, HANDLE_ALL)
               const f = res.items[0]
               label = f ? itemName(f.archive_no, f.item_no) : null
             } catch {
@@ -558,5 +560,3 @@ function useFirstItemLabels(projectId: () => string | null) {
 
   return { labels, request, clear, dispose }
 }
-
-export type ExportTasksState = ReturnType<typeof useExportTasks>

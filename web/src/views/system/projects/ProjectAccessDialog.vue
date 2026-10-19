@@ -6,7 +6,7 @@
 import { SearchIcon, UserXIcon } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import { getAccessCandidates, getProjectAccess, setProjectAccess } from '@/api/projects'
 import type { AccessCandidates, CandidateUser, ProjectAccess, ProjectItem } from '@/api/types'
 import { Button } from '@/components/ui/button'
@@ -47,7 +47,7 @@ async function load() {
   original.value = null
   loadError.value = ''
   try {
-    const [c, a] = await Promise.all([getAccessCandidates(true), getProjectAccess(p.id, true)])
+    const [c, a] = await Promise.all([getAccessCandidates(HANDLE_ALL), getProjectAccess(p.id, HANDLE_ALL)])
     if (seq !== loadSeq) return
     candidates.value = c
     original.value = a
@@ -127,7 +127,7 @@ async function submit() {
   error.value = ''
   saving.value = true
   try {
-    const saved = await setProjectAccess(p.id, userIds.value, roleIds.value, true)
+    const saved = await setProjectAccess(p.id, userIds.value, roleIds.value, HANDLE_ALL)
     emit('saved', saved)
     open.value = false
   } catch (err) {

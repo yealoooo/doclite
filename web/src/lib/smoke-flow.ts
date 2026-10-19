@@ -19,7 +19,7 @@
 
 import { createFolder, listChildren } from '@/api/folders'
 import { batchFiles } from '@/api/files'
-import { request } from '@/api/http'
+import { HANDLE_ALL, request } from '@/api/http'
 import {
   archiveFolders,
   createArchiveCategory,
@@ -124,7 +124,7 @@ function need<T>(v: T | undefined | null, what: string): T {
 }
 
 async function findProject(cfg: FlowConfig): Promise<MyProject> {
-  const projects = await request<MyProject[]>('/api/projects', { handle: true })
+  const projects = await request<MyProject[]>('/api/projects', { handle: HANDLE_ALL })
   const p = cfg.project ? projects.find((x) => x.project_code === cfg.project) : (projects.find((x) => x.status === 'active') ?? projects[0])
   if (!p) throw new Error(cfg.project ? `进不了项目 ${cfg.project}` : '这个账号没有能进的项目')
   return p
@@ -135,14 +135,14 @@ async function ensureFolderPath(rootId: string, path: string): Promise<FolderIte
   let parent = rootId
   let folder: FolderItem | null = null
   for (const name of path.split('/').filter(Boolean)) {
-    folder = await createFolder({ parent_id: parent, folder_name: name, if_exists: 'return' }, true)
+    folder = await createFolder({ parent_id: parent, folder_name: name, if_exists: 'return' }, HANDLE_ALL)
     parent = folder.id
   }
   return need(folder, '文件夹路径')
 }
 
 async function childFolder(parentId: string, name: string) {
-  const ch = await listChildren(parentId, true)
+  const ch = await listChildren(parentId, HANDLE_ALL)
   const f = ch.folders.find((x) => x.folder_name === name)
   if (!f) throw new Error(`服务器上没有「${name}」文件夹`)
   return f
@@ -170,10 +170,10 @@ async function waitQueue(match: (it: QueueItem) => boolean, count: number, what:
 
 /** 核对服务器上的文件：名字、顺序、都有封面。 */
 async function checkServerFiles(folderId: string, names: string[], what: string) {
-  const files = (await listChildren(folderId, true)).files
+  const files = (await listChildren(folderId, HANDLE_ALL)).files
   const got = files.map((f) => f.file_name)
   if (got.join('|') !== names.join('|')) throw new Error(`${what}：服务器上是 ${got.join('、')}，应为 ${names.join('、')}`)
-  const batch = await batchFiles(files.map((f) => f.file_id), true)
+  const batch = await batchFiles(files.map((f) => f.file_id), HANDLE_ALL)
   const noCover = batch.items.filter((i) => !i.cover_url).map((i) => files.find((f) => f.file_id === i.file_id)?.file_name)
   if (noCover.length > 0) throw new Error(`${what}：${noCover.join('、')} 没有封面（壳应该生成）`)
   return files
@@ -183,13 +183,13 @@ async function checkServerFiles(folderId: string, names: string[], what: string)
 export async function checkFlowUpload(st: FlowState) {
   const started = performance.now()
   st.project = await findProject(st.cfg)
-  st.me = await request<Me>('/api/me', { handle: true })
+  st.me = await request<Me>('/api/me', { handle: HANDLE_ALL })
   const prep = await invoke<FlowPrepared>('smoke_flow_prepare')
   st.prepared = prep
   const parent = await ensureFolderPath(st.project.root_folder_id, st.cfg.folder)
   st.runFolder = await createFolder(
     { parent_id: parent.id, folder_name: prep.run, remark: '客户端自检（--smoke 的主流程：壳里上传、热文件夹、审核、归类、导出）' },
-    true,
+    HANDLE_ALL,
   )
   const pick = await pickAndEnqueueUpload(st.runFolder.id, 'folder')
   if (pick.cancelled || pick.added.length !== prep.upload_files.length || pick.skipped.length > 0) {
@@ -219,7 +219,7 @@ export async function checkFlowHotfolder(st: FlowState) {
   const runFolder = need(st.runFolder, '本次的文件夹')
   const dir = await hotfolderPickDir()
   if (dir !== prep.hot_dir) throw new Error(`hotfolder_pick_dir 返回 ${dir}，应为准备好的 ${prep.hot_dir}`)
-  const target = await createFolder({ parent_id: runFolder.id, folder_name: '热文件夹', if_exists: 'return' }, true)
+  const target = await createFolder({ parent_id: runFolder.id, folder_name: '热文件夹', if_exists: 'return' }, HANDLE_ALL)
   await hotfolderSet(dir, target.id)
   const running = await hotfolderStart()
   if (!running.running) throw new Error(`热文件夹没有开始：${JSON.stringify(running)}`)
@@ -253,8 +253,8 @@ export async function checkFlowReview(
   const files = [...st.uploaded, ...st.hotUploaded]
   if (files.length === 0) throw new Error('前一步没做完（没有传上去的文件）')
   const ids = files.map((f) => f.file_id)
-  const assigned = await assignReviews(project.id, { reviewer_id: me.id, file_ids: ids }, true)
-  const batch = await batchFiles(ids, true)
+  const assigned = await assignReviews(project.id, { reviewer_id: me.id, file_ids: ids }, HANDLE_ALL)
+  const batch = await batchFiles(ids, HANDLE_ALL)
   // 第一页在真正的查看器里看原图（壳的分块）。
   const first = need(batch.items[0], '第一页的图片信息')
   const v = await mountViewer(first.file_id, first)
@@ -262,9 +262,9 @@ export async function checkFlowReview(
   v.unmount()
   if (viewed.mode !== 'tiles' || viewed.tiles_drawn === 0) throw new Error(`查看器没有用分块画出原图：${JSON.stringify(viewed)}`)
   for (const it of batch.items) {
-    await submitReview(it.file_id, { result: 'approved', snapshot_id: it.snapshot_id }, true)
+    await submitReview(it.file_id, { result: 'approved', snapshot_id: it.snapshot_id }, HANDLE_ALL)
   }
-  const after = (await Promise.all(st.folderIds.map((id) => listChildren(id, true)))).flatMap((c) => c.files)
+  const after = (await Promise.all(st.folderIds.map((id) => listChildren(id, HANDLE_ALL)))).flatMap((c) => c.files)
   const notApproved = after.filter((f) => ids.includes(f.file_id) && f.review_status !== 'approved')
   if (notApproved.length > 0) throw new Error(`没有都通过：${notApproved.map((f) => `${f.file_name}=${f.review_status}`).join('、')}`)
   st.reviewed = batch.items
@@ -273,7 +273,7 @@ export async function checkFlowReview(
 
 /** 按档号模板用到的层级找或建节点链，返回最后一个节点（模板不用节点时是根节点）。 */
 async function ensureCategoryChain(projectId: string, levels: string[]): Promise<ArchiveCategory> {
-  let list = await listArchiveCategories(projectId, null, true)
+  let list = await listArchiveCategories(projectId, null, HANDLE_ALL)
   let parent = list.parent
   for (const type of levels) {
     const code = LEVEL_CODES[type] ?? 'ZJ'
@@ -283,11 +283,11 @@ async function ensureCategoryChain(projectId: string, levels: string[]): Promise
       node = await createArchiveCategory(
         projectId,
         { parent_id: parent.id, category_type: type, category_code: code, category_name: type === 'fonds' ? '客户端自检' : code },
-        true,
+        HANDLE_ALL,
       )
     }
     parent = node
-    list = await listArchiveCategories(projectId, node.id, true)
+    list = await listArchiveCategories(projectId, node.id, HANDLE_ALL)
   }
   return parent
 }
@@ -297,7 +297,7 @@ export async function checkFlowCatalog(st: FlowState) {
   const project = need(st.project, '项目')
   const prep = need(st.prepared, '准备好的样本')
   const reviewed = need(st.reviewed, '审核通过的页')
-  const settings = await getCatalogSettings(project.id, true)
+  const settings = await getCatalogSettings(project.id, HANDLE_ALL)
   if (settings.archive_no_template_error) throw new Error(`项目的档号模板不对：${settings.archive_no_template_error}`)
   const leaf = await ensureCategoryChain(project.id, settings.archive_no_levels)
   const extra: Record<string, string> = {}
@@ -307,14 +307,14 @@ export async function checkFlowCatalog(st: FlowState) {
   const res = await archiveFolders(
     leaf.id,
     { folder_ids: st.folderIds, titles: Object.fromEntries(st.folderIds.map((id, i) => [id, `客户端自检 ${prep.run}（${i + 1}）`])) },
-    true,
+    HANDLE_ALL,
   )
   if (res.items.length !== st.folderIds.length) throw new Error(`应归档 ${st.folderIds.length} 件，实际 ${res.items.length} 件：${JSON.stringify(res.skipped)}`)
   const locked: ArchiveItem[] = []
   for (const planned of res.items) {
-    let it = await getArchiveItem(need(planned.item_id, '新件的 id'), true)
-    if (Object.keys(extra).length) it = await updateArchiveItem(it.id, { row_version: it.row_version, extra_fields: extra }, true)
-    it = await itemAction(it.id, 'lock', it.row_version, true)
+    let it = await getArchiveItem(need(planned.item_id, '新件的 id'), HANDLE_ALL)
+    if (Object.keys(extra).length) it = await updateArchiveItem(it.id, { row_version: it.row_version, extra_fields: extra }, HANDLE_ALL)
+    it = await itemAction(it.id, 'lock', it.row_version, HANDLE_ALL)
     if (it.status !== 'locked') throw new Error(`条目没有锁定：${it.status}`)
     if (!it.archive_no) throw new Error(`条目没有档号：${JSON.stringify(it.archive_no_reason)}`)
     locked.push(it)
@@ -339,7 +339,7 @@ export async function checkFlowExport(st: FlowState) {
   let task: ExportTask = await createExportTask(
     project.id,
     { scope_type: 'item', scope_ids: [item.id], export_format: st.cfg.format, only_approved: true },
-    true,
+    HANDLE_ALL,
   )
   for (;;) {
     if (task.status === 'done') break
@@ -350,10 +350,10 @@ export async function checkFlowExport(st: FlowState) {
       throw new Error(`导出任务排队 ${Math.round(waited / 1000)} 秒还没开始：这个 server 多半没在执行后台任务（JOB_CONCURRENCY=0，或同一个库上别的 server 拿着执行器锁）`)
     }
     await sleep(1000)
-    task = await getExportTask(task.id, true)
+    task = await getExportTask(task.id, HANDLE_ALL)
   }
   const exportMs = Math.round(performance.now() - started)
-  const dl = await getExportDownload(task.id, true)
+  const dl = await getExportDownload(task.id, HANDLE_ALL)
   // 和导出页的"下载"同一段代码：壳里交给 open_external（自检里壳只记下地址）。
   const via = await openDownload(dl.url, () => {})
   if (via !== 'shell') throw new Error(`下载应该交给壳（open_external），实际 ${via}`)

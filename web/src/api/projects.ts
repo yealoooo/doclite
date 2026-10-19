@@ -3,7 +3,7 @@
 // - `GET /api/projects`：当前用户能进的项目（登录即可），给项目切换器用。
 // 每个函数的最后一个参数可以传 `handle`，声明调用方自己显示哪些错误（见 http.ts）。
 
-import { request, type RequestOptions } from './http'
+import { type Handle, request } from './http'
 import type {
   AccessCandidates,
   MyProject,
@@ -13,8 +13,6 @@ import type {
   ProjectItem,
   ProjectStatus,
 } from './types'
-
-type Handle = RequestOptions['handle']
 
 /** 当前用户能进的未删除项目（admin 是全部），含已归档的，按编码排序。 */
 export function listMyProjects(handle?: Handle) {

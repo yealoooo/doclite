@@ -61,7 +61,6 @@ const GB = 1024 ** 3
 /** 上限的范围（和壳一致）：100 MB – 1 TB。 */
 export const CACHE_LIMIT_MIN_BYTES = 100 * 1024 ** 2
 export const CACHE_LIMIT_MAX_BYTES = 1024 * GB
-export const CACHE_DEFAULT_LIMIT_BYTES = 2 * GB
 
 export function cacheStats() {
   return invoke<CacheStats>('cache_stats')

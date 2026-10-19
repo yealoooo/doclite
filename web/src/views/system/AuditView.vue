@@ -11,7 +11,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { AUDIT_PAGE_SIZE, type AuditQuery, getAuditFilterOptions, listAuditLogs } from '@/api/audit'
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import type { AuditFilterOptions, AuditLog } from '@/api/types'
 import PageHeader from '@/components/app/PageHeader.vue'
 import { Badge } from '@/components/ui/badge'
@@ -164,7 +164,7 @@ async function load() {
   }
   state.value = 'loading'
   try {
-    const res = await listAuditLogs({ ...apiQuery(), limit: AUDIT_PAGE_SIZE }, true)
+    const res = await listAuditLogs({ ...apiQuery(), limit: AUDIT_PAGE_SIZE }, HANDLE_ALL)
     if (my !== seq) return
     items.value = res.items
     nextCursor.value = res.next_cursor
@@ -184,7 +184,7 @@ async function loadMore() {
   loadingMore.value = true
   moreError.value = ''
   try {
-    const res = await listAuditLogs({ ...apiQuery(), limit: AUDIT_PAGE_SIZE, cursor: nextCursor.value }, true)
+    const res = await listAuditLogs({ ...apiQuery(), limit: AUDIT_PAGE_SIZE, cursor: nextCursor.value }, HANDLE_ALL)
     if (my !== seq) return
     items.value = [...items.value, ...res.items]
     nextCursor.value = res.next_cursor
@@ -216,7 +216,7 @@ watch(
 onMounted(async () => {
   void load()
   try {
-    options.value = await getAuditFilterOptions(true)
+    options.value = await getAuditFilterOptions(HANDLE_ALL)
   } catch {
     // 选项取不到时下拉框只有"全部"和当前的条件；列表照常。
   }

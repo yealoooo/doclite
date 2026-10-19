@@ -1,10 +1,8 @@
 // 系统管理 · 存储配置（菜单码 system.storage）。每个函数的最后一个参数可以传 `handle`，
 // 声明调用方自己显示哪些错误（见 http.ts）。
 
-import { request, type RequestOptions } from './http'
+import { type Handle, request } from './http'
 import type { ConnectionTestResult, StorageMigration, StorageProfileItem, StorageStatus } from './types'
-
-type Handle = RequestOptions['handle']
 
 const BASE = '/api/system/storage-profiles'
 

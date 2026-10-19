@@ -7,7 +7,7 @@
 //   文件夹子树（地址栏 `?folder=<id>`，分组头上"只看这里"）。is_current 为 false 的行显示成历史、不给撤回。
 //   Ctrl/⌘、Shift 点选多个，底部"批量通过"（Q9：只发选中的里分给自己的待审，最多 500 个，确认框写明个数）。
 // - 中：M2-4 的 ImageViewer（第 2 轮及以后按 C 换成 CompareViewer：左边是上一轮被驳回的版本，标出原因）。
-//   浏览器里不预加载下一张原图（占内存预算）；壳里看当前这张时给下一张提前切块（prepareTiles，M2-3）。
+//   客户端里看当前这张时给下一张提前切块（prepareTiles，M2-3）。
 // - 右：文件标题、"上一轮因为某原因被驳回"、快照时间线（可以勾两个版本对比）、审核记录（已取消的默认隐藏）、文件信息
 //   （ReviewDetail）；底部是驳回原因面板、通过和驳回按钮、撤回通过（ReviewActions）。
 //
@@ -38,9 +38,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowR
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 
-import { batchFiles, getFileSnapshots } from '@/api/files'
+import { getFileSnapshots } from '@/api/files'
 import { getFolder } from '@/api/folders'
-import { errorMessage, isApiError } from '@/api/http'
+import { errorMessage, HANDLE_ALL, isApiError, toastOpError } from '@/api/http'
 import {
   approveMany,
   getFileReviews,
@@ -53,21 +53,23 @@ import type { FileReviews, MyReviewItem, MyReviewState, ProjectEvent, ReviewSett
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import CompareViewer, { type CompareMode, type CompareSide, type CompareSideKey } from '@/components/viewer/CompareViewer.vue'
+import CompareViewer, { type CompareSide, type CompareSideKey } from '@/components/viewer/CompareViewer.vue'
 import ImageViewer, { type ViewerStatus, type ViewerView } from '@/components/viewer/ImageViewer.vue'
+import { staleInfo, viewerStatusText } from '@/components/viewer/viewer-status'
 import ViewerToolbar from '@/components/viewer/ViewerToolbar.vue'
-import { useProjectStream } from '@/composables/useProjectStream'
+import StreamStatus from '@/components/app/StreamStatus.vue'
+import { useEventBatch, useProjectStream } from '@/composables/useProjectStream'
 import { useSelection } from '@/composables/useSelection'
-import { isTauri, shellImages } from '@/lib/client'
+import { useSnapshotCompare } from '@/composables/useSnapshotCompare'
+import { shellImages } from '@/lib/client'
 import { formatSpec } from '@/lib/files'
 import { prepareTiles } from '@/lib/image-cache'
+import { currentOriginalUrl, openOriginal, urlFresh } from '@/lib/original'
 import { rejectReasonsText } from '@/lib/reject-reasons'
-import { openExternal, shellErrorMessage } from '@/lib/shell'
 import type { ViewerImageInfo } from '@/lib/viewer/load-original'
 import { useImageInfoStore } from '@/stores/image-info'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
-import { toastOpError } from '@/views/review-assign/review-errors'
 
 import ReviewActions from './ReviewActions.vue'
 import ReviewDetail from './ReviewDetail.vue'
@@ -81,7 +83,6 @@ const session = useSessionStore()
 const images = useImageInfoStore()
 const route = useRoute()
 const router = useRouter()
-const inShell = isTauri()
 
 // ---------- 范围和列表 ----------
 
@@ -160,7 +161,7 @@ watch(
     if (scopeFolderInfo.value?.id === id) return
     if (!(session.menuCodes.has('files') || session.menuCodes.has('scan'))) return
     try {
-      const f = await getFolder(id, true)
+      const f = await getFolder(id, HANDLE_ALL)
       if (my !== scopeFolderSeq) return
       const name = f.parent_id ? f.folder_name : (project.current?.project_name ?? f.folder_name)
       const path = [...f.ancestors.map((a) => a.folder_name), f.folder_name].join('/')
@@ -306,7 +307,7 @@ const nextTarget = computed(() => {
 
 // 当前这张和下一张的图片信息：登记成一个可见范围（和列表的可见范围分开），所以列表里这一行滚出视野之后，事件
 // invalidate 时照样重取（重扫出新版本时查看器跟着换）、快过期时照样续、缓存满了也不淘汰（验收第 1 轮）。
-// 下一张先取好信息，切过去时不用等 batch；只取信息，浏览器里不预加载原图。
+// 下一张先取好信息，切过去时不用等 batch。
 const CURRENT_OWNER = 'review-current'
 watch(
   () => [currentId.value, nextTarget.value] as const,
@@ -337,7 +338,7 @@ async function loadSettings(pid: string) {
   settings.value = null
   settingsError.value = null
   try {
-    const res = await getReviewSettings(pid, true)
+    const res = await getReviewSettings(pid, HANDLE_ALL)
     if (my === settingsSeq) settings.value = res
   } catch (e) {
     if (my === settingsSeq) settingsError.value = errorMessage(e)
@@ -371,7 +372,7 @@ function loadDetail(fileId: string, quiet = false): Promise<void> {
   }
   detailPromise = (async () => {
     try {
-      const [snaps, revs] = await Promise.all([getFileSnapshots(fileId, true), getFileReviews(fileId, true)])
+      const [snaps, revs] = await Promise.all([getFileSnapshots(fileId, HANDLE_ALL), getFileReviews(fileId, HANDLE_ALL)])
       if (my !== detailSeq) return
       detail.snapshots = snaps.snapshots
       detail.reviews = revs
@@ -445,11 +446,6 @@ watch(
   { flush: 'sync' },
 )
 
-/** 这几种失败是图片信息过期了：原图地址过期（存储返回 403）、壳里没有来源记录（404）、取不到地址。 */
-function staleInfo(s: ViewerStatus): boolean {
-  return s.phase === 'failed' && ['http', 'not_found', 'no_url'].includes(s.code ?? '')
-}
-
 function onViewerStatus(s: ViewerStatus) {
   const fid = currentId.value
   if (!fid) return
@@ -458,59 +454,32 @@ function onViewerStatus(s: ViewerStatus) {
 }
 
 const phase = computed(() => (viewerStatus.value && viewerStatus.value.fileId === currentId.value ? viewerStatus.value.status.phase : null))
-const step_ = computed(() => (viewerStatus.value && viewerStatus.value.fileId === currentId.value ? viewerStatus.value.status.step : null))
+const loadStep = computed(() => (viewerStatus.value && viewerStatus.value.fileId === currentId.value ? viewerStatus.value.status.step : null))
 
 /** 工具栏的操作发给当前显示的查看器。 */
 function target() {
   return compare.value ? compareRef.value : viewerRef.value
 }
 
-const modeLabel = computed(() => {
-  switch (viewerStatus.value?.status.mode) {
-    case 'tiles':
-      return '客户端分块'
-    case 'image':
-      return '浏览器整图'
-    case 'worker':
-      return '浏览器解码 TIFF'
-    default:
-      return ''
-  }
-})
-
-const statusText = computed(() => {
-  const s = viewerStatus.value?.status
-  if (!s || viewerStatus.value?.fileId !== currentId.value) return ''
-  switch (s.phase) {
-    case 'loading':
-      return s.cover === 'loaded' ? '原图加载中 · 先显示封面' : '原图加载中'
-    case 'ready':
-      if (s.elapsedMs == null) return '原图'
-      return s.elapsedMs < 1000 ? `原图 · ${s.elapsedMs} ms` : `原图 · ${(s.elapsedMs / 1000).toFixed(1)} 秒`
-    case 'too_large':
-      return '原图太大 · 只显示封面'
-    case 'unsupported':
-      return '看不了原图 · 只显示封面'
-    case 'failed':
-      return '原图加载失败'
-    default:
-      return ''
-  }
-})
+const statusText = computed(() =>
+  viewerStatus.value?.fileId === currentId.value ? viewerStatusText(viewerStatus.value?.status) : '',
+)
 
 // ---------- 对比（C） ----------
 
-const compare = ref<{ fileId: string; left: CompareSide; right: CompareSide; sids: [string, string] } | null>(null)
-const compareMode = ref<CompareMode>('side')
-const compareShowing = ref<CompareSideKey>('right')
-const compareLoading = ref(false)
-let compareSeq = 0
-
-/** 地址还能用多久以上才算新鲜。 */
-const FRESH_MS = 10 * 60 * 1000
-function fresh(expiresAt: string | null | undefined): boolean {
-  return !!expiresAt && Date.parse(expiresAt) - Date.now() > FRESH_MS
-}
+const cmp = useSnapshotCompare({
+  refetch: async (fid) => {
+    await loadDetail(fid, true)
+    return detail.fileId === fid ? detail.snapshots : null
+  },
+  onStale: (fid) => images.reportBroken(fid),
+})
+const { pair: compare, mode: compareMode, showing: compareShowing, loading: compareLoading } = cmp
+/** 对比的两个版本（左、右）。 */
+const compareSids = computed(() => {
+  const c = compare.value
+  return c ? ([c.left.info?.snapshot_id ?? '', c.right.info?.snapshot_id ?? ''] as [string, string]) : null
+})
 
 function sideOf(s: SnapshotItem, label: string): CompareSide {
   const r = detail.reviews ? rejectionForSnapshot(detail.reviews.reviews, s.snapshot_id) : null
@@ -524,21 +493,19 @@ function sideOf(s: SnapshotItem, label: string): CompareSide {
 }
 
 /** 打开对比：不给 pair 时左边是上一轮被驳回的版本（没有时前一版），右边是当前版本。 */
-async function openCompare(pair?: [string, string]) {
+function openCompare(pair?: [string, string]) {
   const fid = currentId.value
   if (!fid) return
-  const my = ++compareSeq
-  compareLoading.value = true
-  try {
+  void cmp.open(async () => {
     await ensureDetail(fid)
-    if (my !== compareSeq || currentId.value !== fid) return
+    if (currentId.value !== fid) return null
     // 地址快过期了（页面开了很久）：重取一次版本（壳因此重新记下来源）。
-    if (detail.snapshots?.some((s) => !fresh(s.url_expires_at))) await loadDetail(fid, true)
-    if (my !== compareSeq || currentId.value !== fid) return
+    if (detail.snapshots?.some((s) => !urlFresh(s.url_expires_at))) await loadDetail(fid, true)
+    if (currentId.value !== fid) return null
     const snaps = detail.snapshots
     if (!snaps) {
       toast.error('取不到这个文件的各个版本')
-      return
+      return null
     }
     let left: SnapshotItem | undefined
     let right: SnapshotItem | undefined
@@ -554,62 +521,39 @@ async function openCompare(pair?: [string, string]) {
     }
     if (!left || !right) {
       toast.info('这个文件只有一个版本，没有可以对比的', { id: 'compare-single' })
-      return
+      return null
     }
     const latest = snaps[snaps.length - 1]!
     const labelOf = (s: SnapshotItem, fallback: string) => (s.snapshot_id === latest.snapshot_id ? '当前' : fallback)
-    compare.value = {
+    viewerStatus.value = null
+    return {
       fileId: fid,
       // 角标是"v<n> · 说明"：自选的两个版本里不是当前版本的只显示 v<n>，不再重复版本号。
       left: sideOf(left, pair ? labelOf(left, '') : leftLabel),
       right: sideOf(right, labelOf(right, '')),
-      sids: [left.snapshot_id, right.snapshot_id],
     }
-    compareMode.value = 'side'
-    compareShowing.value = 'right'
-    viewerStatus.value = null
-    sidesRefreshedAt = 0
-  } finally {
-    if (my === compareSeq) compareLoading.value = false
-  }
+  })
 }
 
 function closeCompare() {
-  compareSeq++
-  compareLoading.value = false
-  if (!compare.value) return
-  compare.value = null
-  viewerStatus.value = null
+  const had = !!compare.value
+  cmp.close()
+  if (had) viewerStatus.value = null
 }
 
 function toggleCompare() {
   if (compare.value || compareLoading.value) closeCompare()
-  else void openCompare()
+  else openCompare()
 }
 
 watch(currentId, () => closeCompare())
-
-let sidesRefreshedAt = 0
-const SIDES_RETRY_MS = 30 * 1000
 
 /** 对比时某一侧的状态：右侧（当前版本）算作当前文件的原图状态；地址过期时重取版本（30 秒内最多一次）。 */
 function onCompareStatus(side: CompareSideKey, s: ViewerStatus) {
   const c = compare.value
   if (!c || c.fileId !== currentId.value) return
   if (side === 'right') viewerStatus.value = { fileId: c.fileId, status: s }
-  if (!staleInfo(s)) return
-  images.reportBroken(c.fileId)
-  if (Date.now() - sidesRefreshedAt < SIDES_RETRY_MS) return
-  sidesRefreshedAt = Date.now()
-  void loadDetail(c.fileId, true).then(() => {
-    const cur = compare.value
-    if (!cur || cur.fileId !== c.fileId || !detail.snapshots) return
-    const pick = (sd: CompareSide): CompareSide => {
-      const found = detail.snapshots!.find((x) => x.snapshot_id === sd.info?.snapshot_id)
-      return found ? { ...sd, info: found as ViewerImageInfo } : sd
-    }
-    compare.value = { ...cur, left: pick(cur.left), right: pick(cur.right) }
-  })
+  cmp.onSideStatus(s)
 }
 
 // ---------- 壳里提前切块（M2-3） ----------
@@ -618,7 +562,7 @@ const prepared = new Set<string>()
 const lastPrepared = ref<string | null>(null)
 
 watch(
-  () => [currentId.value, phase.value, step_.value, nextTarget.value, nextTarget.value ? images.get(nextTarget.value) : undefined] as const,
+  () => [currentId.value, phase.value, loadStep.value, nextTarget.value, nextTarget.value ? images.get(nextTarget.value) : undefined] as const,
   ([cur, ph, st, next, nextInfo]) => {
     if (!shellImages() || !cur || !next) return
     // 当前这张的分块描述取到了（开始画块，或已经画完）再给下一张切，不和当前这张抢切块名额。
@@ -651,7 +595,7 @@ watch(currentId, () => {
  * 对比时右边显示的不是当前版本（在快照时间线上挑了两个旧版本，或对比期间重扫出了新版本）：这时不能审，审的必须是
  * 看到的那一版（审查第 1 轮）。
  */
-const compareHidesCurrent = computed(() => !!compare.value && compare.value.sids[1] !== info.value?.snapshot_id)
+const compareHidesCurrent = computed(() => !!compareSids.value && compareSids.value[1] !== info.value?.snapshot_id)
 /** 对比的同位切换正在显示左边（旧版本）：当前版本没在看，不能审（验收第 1 轮）。 */
 const compareShowsOld = computed(() => !!compare.value && compareMode.value === 'toggle' && compareShowing.value === 'left')
 
@@ -796,7 +740,7 @@ async function approve() {
   const fid = it.file_id
   busyIds.add(fid)
   try {
-    const res = await submitReview(fid, { result: 'approved', snapshot_id: sid }, true)
+    const res = await submitReview(fid, { result: 'approved', snapshot_id: sid }, HANDLE_ALL)
     list.applyReviewed(res)
     busyIds.delete(fid)
     await jumpAfterReview(fid)
@@ -818,7 +762,7 @@ async function reject(payload: { reasons: string[]; comment: string | null }) {
     const res = await submitReview(
       fid,
       { result: 'rejected', reject_reasons: payload.reasons, comment: payload.comment, snapshot_id: sid },
-      true,
+      HANDLE_ALL,
     )
     list.applyReviewed(res)
     busyIds.delete(fid)
@@ -854,7 +798,7 @@ async function doReopen() {
   confirmReopen.loading = true
   busyIds.add(it.file_id)
   try {
-    const res = await reopenFile(it.file_id, true)
+    const res = await reopenFile(it.file_id, HANDLE_ALL)
     confirmReopen.open = false
     if (res.reviewer_id === session.me?.id) toast.success(`已撤回「${it.file_name}」的通过，回到你的待审`)
     else toast.success(`已撤回「${it.file_name}」的通过`)
@@ -906,7 +850,7 @@ async function doBatch() {
   confirmBatch.loading = true
   for (const id of ids) busyIds.add(id)
   try {
-    const res = await approveMany(pid, ids, true)
+    const res = await approveMany(pid, ids, HANDLE_ALL)
     for (const r of res.items) list.applyReviewed(r)
     confirmBatch.open = false
     selection.clear()
@@ -934,61 +878,11 @@ async function doBatch() {
 
 // ---------- 下载原图 ----------
 
-/**
- * 打开原图地址（浏览器：新窗口；壳：系统浏览器）。不给 snapshotId 是当前版本（batch）；给了是对比里的某一侧
- * （snapshots）。地址剩不到 10 分钟就重新取。
- */
-async function downloadOriginal(snapshotId?: string | null) {
+/** 打开原图地址：不给 side 是当前版本（batch）；给了是对比里的某一侧。 */
+async function downloadOriginal(side?: CompareSideKey) {
   const fid = currentId.value
   if (!fid) return
-  let url: string | null = null
-  let urlError: string | undefined
-  if (snapshotId) {
-    let s = detail.snapshots?.find((x) => x.snapshot_id === snapshotId)
-    if (!s || !fresh(s.url_expires_at)) {
-      await loadDetail(fid, true)
-      s = detail.snapshots?.find((x) => x.snapshot_id === snapshotId)
-    }
-    url = s?.original_url ?? null
-    urlError = s ? s.url_error?.message : '取不到这个版本（重取各个版本失败）'
-  } else {
-    let item = images.get(fid)
-    if (!item || !fresh(item.url_expires_at)) {
-      try {
-        item = (await batchFiles([fid], true)).items[0]
-      } catch (e) {
-        toast.error(`取不到原图地址：${errorMessage(e)}`)
-        return
-      }
-    }
-    url = item?.original_url ?? null
-    urlError = item?.url_error?.message
-  }
-  if (!url) {
-    toast.error('取不到原图地址', { description: urlError })
-    return
-  }
-  let parsed: URL
-  try {
-    parsed = new URL(url)
-  } catch {
-    toast.error('原图地址格式不对')
-    return
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    toast.error('原图地址不是 http 或 https，不能打开')
-    return
-  }
-  if (inShell) {
-    try {
-      await openExternal(parsed.href)
-      toast.success('已在系统浏览器里打开原图')
-    } catch (e) {
-      toast.error(shellErrorMessage(e))
-    }
-  } else {
-    window.open(parsed.href, '_blank', 'noopener,noreferrer')
-  }
+  await openOriginal(side ? await cmp.sideOriginal(side) : await currentOriginalUrl(fid))
 }
 
 // ---------- 键盘（Q3，键位和规则见 useReviewKeys.ts） ----------
@@ -1026,18 +920,7 @@ let pendingFull = false
 let pendingCatalog = false
 /** M3-7：右栏"归类信息（只读）"的刷新令牌。 */
 const catalogRefresh = ref(0)
-let applyTimer: ReturnType<typeof setTimeout> | null = null
-let firstPendingAt = 0
-const EVENT_DEBOUNCE_MS = 300
-const EVENT_MAX_WAIT_MS = 1000
-
-function scheduleApply() {
-  const now = Date.now()
-  if (!firstPendingAt) firstPendingAt = now
-  if (applyTimer) clearTimeout(applyTimer)
-  const wait = Math.min(EVENT_DEBOUNCE_MS, Math.max(0, firstPendingAt + EVENT_MAX_WAIT_MS - now))
-  applyTimer = setTimeout(() => void applyEvents(), wait)
-}
+const batch = useEventBatch(applyEvents)
 
 function onEvent(e: ProjectEvent) {
   if (e.type === 'resync') pendingFull = true
@@ -1047,12 +930,10 @@ function onEvent(e: ProjectEvent) {
   } else if (e.type === 'folders.changed') pendingFolders = true
   else if (e.type === 'catalog.changed') pendingCatalog = true
   else return
-  scheduleApply()
+  batch.schedule()
 }
 
 async function applyEvents() {
-  applyTimer = null
-  firstPendingAt = 0
   if (!alive) return
   const full = pendingFull || pendingFolders
   const fileIds = [...pendingFiles]
@@ -1107,14 +988,11 @@ const stream = useProjectStream(() => project.currentId, {
   onOpen: (first) => {
     if (!first) {
       pendingFull = true
-      scheduleApply()
+      batch.schedule()
     } else if (list.state.value === 'ready') {
       // 第一次连上时列表已经取好：加载和连接建立之间可能漏了事件，核对一次计数。
       list.checkCounts()
     }
-  },
-  onStopped: (err) => {
-    if (err.status === 403 || err.status === 404) void project.refresh()
   },
 })
 
@@ -1165,10 +1043,8 @@ onBeforeUnmount(() => {
   alive = false
   images.clearVisible(CURRENT_OWNER)
   list.dispose()
-  if (applyTimer) clearTimeout(applyTimer)
   if (detailTimer) clearTimeout(detailTimer)
   detailSeq++
-  compareSeq++
 })
 
 // ---------- 显示 ----------
@@ -1246,17 +1122,7 @@ const emptyText = computed(() => {
         </PopoverContent>
       </Popover>
       <div class="flex-1" />
-      <span
-        v-if="project.current"
-        class="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-        :title="stream.state.value === 'open' ? '已连接实时更新' : '实时更新已断开，正在重连'"
-      >
-        <span
-          class="size-1.5 rounded-full"
-          :class="stream.state.value === 'open' ? 'bg-ok' : stream.state.value === 'stopped' ? 'bg-destructive' : 'animate-pulse bg-warn'"
-        />
-        {{ stream.state.value === 'open' ? '实时' : stream.state.value === 'stopped' ? '已断开' : '连接中…' }}
-      </span>
+      <StreamStatus v-if="project.current" :state="stream.state.value" />
     </header>
 
     <!-- 项目还在加载 / 没有能进的项目 -->
@@ -1485,7 +1351,7 @@ const emptyText = computed(() => {
             :right="compare.right"
             @status="onCompareStatus"
             @view="(v) => (view = v)"
-            @download="(side) => downloadOriginal(compare?.sids[side === 'left' ? 0 : 1])"
+            @download="(side) => downloadOriginal(side)"
           />
           <ImageViewer
             v-else
@@ -1544,7 +1410,6 @@ const emptyText = computed(() => {
           <span v-if="positionText">{{ positionText }}</span>
           <span v-if="current">v{{ current.version_no }}</span>
           <span v-if="spec">{{ spec }}</span>
-          <span v-if="!compare && modeLabel">{{ modeLabel }}</span>
           <span class="flex-1" />
           <span>{{ statusText }}</span>
           <span v-if="view?.zoom != null">{{ Math.round(view.zoom * 100) }}%</span>
@@ -1563,7 +1428,7 @@ const emptyText = computed(() => {
             :error="detail.error"
             :prev-reject="prevReject"
             :low-dpi-threshold="list.lowDpiThreshold.value"
-            :comparing="compare ? compare.sids : null"
+            :comparing="compareSids"
             :catalog-refresh="catalogRefresh"
             @compare="(l, r) => openCompare([l, r])"
             @download="downloadOriginal()"

@@ -25,9 +25,10 @@ import { shallowReactive, watch } from 'vue'
 import { toast } from 'vue-sonner'
 
 import { batchFiles, MAX_BATCH_IDS } from '@/api/files'
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import type { FileImageItem } from '@/api/types'
 import { useSessionStore } from '@/stores/session'
+import { chunk } from '@/lib/utils'
 
 /** 可见范围变化后等多久再发请求。 */
 export const IMAGE_INFO_DEBOUNCE_MS = 100
@@ -149,16 +150,14 @@ export const useImageInfoStore = defineStore('imageInfo', () => {
     const want = new Set([...pending, ...allVisible()])
     pending.clear()
     const ids = [...want].filter((id) => needsFetch(id, now))
-    const chunks: string[][] = []
-    for (let i = 0; i < ids.length; i += MAX_BATCH_IDS) chunks.push(ids.slice(i, i + MAX_BATCH_IDS))
-    await Promise.all(chunks.map(fetchChunk))
+    await Promise.all(chunk(ids, MAX_BATCH_IDS).map(fetchChunk))
   }
 
   async function fetchChunk(ids: string[]) {
     const gen = generation
     for (const id of ids) inflight.add(id)
     try {
-      const res = await batchFiles(ids, true)
+      const res = await batchFiles(ids, HANDLE_ALL)
       if (gen !== generation) return
       const now = Date.now()
       for (const item of res.items) {

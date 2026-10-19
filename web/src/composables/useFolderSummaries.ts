@@ -146,7 +146,7 @@ export function useFolderSummaries<C, S extends FolderSummaryShape<C>>(
   /**
    * 不再跟踪这些文件夹（看板收起时，M3-7 审查第 1 轮）：从"已加载"里去掉，丢掉它们自己的结果和直接放的计数，
    * 在途的结果回来也不再采用；以后的 refreshAll、按路径刷新都不再取它们，要用时重新 load。子树计数（父文件夹的
-   * children 也会给）和 parent 记录保留。根文件夹不受影响。useReviewCounts 不调用它。
+   * children 也会给）和 parent 记录保留。根文件夹不受影响。审核分配页不调用它。
    */
   function forget(ids: Iterable<string>) {
     for (const id of ids) {

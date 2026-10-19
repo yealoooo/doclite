@@ -16,11 +16,12 @@ import type { ProjectEvent, RescanItem } from '@/api/types'
 import FileCover from '@/components/files/FileCover.vue'
 import RescanDialog from '@/components/files/RescanDialog.vue'
 import { Button } from '@/components/ui/button'
-import { useProjectStream } from '@/composables/useProjectStream'
+import { useEventBatch, useProjectStream } from '@/composables/useProjectStream'
 import { type RescanTarget, targetOfRescan, withinProject } from '@/lib/rescan'
 import { rejectReasonLabel } from '@/lib/reviews'
 import { useImageInfoStore } from '@/stores/image-info'
 import { useProjectStore } from '@/stores/project'
+import { HANDLE_ALL } from '@/api/http'
 
 const project = useProjectStore()
 const images = useImageInfoStore()
@@ -43,7 +44,7 @@ async function reload() {
   if (state.value !== 'ready') state.value = 'loading'
   try {
     const limit = Math.min(MAX_RELOAD, Math.max(RESCAN_PAGE_SIZE, items.value.length))
-    const res = await listRescans(pid, { limit }, true)
+    const res = await listRescans(pid, { limit }, HANDLE_ALL)
     if (my !== seq) return
     items.value = res.items
     total.value = res.total
@@ -64,7 +65,7 @@ async function loadMore() {
   const my = seq
   loadingMore.value = true
   try {
-    const res = await listRescans(pid, { limit: RESCAN_PAGE_SIZE, cursor }, true)
+    const res = await listRescans(pid, { limit: RESCAN_PAGE_SIZE, cursor }, HANDLE_ALL)
     if (my !== seq) return
     // 翻页期间文件被移动时可能和前一页重复：按 file_id 去重。
     const seen = new Set(items.value.map((i) => i.file_id))
@@ -99,40 +100,26 @@ onMounted(() => {
 
 // ---------- 实时 ----------
 
-let timer: ReturnType<typeof setTimeout> | null = null
-let firstAt = 0
 const changed = new Set<string>()
-
-function schedule() {
-  const now = Date.now()
-  if (!firstAt) firstAt = now
-  if (timer) clearTimeout(timer)
-  timer = setTimeout(
-    () => {
-      timer = null
-      firstAt = 0
-      if (changed.size) images.invalidate(changed)
-      changed.clear()
-      void reload()
-    },
-    Math.min(300, Math.max(0, firstAt + 1000 - now)),
-  )
-}
+const batch = useEventBatch(() => {
+  if (changed.size) images.invalidate(changed)
+  changed.clear()
+  void reload()
+})
 
 const stream = useProjectStream(() => project.currentId, {
   onEvent: (e: ProjectEvent) => {
     if (e.type !== 'files.changed' && e.type !== 'folders.changed' && e.type !== 'resync') return
     e.file_ids?.forEach((id) => changed.add(id))
-    schedule()
+    batch.schedule()
   },
   onOpen: (first) => {
-    if (!first) schedule()
+    if (!first) batch.schedule()
   },
 })
 
 onBeforeUnmount(() => {
   seq++
-  if (timer) clearTimeout(timer)
   images.clearVisible('rescan-list')
 })
 

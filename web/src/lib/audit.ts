@@ -5,6 +5,8 @@
 // `{before, after}`（只放变了的字段），另有各动作自己的键（source、batch、cause、moved……）。
 
 import type { AuditLog } from '@/api/types'
+import { CATEGORY_TYPE_LABEL } from '@/lib/catalog'
+import { formatDateTime } from '@/lib/format'
 
 /** 对象类型的中文名。 */
 export const TARGET_LABELS: Record<string, string> = {
@@ -331,15 +333,7 @@ export function formatValue(key: string, v: unknown): string {
   return JSON.stringify(v)
 }
 
-const CATEGORY_TYPES: Record<string, string> = {
-  fonds: '全宗',
-  category: '门类',
-  year: '年度',
-  retention: '保管期限',
-  org: '机构',
-  custom: '自定义',
-  item: '条目',
-}
+const CATEGORY_TYPES: Record<string, string> = { ...CATEGORY_TYPE_LABEL, item: '条目' }
 
 /** 展开后的一行：字段、之前、之后（只有一个值的键 before 为 undefined）。 */
 export interface DetailRow {
@@ -482,13 +476,7 @@ export function describe(log: AuditLog): string {
   return changed()
 }
 
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
-}
-
 /** RFC 3339 → 本机时间 `YYYY-MM-DD HH:mm:ss`。 */
 export function formatAuditTime(value: string): string {
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return value
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  return formatDateTime(value, { seconds: true })
 }

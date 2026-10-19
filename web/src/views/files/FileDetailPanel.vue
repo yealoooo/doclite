@@ -12,7 +12,7 @@ import { FolderIcon, HistoryIcon, LoaderCircleIcon, PencilIcon } from '@lucide/v
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import { getFileLogs, getFileSnapshots } from '@/api/files'
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import type { FileEntry, FileLog, FolderItem, SnapshotItem } from '@/api/types'
 import CatalogPlacementInfo from '@/components/files/CatalogPlacementInfo.vue'
 import FileCover from '@/components/files/FileCover.vue'
@@ -29,7 +29,7 @@ import {
 } from '@/lib/files'
 import { useImageInfoStore } from '@/stores/image-info'
 
-import type { Entry } from './entries'
+import type { Entry } from '@/components/files/entries'
 
 const props = defineProps<{
   /** 最后点的条目（多选时也是它）。 */
@@ -95,7 +95,7 @@ async function load(fileId: string) {
   loading.value = true
   loadError.value = null
   try {
-    const [s, l] = await Promise.all([getFileSnapshots(fileId, true), getFileLogs(fileId, true)])
+    const [s, l] = await Promise.all([getFileSnapshots(fileId, HANDLE_ALL), getFileLogs(fileId, HANDLE_ALL)])
     if (my !== seq || file.value?.file_id !== fileId) return
     snapshots.value = s.snapshots
     logs.value = l.logs

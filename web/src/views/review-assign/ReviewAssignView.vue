@@ -12,7 +12,7 @@
 // - 撤回通过（Q8）：选中一个已通过的文件，负责人可以撤回；回到待审、重新分给通过它的人（他不能再审时改为待分配）。
 // - 当前文件夹在地址栏 `?folder=<id>`（没有就是根文件夹）；链接里的文件夹不在当前项目里时回到根文件夹。
 // - 实时（useProjectStream）：`files.changed` 只带文件直接所在的文件夹，祖先的计数按路径刷新
-//   （useReviewCounts.refreshForFolders）；超过 500 个文件的事件没有 file_ids，按文件夹整体刷新列表和详情。
+//   （useFolderSummaries.refreshForFolders）；超过 500 个文件的事件没有 file_ids，按文件夹整体刷新列表和详情。
 //   `folders.changed` 刷新树和全部已加载的计数；`resync`、断线重连后整体刷新。去抖：最后一条事件后 300 ms，
 //   最多等 1 秒（和 /files 一样）。
 //   停用、启用用户和项目授权不发项目事件："分给谁"在 files.changed 和窗口重新拿到焦点时刷新。
@@ -25,10 +25,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 
 import { getFolder } from '@/api/folders'
-import { errorMessage, isApiError } from '@/api/http'
+import { errorMessage, HANDLE_ALL, isApiError, isClientError, toastOpError } from '@/api/http'
 import {
   assignReviews,
   getFileReviews,
+  getReviewSummary,
   listOpenAssignments,
   listReviewers,
   MAX_REVIEW_FILE_IDS,
@@ -40,29 +41,34 @@ import {
 import type {
   AssignmentReviewer,
   FileEntry,
-  FolderItem,
   MyProject,
   ProjectEvent,
   ProjectReviewer,
+  ReviewStatusCounts,
+  ReviewSummary,
   ReviewStatus,
 } from '@/api/types'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import FolderTree from '@/components/files/FolderTree.vue'
 import { Button } from '@/components/ui/button'
+import StreamStatus from '@/components/app/StreamStatus.vue'
+import { useFolderBrowser } from '@/composables/useFolderBrowser'
 import { useFolderTree } from '@/composables/useFolderTree'
-import { useProjectStream } from '@/composables/useProjectStream'
+import { useEventBatch, useProjectStream } from '@/composables/useProjectStream'
 import { useSelection } from '@/composables/useSelection'
 import { REVIEW_STATUS } from '@/lib/files'
+import { formatCount } from '@/lib/format'
 import { useImageInfoStore } from '@/stores/image-info'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
-import { type Entry, toEntries, type ViewMode } from '@/views/files/entries'
-import FileGrid from '@/views/files/FileGrid.vue'
+import { type Entry, toEntries, useViewMode } from '@/components/files/entries'
+import FileGrid from '@/components/files/FileGrid.vue'
+import { chunk } from '@/lib/utils'
+import { useFolderSummaries } from '@/composables/useFolderSummaries'
 
 import AssignPanel from './AssignPanel.vue'
 import ReassignDialog from './ReassignDialog.vue'
-import { isClientError, reviewOpErrorText, toastOpError } from './review-errors'
-import { useReviewCounts } from './useReviewCounts'
+import { reviewOpErrorText } from './review-errors'
 
 const project = useProjectStore()
 const session = useSessionStore()
@@ -72,28 +78,15 @@ const router = useRouter()
 const tree = useFolderTree()
 /** 浏览目录树和文件（children 接口）要 files 或 scan 菜单。 */
 const canBrowse = computed(() => session.menuCodes.has('files') || session.menuCodes.has('scan'))
-const counts = useReviewCounts(() => project.currentId, { canLookup: () => canBrowse.value })
+/** 按文件夹的子树计数（review-summary，M2-5；树每加载一层取一次）。 */
+const counts = useFolderSummaries<ReviewStatusCounts, ReviewSummary>(() => project.currentId, getReviewSummary, {
+  canLookup: () => canBrowse.value,
+})
 /** 文件日志要 files 菜单。 */
 const canSeeLogs = computed(() => session.menuCodes.has('files'))
 
-// ---------- 视图（记在 localStorage，只是个人习惯，读写失败就用默认） ----------
-
-const VIEW_KEY = 'doclite.review-assign.view'
-function readView(): ViewMode {
-  try {
-    return window.localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'icons'
-  } catch {
-    return 'icons'
-  }
-}
-const view = ref<ViewMode>(readView())
-watch(view, (v) => {
-  try {
-    window.localStorage.setItem(VIEW_KEY, v)
-  } catch {
-    // 记不住就算了。
-  }
-})
+/** 视图（记在 localStorage，只是个人习惯，读写失败就用默认）。 */
+const view = useViewMode('doclite.review-assign.view')
 
 // ---------- 状态筛选 ----------
 
@@ -104,14 +97,46 @@ const statusFilter = ref<StatusFilter>('all')
 // ---------- 当前文件夹和列表 ----------
 
 const folderQuery = computed(() => (typeof route.query.folder === 'string' ? route.query.folder : null))
-const folder = ref<FolderItem | null>(null)
-const files = ref<FileEntry[] | null>(null)
-const listState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
-const listError = ref<string | null>(null)
-let listLoadedAt = 0
-let openSeq = 0
-let listSeq = 0
+/** 组件还在（卸载后在途的回调不再改地址）。 */
 let alive = true
+onBeforeUnmount(() => {
+  alive = false
+})
+
+const browser = useFolderBrowser({
+  tree,
+  rootId: () => project.current?.root_folder_id ?? null,
+  fetchFolder: (id) => getFolder(id, ['not_found']),
+  onSwitch() {
+    selection.clear()
+    problemReviewers.value = []
+    openReviewers.value = null
+  },
+  async accept(detail) {
+    if (detail.project_id === project.current?.id) return true
+    // 别的项目里的文件夹：回到当前项目的根（审核分配页不自动切项目）。
+    await router.replace({ query: {} })
+    return false
+  },
+  onOpened(detail) {
+    void counts.load(detail.id).catch(() => null)
+    void loadProblems()
+  },
+  async onOpenFailed(e, id) {
+    if (!isApiError(e, 'not_found') || id === project.current?.root_folder_id) return false
+    toast.error('文件夹不存在或已被删除，已回到根文件夹')
+    await router.replace({ query: {} })
+    return true
+  },
+  onGone(parent) {
+    toast.info('当前文件夹已被删除，已回到上一级')
+    void navigate(parent, true)
+  },
+  onListLoaded: (id) => void loadOpenReviewers(id),
+})
+const { folder, state: listState, error: listError } = browser
+/** 当前文件夹里直接放的文件（null：还没加载）。 */
+const files = computed(() => browser.children.value?.files ?? null)
 
 /** batch 说不存在、无权访问、已删除的文件从列表里移除（design §4.4）。 */
 const presentFiles = computed(() => (files.value ?? []).filter((f) => !images.isMissing(f.file_id)))
@@ -176,12 +201,7 @@ const busy = ref(false)
 const lastResult = ref<string | null>(null)
 
 function resetForProject(p: MyProject) {
-  openSeq++
-  listSeq++
-  folder.value = null
-  files.value = null
-  listState.value = 'idle'
-  listLoadedAt = 0
+  browser.reset()
   selection.clear()
   openReviewers.value = null
   lastResult.value = null
@@ -212,76 +232,10 @@ watch(
         return
       }
     }
-    await openFolder(q ?? p.root_folder_id)
+    await browser.open(q ?? p.root_folder_id)
   },
   { immediate: true },
 )
-
-/** 进入一个文件夹：取它本身和祖先链，展开树，加载计数、列表和不能再审的人。 */
-async function openFolder(id: string) {
-  const my = ++openSeq
-  const p = project.current
-  if (!p) return
-  if (folder.value?.id !== id) {
-    folder.value = null
-    files.value = null
-    selection.clear()
-    problemReviewers.value = []
-    openReviewers.value = null
-  }
-  listState.value = 'loading'
-  listError.value = null
-  try {
-    const detail = await getFolder(id, ['not_found'])
-    if (my !== openSeq) return
-    if (detail.project_id !== p.id) {
-      // 别的项目里的文件夹：回到当前项目的根（审核分配页不自动切项目）。
-      await router.replace({ query: {} })
-      return
-    }
-    folder.value = detail
-    tree.rename(p.root_folder_id, detail.ancestors[0]?.folder_name ?? detail.folder_name)
-    void tree.revealPath(detail)
-    void counts.load(detail.id).catch(() => null)
-    void loadProblems()
-    await reloadList()
-  } catch (e) {
-    if (my !== openSeq) return
-    if (isApiError(e, 'not_found') && id !== p.root_folder_id) {
-      toast.error('文件夹不存在或已被删除，已回到根文件夹')
-      await router.replace({ query: {} })
-      return
-    }
-    listState.value = 'error'
-    listError.value = errorMessage(e)
-  }
-}
-
-/** 重新加载当前文件夹里的文件（同时更新树上这一层）。 */
-async function reloadList() {
-  const id = folder.value?.id
-  if (!id) return
-  const my = ++listSeq
-  try {
-    const res = await tree.load(id)
-    if (my !== listSeq || folder.value?.id !== id) return
-    if (!res) {
-      folderGone(id)
-      return
-    }
-    files.value = res.files
-    listState.value = 'ready'
-    listLoadedAt = Date.now()
-    void loadOpenReviewers(id)
-  } catch (e) {
-    if (my !== listSeq) return
-    if (files.value) listState.value = 'ready'
-    else {
-      listState.value = 'error'
-      listError.value = errorMessage(e)
-    }
-  }
-}
 
 /**
  * 取当前文件夹里直接放的文件的 open 分配（审核人）。review-assignments 按所在文件夹的 path_code 排，文件夹自己的编码
@@ -295,7 +249,7 @@ async function loadOpenReviewers(id: string) {
     const map = new Map<string, string>()
     let cursor: string | null = null
     for (;;) {
-      const res = await listOpenAssignments(pid, { folder_id: id, limit: 2000, cursor }, true)
+      const res = await listOpenAssignments(pid, { folder_id: id, limit: 2000, cursor }, HANDLE_ALL)
       if (my !== openReviewersSeq || folder.value?.id !== id) return
       let passed = false
       for (const it of res.items) {
@@ -312,15 +266,6 @@ async function loadOpenReviewers(id: string) {
   } catch {
     if (my === openReviewersSeq) openReviewers.value = null
   }
-}
-
-let goneHandled: string | null = null
-function folderGone(id: string) {
-  if (!alive || goneHandled === id || folder.value?.id !== id) return
-  goneHandled = id
-  const parent = folder.value?.parent_id ?? null
-  toast.info('当前文件夹已被删除，已回到上一级')
-  void navigate(parent, true)
 }
 
 function navigate(id: string | null, replace = false) {
@@ -355,7 +300,7 @@ async function loadReviewers() {
   if (!pid) return
   const my = ++reviewersSeq
   try {
-    const res = await listReviewers(pid, true)
+    const res = await listReviewers(pid, HANDLE_ALL)
     if (my !== reviewersSeq || project.currentId !== pid) return
     reviewers.value = res.reviewers
     // 选中的人已经不能再分配了（停用、失去授权）：取消选中。
@@ -378,7 +323,7 @@ async function loadProblems() {
   if (!pid || !fid) return
   const my = ++problemsSeq
   try {
-    const res = await listOpenAssignments(pid, { folder_id: fid, limit: 1 }, true)
+    const res = await listOpenAssignments(pid, { folder_id: fid, limit: 1 }, HANDLE_ALL)
     if (my !== problemsSeq || folder.value?.id !== fid) return
     problemReviewers.value = res.reviewers.filter((r) => !r.can_review)
   } catch {
@@ -398,7 +343,7 @@ function afterChange(folderIds: string[], opts: { subtree?: boolean } = {}) {
   void loadReviewers()
   void loadProblems()
   // 当前文件夹的列表总是重新取（按子树改派、分配时，改动可能在子文件夹里，也可能在这里）。
-  if (folder.value) void reloadList()
+  if (folder.value) void browser.reload()
   detailRefresh.value++
 }
 
@@ -438,7 +383,7 @@ async function doAssignFolder() {
   }
   confirmFolder.loading = true
   try {
-    const res = await assignReviews(pid, { reviewer_id: reviewerId, folder_id: folderId }, true)
+    const res = await assignReviews(pid, { reviewer_id: reviewerId, folder_id: folderId }, HANDLE_ALL)
     confirmFolder.open = false
     lastResult.value = `已把「${name}」（含子文件夹）的 ${res.assigned} 个待分配文件分给 ${reviewer}${
       res.skipped ? `；另有 ${res.skipped} 个已分配或已审的没有改动` : ''
@@ -446,7 +391,7 @@ async function doAssignFolder() {
     toast.success(`已分配 ${res.assigned} 个给 ${reviewer}`)
     afterChange([folderId], { subtree: true })
   } catch (e) {
-    toastOpError(e)
+    toastOpError(e, reviewOpErrorText(e))
     // 400（计数过时、实际超过 1 万个，或审核人刚变得不合格）、404（文件夹没了）：前提已经不成立，
     // 关掉确认框、刷新计数；网络错误、5xx 留着确认框可以重试。
     if (isClientError(e)) {
@@ -460,10 +405,7 @@ async function doAssignFolder() {
 
 /** 按 500 个一批依次调用；中途出错时抛出（已经完成的批次由 onDone 记下）。 */
 async function inChunks<T>(ids: string[], call: (chunk: string[]) => Promise<T>, onDone: (r: T, n: number) => void) {
-  for (let i = 0; i < ids.length; i += MAX_REVIEW_FILE_IDS) {
-    const chunk = ids.slice(i, i + MAX_REVIEW_FILE_IDS)
-    onDone(await call(chunk), chunk.length)
-  }
+  for (const part of chunk(ids, MAX_REVIEW_FILE_IDS)) onDone(await call(part), part.length)
 }
 
 async function assignSelected() {
@@ -479,7 +421,7 @@ async function assignSelected() {
   try {
     await inChunks(
       ids,
-      (chunk) => assignReviews(pid, { reviewer_id: to.id, file_ids: chunk }, true),
+      (chunk) => assignReviews(pid, { reviewer_id: to.id, file_ids: chunk }, HANDLE_ALL),
       (r, n) => {
         assigned += r.assigned
         skipped += r.skipped
@@ -517,7 +459,7 @@ async function reassignSelected() {
   try {
     await inChunks(
       ids,
-      (chunk) => reassignMany(pid, { to_reviewer_id: to.id, file_ids: chunk }, true),
+      (chunk) => reassignMany(pid, { to_reviewer_id: to.id, file_ids: chunk }, HANDLE_ALL),
       (r, n) => {
         reassigned += r.reassigned
         skipped += r.skipped
@@ -544,7 +486,7 @@ async function reassignSingle(assignmentId: string, file: FileEntry) {
   if (!to || !cur || busy.value) return
   busy.value = true
   try {
-    const res = await reassignOne(assignmentId, to.id, true)
+    const res = await reassignOne(assignmentId, to.id, HANDLE_ALL)
     if (res.changed) {
       lastResult.value = `已把「${file.file_name}」改派给 ${to.display_name}`
       toast.success(lastResult.value)
@@ -574,14 +516,14 @@ async function doReopen() {
   if (!file || !folderId || confirmReopen.loading) return
   confirmReopen.loading = true
   try {
-    const res = await reopenFile(file.file_id, true)
+    const res = await reopenFile(file.file_id, HANDLE_ALL)
     confirmReopen.open = false
     if (res.reviewer_id) {
       // 审核人的名字：右栏的列表可能是旧的（他刚被重新启用、授权），取不到时查这个文件的分配记录。
       let name = reviewers.value?.find((r) => r.id === res.reviewer_id)?.display_name
       if (!name) {
         try {
-          name = (await getFileReviews(file.file_id, true)).reviews.find((r) => r.status === 'open')?.reviewer_name
+          name = (await getFileReviews(file.file_id, HANDLE_ALL)).reviews.find((r) => r.status === 'open')?.reviewer_name
         } catch {
           // 只是为了提示里的名字。
         }
@@ -626,18 +568,8 @@ const pendingFiles = new Set<string>()
 /** folders.changed 带的文件夹（树要刷新）。 */
 const pendingTreeFolders = new Set<string>()
 let pendingFull = false
-let applyTimer: ReturnType<typeof setTimeout> | null = null
-let firstPendingAt = 0
-const EVENT_DEBOUNCE_MS = 300
-const EVENT_MAX_WAIT_MS = 1000
-
-function scheduleApply() {
-  const now = Date.now()
-  if (!firstPendingAt) firstPendingAt = now
-  if (applyTimer) clearTimeout(applyTimer)
-  const wait = Math.min(EVENT_DEBOUNCE_MS, Math.max(0, firstPendingAt + EVENT_MAX_WAIT_MS - now))
-  applyTimer = setTimeout(() => void applyEvents(), wait)
-}
+// 去抖：最后一条事件后 300 ms，最多等 1 秒；连续不断（上传、批量分配期间）时最多等 3 秒（children 只能整个文件夹重取）。
+const batch = useEventBatch(applyEvents, { burstMaxWaitMs: 3000 })
 
 function onEvent(e: ProjectEvent) {
   if (e.type === 'resync') pendingFull = true
@@ -650,12 +582,10 @@ function onEvent(e: ProjectEvent) {
       pendingTreeFolders.add(id)
     })
   } else return
-  scheduleApply()
+  batch.schedule()
 }
 
 async function applyEvents() {
-  applyTimer = null
-  firstPendingAt = 0
   if (pendingFull) {
     pendingFull = false
     pendingFolders.clear()
@@ -691,7 +621,7 @@ async function applyEvents() {
     !!cur && (folders.has(cur.id) || !!files.value?.some((f) => fileIds.has(f.file_id)))
   if (treeFolders.size) void tree.refresh(treeFolders, listAffected ? cur?.id : null)
   if (!cur) return
-  if (listAffected) void reloadList()
+  if (listAffected) void browser.reload()
   // 右栏：事件带了 file_ids 时看有没有选中的那个文件；超过 500 个时只带 folder_ids，看当前文件夹。
   const single = selectedFiles.value.length === 1 ? selectedFiles.value[0]! : null
   if (single && (fileIds.has(single.file_id) || (fileIds.size === 0 && folders.has(cur.id)))) detailRefresh.value++
@@ -710,11 +640,11 @@ async function refreshAll() {
   void loadProblems()
   if (!folder.value) {
     const p = project.current
-    if (p && listState.value !== 'loading') void openFolder(folderQuery.value ?? p.root_folder_id)
+    if (p && listState.value !== 'loading') void browser.open(folderQuery.value ?? p.root_folder_id)
     await Promise.all([tree.refreshAll(), counts.refreshAll()])
     return
   }
-  await Promise.all([tree.refreshAll(folder.value.id), reloadList(), counts.refreshAll()])
+  await Promise.all([tree.refreshAll(folder.value.id), browser.reload(), counts.refreshAll()])
 }
 
 const stream = useProjectStream(() => project.currentId, {
@@ -722,18 +652,15 @@ const stream = useProjectStream(() => project.currentId, {
   onOpen: (first) => {
     if (!first) {
       pendingFull = true
-      scheduleApply()
+      batch.schedule()
     } else if (!canBrowse.value) {
       void counts.refreshAll()
-    } else if (listLoadedAt > 0) {
+    } else if (browser.loaded()) {
       // 第一次连上时页面已经加载好了：补刷一次（加载和连接建立之间可能漏了事件）。
-      void reloadList()
+      void browser.reload()
       void counts.refreshAll()
       void loadReviewers()
     }
-  },
-  onStopped: (err) => {
-    if (err.status === 403 || err.status === 404) void project.refresh()
   },
 })
 
@@ -748,18 +675,6 @@ useEventListener(window, 'focus', () => {
   void loadProblems()
 })
 
-onBeforeUnmount(() => {
-  alive = false
-  openSeq++
-  listSeq++
-  if (applyTimer) clearTimeout(applyTimer)
-  applyTimer = null
-})
-
-/** 数字加千分位。 */
-function n(v: number | undefined | null): string {
-  return v == null ? '…' : v.toLocaleString()
-}
 </script>
 
 <template>
@@ -781,21 +696,11 @@ function n(v: number | undefined | null): string {
           :data-count="rootCounts?.[s] ?? ''"
         >
           <span class="size-1.5 rounded-full" :class="REVIEW_STATUS[s].dot" />
-          {{ REVIEW_STATUS[s].label }} {{ n(rootCounts?.[s]) }}
+          {{ REVIEW_STATUS[s].label }} {{ formatCount(rootCounts?.[s]) }}
         </span>
       </div>
       <div class="flex-1" />
-      <span
-        v-if="project.current"
-        class="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-        :title="stream.state.value === 'open' ? '已连接实时更新' : '实时更新已断开，正在重连'"
-      >
-        <span
-          class="size-1.5 rounded-full"
-          :class="stream.state.value === 'open' ? 'bg-ok' : stream.state.value === 'stopped' ? 'bg-destructive' : 'animate-pulse bg-warn'"
-        />
-        {{ stream.state.value === 'open' ? '实时' : stream.state.value === 'stopped' ? '已断开' : '连接中…' }}
-      </span>
+      <StreamStatus v-if="project.current" :state="stream.state.value" />
       <Button
         v-if="project.current && canBrowse"
         variant="outline"
@@ -904,7 +809,7 @@ function n(v: number | undefined | null): string {
         <div class="flex min-h-0 flex-1 flex-col" data-testid="file-area">
           <div v-if="listState === 'error' && !files" class="flex flex-1 flex-col items-center justify-center gap-3 text-sm">
             <p class="text-destructive">{{ listError ?? '加载失败' }}</p>
-            <Button variant="outline" size="sm" @click="openFolder(folderQuery ?? project.current.root_folder_id)">重试</Button>
+            <Button variant="outline" size="sm" @click="browser.open(folderQuery ?? project.current.root_folder_id)">重试</Button>
           </div>
           <div v-else-if="!files" class="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
             <LoaderCircleIcon class="size-4 animate-spin" />正在加载…

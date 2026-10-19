@@ -2,7 +2,7 @@
 // 分配角色：整体替换用户的角色（PUT /api/system/users/{id}/roles）。
 import { computed, ref, watch } from 'vue'
 
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import { setUserRoles } from '@/api/system'
 import type { RoleItem, UserItem } from '@/api/types'
 import { Button } from '@/components/ui/button'
@@ -47,7 +47,7 @@ async function submit() {
   error.value = ''
   saving.value = true
   try {
-    const saved = await setUserRoles(props.user.id, selected.value, true)
+    const saved = await setUserRoles(props.user.id, selected.value, HANDLE_ALL)
     emit('saved', saved)
     open.value = false
   } catch (err) {

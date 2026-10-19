@@ -7,7 +7,8 @@
 //   和壳的 `net/stream.rs`（DEFAULT_IDLE_TIMEOUT 45 秒）一致。
 // - 断开期间的事件不补发：每次重新连上都调 `onOpen(false)`，调用方应整体刷新一次。
 //   第一次连上调 `onOpen(true)`（页面的首次加载可能早于连接建立，调用方可以按需补刷一次）。
-// - 401（会话失效，请求封装会跳登录页）、403、404（项目进不去了）不再重连，调 `onStopped(err)`。
+// - 401（会话失效，请求封装会跳登录页）、403、404（项目进不去了）不再重连，调 `onStopped(err)`；没给 onStopped 时
+//   403、404 刷新项目列表（切换器会换到还能进的项目，页面随之重置）。
 // - 项目 id 变了（切换项目）或组件卸载时断开；离开页面（pagehide）时断开，从往返缓存回来（pageshow persisted）
 //   时重新连接，按重连处理（`onOpen(false)`）。
 //
@@ -17,12 +18,15 @@
 //     onStopped: (err) => …,          // 可选
 //   })
 //   stream.state.value                // 'idle' | 'connecting' | 'open' | 'retrying' | 'stopped'
+//
+// 事件多的页面用 `useEventBatch(flush)` 合批：事件先记进页面自己的待处理集合，`schedule()` 之后由 flush 一次处理。
 
 import { getCurrentScope, onScopeDispose, ref, watch } from 'vue'
 
 import { type ApiError, isApiError } from '@/api/http'
 import { openStream } from '@/api/stream'
 import type { ProjectEvent } from '@/api/types'
+import { useProjectStore } from '@/stores/project'
 
 export type StreamState = 'idle' | 'connecting' | 'open' | 'retrying' | 'stopped'
 
@@ -30,7 +34,7 @@ export interface ProjectStreamHandlers {
   onEvent: (event: ProjectEvent) => void
   /** 连接建立：first 为 true 表示这个项目的第一次连接，否则是断线后重新连上。 */
   onOpen?: (first: boolean) => void
-  /** 因 401、403、404 停止重连。 */
+  /** 因 401、403、404 停止重连。默认：403、404 时刷新项目列表。 */
   onStopped?: (err: ApiError) => void
 }
 
@@ -60,6 +64,12 @@ function isFatal(e: unknown): e is ApiError {
 }
 
 export function useProjectStream(projectId: () => string | null, handlers: ProjectStreamHandlers) {
+  const project = useProjectStore()
+  const onStopped =
+    handlers.onStopped ??
+    ((err: ApiError) => {
+      if (err.status === 403 || err.status === 404) void project.refresh()
+    })
   const state = ref<StreamState>('idle')
   let controller: AbortController | null = null
 
@@ -121,7 +131,7 @@ export function useProjectStream(projectId: () => string | null, handlers: Proje
         if (signal.aborted) return
         if (isFatal(e)) {
           state.value = 'stopped'
-          handlers.onStopped?.(e)
+          onStopped(e)
           return
         }
       }
@@ -170,4 +180,82 @@ export function useProjectStream(projectId: () => string | null, handlers: Proje
   }
 
   return { state, stop }
+}
+
+export interface EventBatchOptions {
+  /** 最后一次 schedule 之后等多久（毫秒）。默认 300。 */
+  debounceMs?: number
+  /** 从第一次 schedule 起最多等多久（毫秒）。默认 1000。 */
+  maxWaitMs?: number
+  /**
+   * 连续不断地有事件时（上一轮刚跑完不到 2 秒又来了，例如上传、批量操作期间）最多等多久（毫秒），让重取少一些。
+   * 默认同 maxWaitMs。
+   */
+  burstMaxWaitMs?: number
+}
+
+/** 两轮之间不到这么久算"连续不断"。 */
+const BURST_WINDOW_MS = 2000
+
+/**
+ * 实时事件合批：`schedule()` 之后，最后一次调用起 debounceMs、从第一次起最多 maxWaitMs 跑一次 `flush`。flush 正在跑时
+ * 不叠加：跑完马上再来一轮（这期间记下的事件一起处理）。组件卸载时取消。
+ */
+export function useEventBatch(flush: () => void | Promise<void>, opts: EventBatchOptions = {}) {
+  const debounceMs = opts.debounceMs ?? 300
+  const maxWaitMs = opts.maxWaitMs ?? 1000
+  const burstMaxWaitMs = opts.burstMaxWaitMs ?? maxWaitMs
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let firstAt = 0
+  let lastRunAt = 0
+  let running = false
+  let again = false
+  let disposed = false
+
+  function schedule() {
+    if (disposed) return
+    const now = Date.now()
+    if (!firstAt) firstAt = now
+    if (timer) clearTimeout(timer)
+    const max = now - lastRunAt < BURST_WINDOW_MS ? burstMaxWaitMs : maxWaitMs
+    timer = setTimeout(() => void run(), Math.min(debounceMs, Math.max(0, firstAt + max - now)))
+  }
+
+  async function run() {
+    timer = null
+    firstAt = 0
+    if (disposed) return
+    if (running) {
+      again = true
+      return
+    }
+    running = true
+    try {
+      await flush()
+    } catch {
+      // 单个请求的失败各自处理过了。
+    } finally {
+      running = false
+      lastRunAt = Date.now()
+      if (again && !disposed) {
+        again = false
+        void run()
+      }
+    }
+  }
+
+  function cancel() {
+    if (timer) clearTimeout(timer)
+    timer = null
+    firstAt = 0
+  }
+
+  if (getCurrentScope()) {
+    onScopeDispose(() => {
+      disposed = true
+      cancel()
+    })
+  }
+
+  return { schedule, cancel }
 }

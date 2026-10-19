@@ -5,7 +5,7 @@
 // 同名返回 409 `conflict`；错误都显示在对话框里。
 import { ref, watch } from 'vue'
 
-import { errorMessage, request } from '@/api/http'
+import { errorMessage, HANDLE_ALL, request } from '@/api/http'
 import type { FolderItem } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import {
@@ -65,7 +65,7 @@ async function submit() {
     const folder = await request<FolderItem>('/api/folders', {
       method: 'POST',
       body: { parent_id: props.parent.id, folder_name: folderName, remark: remark.value.trim() || undefined },
-      handle: true,
+      handle: HANDLE_ALL,
     })
     emit('created', folder)
     open.value = false

@@ -11,14 +11,11 @@
 //   当前文件夹被删掉时回到上一级。
 // - 整理（M1-12，useFileActions）：新建文件夹、改名、改备注、移动、复制、删除、下载原图；右键菜单包在主区外面，
 //   按单元格的 data-key 定位条目（右键没选中的条目时先单选它）；底部的选择栏放同样的操作；F2、Delete、Ctrl/⌘+C。
-// - 上传（M1-12）：浏览器里两个按钮打开文件选择框（上传文件夹用 webkitdirectory），交给 stores/uploads.ts，
-//   结果列表浮在主区右下角（UploadPanel）；壳里改调 `pick_and_enqueue_upload`（上传进度在 /scan 页看）。
-//   截图脚本可以在两个隐藏的 <input> 上派发 `doclite-inject-files` 事件（detail 是 File[]，上传文件夹的要带
-//   webkitRelativePath），走和选择框完全相同的代码。
+// - 上传（M1-12）：只在客户端里，调 `pick_and_enqueue_upload`（上传进度在 /scan 页看）；浏览器里提示"请在客户端中使用"。
 // - 查看原图（M2-4，Q11）：文件的右键菜单"查看原图"打开全屏的 OriginalViewerDialog（OpenSeadragon），可以在当前文件夹的
 //   文件之间切换、对比上一版。
 // - 重扫件（M2-7）：文件夹摘要那一行的"只看已驳回"筛选（只筛当前文件夹直接放的文件，子文件夹照常显示）；一个已驳回的
-//   文件在右键菜单和选择栏里有"上传重扫件"（RescanDialog：浏览器里生成封面后 upload()，壳里走 `pick_and_rescan`）。
+//   文件在右键菜单和选择栏里有"上传重扫件"（RescanDialog：客户端里走 `pick_and_rescan`）。
 // - 封存（M9，requirements 5.5"封存"、5.9"/files 也显示同样的横条和状态"）：打开的文件夹已归档时顶部横条（SealBanner：
 //   紫色已封存、橙色修改中）。已封存的文件夹里新建文件夹、上传、复制、改名、移动、删除的按钮和右键菜单置灰并写原因
 //   （重扫、看图、下载、改备注照常）；子文件夹本身封存时它的改名、移动、删除置灰。有 catalog 菜单的人横条上能直接
@@ -48,8 +45,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 
 import { getFolder } from '@/api/folders'
-import { errorMessage, isApiError } from '@/api/http'
-import type { FileEntry, FolderChildren, FolderItem, MyProject, ProjectEvent } from '@/api/types'
+import { isApiError } from '@/api/http'
+import type { FileEntry, ProjectEvent } from '@/api/types'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import FolderPicker, { type PickedFolder } from '@/components/files/FolderPicker.vue'
 import FolderTree from '@/components/files/FolderTree.vue'
@@ -64,11 +61,11 @@ import {
   ContextMenuShortcut,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
+import StreamStatus from '@/components/app/StreamStatus.vue'
+import { useFolderBrowser } from '@/composables/useFolderBrowser'
 import { useFolderTree } from '@/composables/useFolderTree'
-import { useProjectStream } from '@/composables/useProjectStream'
+import { useEventBatch, useProjectStream } from '@/composables/useProjectStream'
 import { useSelection } from '@/composables/useSelection'
-import { isTauri } from '@/lib/client'
-import { UPLOAD_ACCEPT } from '@/lib/upload-plan'
 import { useImageInfoStore } from '@/stores/image-info'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
@@ -78,12 +75,11 @@ import SealBanner from '@/components/catalog/SealBanner.vue'
 import UnsealDialog from '@/components/catalog/UnsealDialog.vue'
 import type { ArchiveItem } from '@/api/types'
 
-import { type Entry, toEntries, type ViewMode } from './entries'
+import { type Entry, toEntries, useViewMode } from '@/components/files/entries'
 import FileDetailPanel from './FileDetailPanel.vue'
-import FileGrid, { type GridCommand } from './FileGrid.vue'
+import FileGrid, { type GridCommand } from '@/components/files/FileGrid.vue'
 import FolderFormDialog from './FolderFormDialog.vue'
 import RenameFileDialog from './RenameFileDialog.vue'
-import UploadPanel from './UploadPanel.vue'
 import { useFileActions } from './useFileActions'
 // ---- 查看原图（M2-4）用到的，单独引入（不改上面已有的引入） ----
 import { ImageIcon } from '@lucide/vue'
@@ -102,40 +98,59 @@ const route = useRoute()
 const router = useRouter()
 const tree = useFolderTree()
 
-// ---------- 视图（记在 localStorage，只是个人习惯，读写失败就用默认） ----------
-
-const VIEW_KEY = 'doclite.files.view'
-function readView(): ViewMode {
-  try {
-    return window.localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'icons'
-  } catch {
-    return 'icons'
-  }
-}
-const view = ref<ViewMode>(readView())
-watch(view, (v) => {
-  try {
-    window.localStorage.setItem(VIEW_KEY, v)
-  } catch {
-    // 记不住就算了。
-  }
-})
+/** 视图（记在 localStorage，只是个人习惯，读写失败就用默认）。 */
+const view = useViewMode('doclite.files.view')
 
 // ---------- 当前文件夹和列表 ----------
 
 const folderQuery = computed(() => (typeof route.query.folder === 'string' ? route.query.folder : null))
-const folder = ref<FolderItem | null>(null)
-const children = ref<FolderChildren | null>(null)
-const listState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
-const listError = ref<string | null>(null)
-/** 列表最近一次加载完成的时间（0 表示还没加载过）。 */
-let listLoadedAt = 0
-let openSeq = 0
-let listSeq = 0
-/** 组件还在（卸载后在途的回调不再切项目、改地址；卸载时 openSeq、listSeq 也会加一，让在途的结果作废）。 */
+/** 组件还在（卸载后在途的回调不再切项目、改地址）。 */
 let alive = true
-/** 打开文件夹的过程中（面包屑还没取到）收到了事件。 */
-let eventsWhileOpening = false
+onBeforeUnmount(() => {
+  alive = false
+})
+
+/** 切到另一个项目是因为打开了那个项目里的文件夹（不是用户在切换器里换的）。 */
+let adopting = false
+let lastProjectId: string | null = null
+
+const browser = useFolderBrowser({
+  tree,
+  rootId: () => project.current?.root_folder_id ?? null,
+  fetchFolder: (id) => getFolder(id, ['not_found', 'forbidden']),
+  onSwitch: () => selection.clear(),
+  async accept(detail, current) {
+    if (detail.project_id === project.current?.id) return true
+    // 别的项目里的文件夹：能进那个项目就切过去（列表里没有时先刷新一次项目列表，可能刚被授权）。
+    let other = project.projects.find((x) => x.id === detail.project_id)
+    if (!other) {
+      await project.refresh()
+      if (!current()) return false
+      other = project.projects.find((x) => x.id === detail.project_id)
+    }
+    if (other) {
+      adopting = true
+      project.select(other.id)
+    } else {
+      await router.replace({ query: {} })
+    }
+    return false
+  },
+  async onOpenFailed(e, id) {
+    // 不存在、已删除、进不了它所在的项目（403）：都回到当前项目的根文件夹。
+    // 403 的提示由请求封装的全局处理弹出（它会先刷新菜单），这里不再重复提示。
+    const gone = isApiError(e, 'not_found') || isApiError(e, 'forbidden')
+    if (!gone || id === project.current?.root_folder_id) return false
+    if (isApiError(e, 'not_found')) toast.error('文件夹不存在或已被删除，已回到根文件夹')
+    await router.replace({ query: {} })
+    return true
+  },
+  onGone(parent) {
+    toast.info('当前文件夹已被删除，已回到上一级')
+    void navigate(parent, true)
+  },
+})
+const { folder, children, crumbs, state: listState, error: listError } = browser
 
 /** M2-7：只看已驳回的文件（换项目时关掉，换文件夹时保留）。 */
 const rejectedOnly = ref(false)
@@ -164,32 +179,11 @@ const focusEntry = computed(() => {
   return (k && entryByKey.value.get(k)) || selectedEntries.value[selectedEntries.value.length - 1] || null
 })
 
-/** 面包屑：根 → … → 当前。 */
-const crumbs = computed(() =>
-  folder.value
-    ? [...folder.value.ancestors, { id: folder.value.id, folder_name: folder.value.folder_name, path_code: folder.value.path_code }]
-    : [],
-)
 /** 当前文件夹的位置（不含根）：`/2025 文书档案/盒 001`；根是 `/`。 */
 const location = computed(() => `/${crumbs.value.slice(1).map((c) => c.folder_name).join('/')}`)
 
 /** 详情面板重新取快照和日志的信号。 */
 const detailRefresh = ref(0)
-
-function resetForProject(p: MyProject) {
-  openSeq++
-  listSeq++
-  folder.value = null
-  children.value = null
-  listState.value = 'idle'
-  listLoadedAt = 0
-  selection.clear()
-  tree.reset({ id: p.root_folder_id, folder_name: p.project_name })
-}
-
-/** 切到另一个项目是因为打开了那个项目里的文件夹（不是用户在切换器里换的）。 */
-let adopting = false
-let lastProjectId: string | null = null
 
 watch(
   [() => project.current?.id ?? null, folderQuery],
@@ -203,124 +197,19 @@ watch(
       const switchedByUser = lastProjectId !== null && !adopting
       lastProjectId = pid
       adopting = false
-      resetForProject(p)
+      browser.reset()
+      selection.clear()
+      tree.reset({ id: p.root_folder_id, folder_name: p.project_name })
       if (switchedByUser && q) {
         // 用户换了项目：回到新项目的根文件夹（地址变了会再进来一次）。
         await router.replace({ query: {} })
         return
       }
     }
-    await openFolder(q ?? p.root_folder_id)
+    await browser.open(q ?? p.root_folder_id)
   },
   { immediate: true },
 )
-
-/** 进入一个文件夹：取它本身和祖先链（面包屑），展开树，加载列表。 */
-async function openFolder(id: string) {
-  const my = ++openSeq
-  const p = project.current
-  if (!p) return
-  if (folder.value?.id !== id) {
-    folder.value = null
-    children.value = null
-    // 列表清空后 FileGrid 会重新挂载，滚动位置自然回到顶部。
-    selection.clear()
-  }
-  listState.value = 'loading'
-  listError.value = null
-  eventsWhileOpening = false
-  try {
-    const detail = await getFolder(id, ['not_found', 'forbidden'])
-    if (my !== openSeq) return
-    if (detail.project_id !== p.id) {
-      // 别的项目里的文件夹：能进那个项目就切过去（列表里没有时先刷新一次项目列表，可能刚被授权）。
-      let other = project.projects.find((x) => x.id === detail.project_id)
-      if (!other) {
-        await project.refresh()
-        if (my !== openSeq) return
-        other = project.projects.find((x) => x.id === detail.project_id)
-      }
-      if (other) {
-        adopting = true
-        project.select(other.id)
-      } else {
-        await router.replace({ query: {} })
-      }
-      return
-    }
-    folder.value = detail
-    tree.rename(p.root_folder_id, detail.ancestors[0]?.folder_name ?? detail.folder_name)
-    void tree.revealPath(detail)
-    await reloadList()
-    if (my === openSeq && eventsWhileOpening) {
-      eventsWhileOpening = false
-      void reloadList()
-      void reloadBreadcrumb()
-    }
-  } catch (e) {
-    if (my !== openSeq) return
-    // 不存在、已删除、进不了它所在的项目（403）：都回到当前项目的根文件夹。
-    // 403 的提示由请求封装的全局处理弹出（它会先刷新菜单），这里不再重复提示。
-    const gone = isApiError(e, 'not_found') || isApiError(e, 'forbidden')
-    if (gone && id !== p.root_folder_id) {
-      if (isApiError(e, 'not_found')) toast.error('文件夹不存在或已被删除，已回到根文件夹')
-      await router.replace({ query: {} })
-      return
-    }
-    listState.value = 'error'
-    listError.value = errorMessage(e)
-  }
-}
-
-/** 重新加载当前文件夹的子项（同时更新树上这一层）。 */
-async function reloadList() {
-  const id = folder.value?.id
-  if (!id) return
-  const my = ++listSeq
-  try {
-    const res = await tree.load(id)
-    if (my !== listSeq || folder.value?.id !== id) return
-    if (!res) {
-      folderGone(id)
-      return
-    }
-    children.value = res
-    listState.value = 'ready'
-    listLoadedAt = Date.now()
-  } catch (e) {
-    if (my !== listSeq) return
-    // 已经有列表时（刷新失败）保留旧的，错误已由请求封装提示。
-    if (children.value) listState.value = 'ready'
-    else {
-      listState.value = 'error'
-      listError.value = errorMessage(e)
-    }
-  }
-}
-
-/** 重新取面包屑（当前文件夹或祖先改名、移动）。 */
-async function reloadBreadcrumb() {
-  const id = folder.value?.id
-  if (!id) return
-  try {
-    const detail = await getFolder(id, ['not_found'])
-    if (folder.value?.id !== id) return
-    folder.value = detail
-    if (project.current) tree.rename(project.current.root_folder_id, detail.ancestors[0]?.folder_name ?? detail.folder_name)
-  } catch (e) {
-    if (isApiError(e, 'not_found')) folderGone(id)
-  }
-}
-
-let goneHandled: string | null = null
-/** 当前文件夹被删掉了：回到上一级（上一级也没了会再回到根）。 */
-function folderGone(id: string) {
-  if (!alive || goneHandled === id || folder.value?.id !== id) return
-  goneHandled = id
-  const parent = folder.value?.parent_id ?? null
-  toast.info('当前文件夹已被删除，已回到上一级')
-  void navigate(parent && parent !== project.current?.root_folder_id ? parent : null, true)
-}
 
 function navigate(id: string | null, replace = false) {
   if (!alive) return Promise.resolve()
@@ -337,19 +226,9 @@ function onOpen(entry: Entry) {
 const pendingFolders = new Set<string>()
 const pendingFiles = new Set<string>()
 let pendingFull = false
-let applyTimer: ReturnType<typeof setTimeout> | null = null
-let firstPendingAt = 0
-/** 去抖：最后一条事件后 300 ms 刷新，但从第一条起最多等 1 秒。 */
-const EVENT_DEBOUNCE_MS = 300
-const EVENT_MAX_WAIT_MS = 1000
-
-function scheduleApply() {
-  const now = Date.now()
-  if (!firstPendingAt) firstPendingAt = now
-  if (applyTimer) clearTimeout(applyTimer)
-  const wait = Math.min(EVENT_DEBOUNCE_MS, Math.max(0, firstPendingAt + EVENT_MAX_WAIT_MS - now))
-  applyTimer = setTimeout(() => void applyEvents(), wait)
-}
+// 去抖：最后一条事件后 300 ms 刷新，但从第一条起最多等 1 秒；连续不断（上传、批量操作期间）时最多等 3 秒。
+// children 接口只能整个文件夹重取（没有按 file_id 取行的接口），所以事件多时少取几次。
+const batch = useEventBatch(applyEvents, { burstMaxWaitMs: 3000 })
 
 /**
  * M3-7：详情面板的归类信息。`catalog.changed` 不带文件（档号、题名、页序可能变了），收到就让面板重新取当前这个文件的
@@ -366,12 +245,10 @@ function onEvent(e: ProjectEvent) {
     catalogRefresh.value++
     return
   } else return
-  scheduleApply()
+  batch.schedule()
 }
 
 async function applyEvents() {
-  applyTimer = null
-  firstPendingAt = 0
   if (pendingFull) {
     pendingFull = false
     pendingFolders.clear()
@@ -394,27 +271,14 @@ async function applyEvents() {
     (files.has(focused.file.file_id) || (files.size === 0 && !!cur && folders.has(cur.id)))
   )
     detailRefresh.value++
-  const listAffected =
-    !!cur &&
-    (folders.has(cur.id) ||
-      !!children.value?.folders.some((f) => folders.has(f.id)) ||
-      !!children.value?.files.some((f) => files.has(f.file_id)))
-  // 当前文件夹由 reloadList 重新加载（它同时更新树上这一层），树上不重复请求。
-  void tree.refresh(folders, listAffected ? cur?.id : null)
-  if (!cur) {
-    // 当前文件夹正在打开（面包屑还没取到）：打开完成后补刷一次。
-    if (listState.value === 'loading') eventsWhileOpening = true
-    return
-  }
-  if (listAffected) void reloadList()
-  if (crumbs.value.some((c) => folders.has(c.id))) void reloadBreadcrumb()
+  browser.applyChanges(folders, files)
 }
 
 /** 当前文件夹还没打开成功（首次加载失败）：重新打开它；正在加载时什么也不做。 */
 function reopenIfFailed(): boolean {
   if (folder.value) return false
   const p = project.current
-  if (p && listState.value !== 'loading') void openFolder(folderQuery.value ?? p.root_folder_id)
+  if (p && listState.value !== 'loading') void browser.open(folderQuery.value ?? p.root_folder_id)
   return true
 }
 
@@ -426,7 +290,7 @@ async function refreshAll() {
     await tree.refreshAll()
     return
   }
-  await Promise.all([tree.refreshAll(folder.value?.id), reloadList(), reloadBreadcrumb()])
+  await Promise.all([tree.refreshAll(folder.value?.id), browser.reload(), browser.reloadCrumb()])
 }
 
 const stream = useProjectStream(() => project.currentId, {
@@ -435,28 +299,16 @@ const stream = useProjectStream(() => project.currentId, {
     if (!first) {
       // 重连成功（含从往返缓存回来）：断开期间的事件不会补发，整体刷新。
       pendingFull = true
-      scheduleApply()
-    } else if (listLoadedAt > 0) {
+      batch.schedule()
+    } else if (browser.loaded()) {
       // 第一次连上时列表已经加载好了：补刷列表和树（加载和连接建立之间可能漏了事件）。
-      void reloadList()
+      void browser.reload()
       void tree.refreshAll(folder.value?.id)
     } else if (listState.value === 'error') {
       // 首次加载失败（例如 server 刚恢复）：重新打开。
       reopenIfFailed()
     }
   },
-  // 403、404：这个项目已经进不去了。刷新项目列表，切换器会换到还能进的项目（页面随之重置）。
-  onStopped: (err) => {
-    if (err.status === 403 || err.status === 404) void project.refresh()
-  },
-})
-
-onBeforeUnmount(() => {
-  alive = false
-  openSeq++
-  listSeq++
-  if (applyTimer) clearTimeout(applyTimer)
-  applyTimer = null
 })
 
 // ---------- 对话框 ----------
@@ -481,16 +333,10 @@ onMounted(() => {
 
 /** 操作成功后立即刷新受影响的文件夹（列表、树、面包屑）；SSE 的事件随后也会到。 */
 function afterChange(ids: string[]) {
-  const cur = folder.value
-  const set = new Set(ids)
-  const listToo = !!cur && set.has(cur.id)
-  void tree.refresh(set, listToo ? cur.id : null)
-  if (listToo) void reloadList()
-  if (crumbs.value.some((c) => set.has(c.id))) void reloadBreadcrumb()
+  browser.applyChanges(new Set(ids))
 }
 
 const actions = useFileActions({
-  project: () => project.current,
   folder: () => folder.value,
   selected: () => selectedEntries.value,
   selection,
@@ -499,7 +345,6 @@ const actions = useFileActions({
   navigate: (id) => void navigate(id),
 })
 
-const inShell = isTauri()
 /** 快捷键提示：macOS 上是 ⌘。 */
 const modKey = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl'
 
@@ -528,42 +373,6 @@ function onGridCommand(cmd: GridCommand) {
   else if (cmd === 'delete') actions.deleteSelected()
   else void actions.copySelected()
 }
-
-// 上传：浏览器里用两个隐藏的文件选择框；壳里直接调上传队列的命令。
-const filesInput = ref<HTMLInputElement | null>(null)
-const folderInput = ref<HTMLInputElement | null>(null)
-
-function pickUpload(mode: 'files' | 'folder') {
-  if (inShell) {
-    actions.startUpload(mode)
-    return
-  }
-  ;(mode === 'folder' ? folderInput : filesInput).value?.click()
-}
-
-function onUploadPicked(mode: 'files' | 'folder', ev: Event) {
-  const input = ev.target as HTMLInputElement
-  const list = Array.from(input.files ?? [])
-  // 清空，下次选同样的文件也会触发 change。
-  input.value = ''
-  actions.startUpload(mode, list)
-}
-
-/** 截图脚本注入合成的文件（走和选择框相同的代码）。 */
-function onInjected(mode: 'files' | 'folder', ev: Event) {
-  const list = (ev as CustomEvent<File[]>).detail
-  if (Array.isArray(list)) actions.startUpload(mode, list)
-}
-const injectFiles = (ev: Event) => onInjected('files', ev)
-const injectFolder = (ev: Event) => onInjected('folder', ev)
-watch(filesInput, (el, old) => {
-  old?.removeEventListener('doclite-inject-files', injectFiles)
-  el?.addEventListener('doclite-inject-files', injectFiles)
-})
-watch(folderInput, (el, old) => {
-  old?.removeEventListener('doclite-inject-files', injectFolder)
-  el?.addEventListener('doclite-inject-files', injectFolder)
-})
 
 /** 移动对话框选好了目标。 */
 function onMovePicked(target: PickedFolder) {
@@ -661,7 +470,7 @@ function onUnsealed(_it: ArchiveItem) {
   toast.success('已解除封存：现在可以在这里修改，改完到归类页"重新归档"')
   const cur = folder.value
   if (cur) afterChange([cur.id])
-  void reloadBreadcrumb()
+  void browser.reloadCrumb()
 }
 function openCatalog() {
   const a = folder.value?.archive
@@ -726,17 +535,7 @@ function onRescanFinished() {
         </template>
       </nav>
       <div class="flex-1" />
-      <span
-        v-if="project.current"
-        class="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-        :title="stream.state.value === 'open' ? '已连接实时更新' : '实时更新已断开，正在重连'"
-      >
-        <span
-          class="size-1.5 rounded-full"
-          :class="stream.state.value === 'open' ? 'bg-ok' : stream.state.value === 'stopped' ? 'bg-destructive' : 'animate-pulse bg-warn'"
-        />
-        {{ stream.state.value === 'open' ? '实时' : stream.state.value === 'stopped' ? '已断开' : '连接中…' }}
-      </span>
+      <StreamStatus v-if="project.current" :state="stream.state.value" />
       <Button
         v-if="project.current"
         variant="outline"
@@ -826,31 +625,12 @@ function onRescanFinished() {
             <GuardedButton variant="outline" size="xs" :reason="sealReason" :disabled="!folder" data-testid="new-folder" @click="actions.newFolder()">
               <FolderPlusIcon />新建文件夹
             </GuardedButton>
-            <GuardedButton variant="outline" size="xs" :reason="sealReason" :disabled="!folder" data-testid="upload-files" @click="pickUpload('files')">
+            <GuardedButton variant="outline" size="xs" :reason="sealReason" :disabled="!folder" data-testid="upload-files" @click="actions.startUpload('files')">
               <UploadIcon />上传文件
             </GuardedButton>
-            <GuardedButton variant="outline" size="xs" :reason="sealReason" :disabled="!folder" data-testid="upload-folder" @click="pickUpload('folder')">
+            <GuardedButton variant="outline" size="xs" :reason="sealReason" :disabled="!folder" data-testid="upload-folder" @click="actions.startUpload('folder')">
               <FolderUpIcon />上传文件夹
             </GuardedButton>
-            <!-- 浏览器上传用的选择框（壳里不用）。 -->
-            <input
-              ref="filesInput"
-              type="file"
-              multiple
-              :accept="UPLOAD_ACCEPT"
-              class="hidden"
-              data-testid="upload-files-input"
-              @change="onUploadPicked('files', $event)"
-            >
-            <input
-              ref="folderInput"
-              type="file"
-              multiple
-              webkitdirectory
-              class="hidden"
-              data-testid="upload-folder-input"
-              @change="onUploadPicked('folder', $event)"
-            >
           </div>
           <span class="shrink-0 border-l pl-2">按扫描顺序</span>
         </div>
@@ -871,7 +651,7 @@ function onRescanFinished() {
             <div class="flex min-h-0 flex-1 flex-col" data-testid="file-area" @contextmenu.capture="onAreaContextMenu">
               <div v-if="listState === 'error' && !children" class="flex flex-1 flex-col items-center justify-center gap-3 text-sm">
                 <p class="text-destructive">{{ listError ?? '加载失败' }}</p>
-                <Button variant="outline" size="sm" @click="openFolder(folderQuery ?? project.current.root_folder_id)">重试</Button>
+                <Button variant="outline" size="sm" @click="browser.open(folderQuery ?? project.current.root_folder_id)">重试</Button>
               </div>
               <div v-else-if="!children" class="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
                 <LoaderCircleIcon class="size-4 animate-spin" />正在加载…
@@ -996,10 +776,10 @@ function onRescanFinished() {
               <ContextMenuItem :disabled="sealed" data-testid="menu-new-folder" @select="actions.newFolder()">
                 <FolderPlusIcon />新建文件夹
               </ContextMenuItem>
-              <ContextMenuItem :disabled="sealed" data-testid="menu-upload-files" @select="pickUpload('files')">
+              <ContextMenuItem :disabled="sealed" data-testid="menu-upload-files" @select="actions.startUpload('files')">
                 <UploadIcon />上传文件
               </ContextMenuItem>
-              <ContextMenuItem :disabled="sealed" data-testid="menu-upload-folder" @select="pickUpload('folder')">
+              <ContextMenuItem :disabled="sealed" data-testid="menu-upload-folder" @select="actions.startUpload('folder')">
                 <FolderUpIcon />上传文件夹
               </ContextMenuItem>
               <ContextMenuSeparator />
@@ -1072,8 +852,6 @@ function onRescanFinished() {
             取消选择（Esc）
           </button>
         </div>
-
-        <UploadPanel :project-id="project.current.id" />
       </section>
 
       <aside class="w-72 shrink-0 overflow-y-auto border-l">

@@ -9,7 +9,7 @@ import { LoaderCircleIcon } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 
 import { listArchiveItems } from '@/api/catalog'
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import type { ArchiveItemSummary } from '@/api/types'
 import CategoryTree from '@/components/catalog/CategoryTree.vue'
 import { Button } from '@/components/ui/button'
@@ -80,7 +80,7 @@ async function selectCategory(id: string) {
   nextCursor.value = null
   listState.value = 'loading'
   try {
-    const res = await listArchiveItems(id, { limit: 500 }, true)
+    const res = await listArchiveItems(id, { limit: 500 }, HANDLE_ALL)
     if (my !== listSeq) return
     items.value = res.items
     nextCursor.value = res.next_cursor
@@ -98,7 +98,7 @@ async function loadMore() {
   if (!id || !cursor) return
   const my = listSeq
   try {
-    const res = await listArchiveItems(id, { limit: 500, cursor }, true)
+    const res = await listArchiveItems(id, { limit: 500, cursor }, HANDLE_ALL)
     if (my !== listSeq) return
     items.value = [...items.value, ...res.items]
     nextCursor.value = res.next_cursor

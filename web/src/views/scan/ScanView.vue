@@ -8,18 +8,18 @@
 // - 最近文件（QueueList）：大小、进度、状态、低 DPI 提示、无封面标记，失败项可以重试。
 // 数据来自壳的上传队列命令和事件（useUploadQueue）。不做：扫描参数建议、同时运行多个热文件夹。
 //
-// 在浏览器里：热文件夹只能在桌面客户端里用（要读本机的文件夹），引导到文件目录页上传。
+// 在浏览器里（只是开发工具）：只提示"请在客户端中使用"。
 //
 // 右侧是待重扫列表（M2-7，RescanList；壳和浏览器里都显示）：驳回的页、原件位置、驳回原因，"上传重扫件"单独上传
-// （壳里走 `pick_and_rescan`，不进上传队列；浏览器里生成封面后 upload()）。
-import { DownloadIcon, FolderSyncIcon, LoaderCircleIcon, LogInIcon, MonitorIcon, RotateCcwIcon, TriangleAlertIcon, UploadIcon } from '@lucide/vue'
+// （壳里走 `pick_and_rescan`，不进上传队列）。
+import { DownloadIcon, FolderSyncIcon, LoaderCircleIcon, LogInIcon, MonitorIcon, RotateCcwIcon, TriangleAlertIcon } from '@lucide/vue'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 
-import { request } from '@/api/http'
 import { Button } from '@/components/ui/button'
 import { useUploadQueue } from '@/composables/useUploadQueue'
+import { SHELL_ONLY } from '@/lib/client'
 import { type HotFolderStatus, type ItemStatus, type QueueItem, uploadResume, uploadRetryFailed } from '@/lib/scan-queue'
 import { openExternal, shellErrorMessage } from '@/lib/shell'
 import { useProjectStore } from '@/stores/project'
@@ -132,20 +132,8 @@ async function retryAll() {
 
 const filterLabel = computed(() => STATUS_TILES.find((t) => t.status === q?.filter.value)?.label ?? null)
 
-// ---------- 浏览器里 ----------
-
-const canFiles = computed(() => session.canAccess('/files'))
-const downloadUrl = ref<string | null>(null)
-
 onMounted(() => {
-  if (inShell) {
-    void project.ensureLoaded()
-    return
-  }
-  // 桌面客户端的下载地址（server 配置了才有）；取不到就不显示。
-  request<{ download_url: string | null }>('/api/shell/latest', { handle: true })
-    .then((r) => (downloadUrl.value = r.download_url || null))
-    .catch(() => {})
+  if (inShell) void project.ensureLoaded()
 })
 </script>
 
@@ -163,35 +151,9 @@ onMounted(() => {
 
     <div class="flex min-h-0 flex-1">
       <!-- ===== 浏览器：热文件夹只能在客户端里用 ===== -->
-      <section v-if="!inShell" class="flex min-w-0 flex-1 items-start justify-center overflow-y-auto p-6">
-        <div class="mt-10 w-full max-w-xl rounded-lg p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.08)]" data-testid="scan-browser-notice">
-          <div class="flex items-start gap-3">
-            <span class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-              <MonitorIcon class="size-5" />
-            </span>
-            <div class="min-w-0">
-              <h2 class="text-base font-semibold text-foreground">热文件夹只能在桌面客户端里使用</h2>
-              <p class="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                热文件夹会盯着扫描软件的输出目录：扫描仪每写完一页就自动上传，本地子文件夹在服务器上建成同名文件夹，断网后自动续传。浏览器读不了这台电脑上的文件夹，所以要在
-                Doclite 桌面客户端里使用。
-              </p>
-            </div>
-          </div>
-          <div class="mt-5 rounded-md bg-muted px-4 py-3 text-sm">
-            <div class="font-medium text-foreground">在浏览器里上传扫描件</div>
-            <p class="mt-1 text-muted-foreground">
-              到「文件目录」打开要传到的文件夹，用"上传文件"或"上传文件夹"选择扫描好的图片（JPEG、PNG、TIFF）。
-            </p>
-          </div>
-          <div class="mt-5 flex flex-wrap items-center gap-2">
-            <Button v-if="canFiles" data-testid="scan-goto-files" @click="router.push('/files')">
-              <UploadIcon />前往文件目录上传
-            </Button>
-            <span v-else class="text-sm text-muted-foreground">你的账号没有「文件目录」菜单，请联系管理员开通，或使用桌面客户端。</span>
-            <Button v-if="downloadUrl" variant="outline" as="a" :href="downloadUrl" target="_blank" rel="noopener">
-              <DownloadIcon />下载桌面客户端
-            </Button>
-          </div>
+      <section v-if="!inShell" class="flex min-w-0 flex-1 items-start justify-center p-6">
+        <div class="mt-10 flex items-center gap-2 text-sm text-muted-foreground" data-testid="scan-browser-notice">
+          <MonitorIcon class="size-4" />扫描上传（热文件夹）{{ SHELL_ONLY }}
         </div>
       </section>
 

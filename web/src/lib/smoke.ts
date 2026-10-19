@@ -74,7 +74,7 @@
 import { createApp } from 'vue'
 
 import { listChildren } from '@/api/folders'
-import { ApiError, errorMessage, failResponse, request } from '@/api/http'
+import { ApiError, errorMessage, failResponse, HANDLE_ALL, request } from '@/api/http'
 import type { FileBatchResponse, FileEntry, Me, MyMenu, MyProject } from '@/api/types'
 import { cspViolations } from '@/lib/csp'
 import { cacheClear, cacheStats } from '@/lib/image-cache'
@@ -279,7 +279,7 @@ function waitHeartbeat(path: string): Promise<Heartbeat> {
           break
         case 'end':
           if (status >= 200 && status < 300) finish(new Error('服务器提前结束了流，没等到心跳'))
-          else finish(failResponse(path, status, text, { handle: true }))
+          else finish(failResponse(path, status, text, { handle: HANDLE_ALL }))
           break
         case 'error':
           finish(new Error(`流式请求失败：${m.message}`))
@@ -333,7 +333,7 @@ function expectImageRejected(src: string): Promise<void> {
 
 /** 取一批文件的图片信息（/api/files/batch）。 */
 function fileBatch(fileIds: string[]) {
-  return request<FileBatchResponse>('/api/files/batch', { method: 'POST', body: { file_ids: fileIds }, handle: true })
+  return request<FileBatchResponse>('/api/files/batch', { method: 'POST', body: { file_ids: fileIds }, handle: HANDLE_ALL })
 }
 
 /**
@@ -348,19 +348,19 @@ async function findFiles(
   if (folder) {
     let id = rootId
     for (const name of folder.split('/').filter(Boolean)) {
-      const children = await listChildren(id, true)
+      const children = await listChildren(id, HANDLE_ALL)
       const sub = children.folders.find((f) => f.folder_name === name)
       if (!sub) throw new Error(`找不到文件夹 ${folder}（没有「${name}」这一层）`)
       id = sub.id
     }
-    const children = await listChildren(id, true)
+    const children = await listChildren(id, HANDLE_ALL)
     if (children.files.length === 0) throw new Error(`文件夹 ${folder} 里没有文件（先用 seed:files 传几张图）`)
     return { path: folder, fileIds: children.files.slice(0, count).map((f) => f.file_id) }
   }
   const queue = [{ id: rootId, path: '' }]
   for (let visited = 0; queue.length > 0 && visited < MAX_FOLDER_SCAN; visited++) {
     const { id, path } = queue.shift()!
-    const children = await listChildren(id, true)
+    const children = await listChildren(id, HANDLE_ALL)
     if (children.files.length > 0) {
       const fileIds = children.files.slice(0, count).map((f) => f.file_id)
       if ((await fileBatch(fileIds)).items.some((i) => i.cover_url)) return { path, fileIds }
@@ -381,7 +381,7 @@ async function checkImageCache(opts: SmokeConfig['image_cache']) {
     const cleared = await cacheStats()
     if (cleared.file_count !== 0) throw new Error(`清空后缓存里还有 ${cleared.file_count} 个文件`)
   }
-  const projects = await request<MyProject[]>('/api/projects', { handle: true })
+  const projects = await request<MyProject[]>('/api/projects', { handle: HANDLE_ALL })
   const project = opts.project
     ? projects.find((p) => p.project_code === opts.project)
     : (projects.find((p) => p.status === 'active') ?? projects[0])
@@ -465,19 +465,19 @@ async function findTiffs(
   if (folder) {
     let id = rootId
     for (const name of folder.split('/').filter(Boolean)) {
-      const children = await listChildren(id, true)
+      const children = await listChildren(id, HANDLE_ALL)
       const sub = children.folders.find((f) => f.folder_name === name)
       if (!sub) throw new Error(`找不到文件夹 ${folder}（没有「${name}」这一层）`)
       id = sub.id
     }
-    const found = pick((await listChildren(id, true)).files)
+    const found = pick((await listChildren(id, HANDLE_ALL)).files)
     if (!found) throw new Error(`文件夹 ${folder} 里没有文件名含 g4、lzw 的 TIFF（用 gen-samples 生成后上传）`)
     return { path: folder, ...found }
   }
   const queue = [{ id: rootId, path: '' }]
   for (let visited = 0; queue.length > 0 && visited < MAX_FOLDER_SCAN; visited++) {
     const { id, path } = queue.shift()!
-    const children = await listChildren(id, true)
+    const children = await listChildren(id, HANDLE_ALL)
     const found = pick(children.files)
     if (found) return { path, ...found }
     for (const f of children.folders) {
@@ -493,12 +493,12 @@ async function findTiffs(
 async function findNamed(rootId: string, folder: string, names: string[]): Promise<FileEntry[]> {
   let id = rootId
   for (const name of folder.split('/').filter(Boolean)) {
-    const children = await listChildren(id, true)
+    const children = await listChildren(id, HANDLE_ALL)
     const sub = children.folders.find((f) => f.folder_name === name)
     if (!sub) throw new Error(`找不到文件夹 ${folder}（没有「${name}」这一层）`)
     id = sub.id
   }
-  const files = (await listChildren(id, true)).files
+  const files = (await listChildren(id, HANDLE_ALL)).files
   return names.map((n) => {
     const f = files.find((x) => x.file_name === n)
     if (!f) throw new Error(`文件夹 ${folder} 里没有 ${n}`)
@@ -553,7 +553,7 @@ let viewerTarget: FileEntry | null = null
 
 /** tiles 一步（M2-3，见文件开头）。 */
 async function checkTiles(cfg: SmokeConfig) {
-  const projects = await request<MyProject[]>('/api/projects', { handle: true })
+  const projects = await request<MyProject[]>('/api/projects', { handle: HANDLE_ALL })
   const code = cfg.tiles.project ?? cfg.image_cache.project
   const project = code
     ? projects.find((p) => p.project_code === code)
@@ -579,7 +579,7 @@ async function checkTiles(cfg: SmokeConfig) {
   const batch = await request<FileBatchResponse>('/api/files/batch', {
     method: 'POST',
     body: { file_ids: targets.map((t) => t.entry.file_id) },
-    handle: true,
+    handle: HANDLE_ALL,
   })
   const results = []
   for (const { kind, entry, format } of targets) {
@@ -779,7 +779,7 @@ async function checkViewer() {
   const batch = await request<FileBatchResponse>('/api/files/batch', {
     method: 'POST',
     body: { file_ids: [entry.file_id] },
-    handle: true,
+    handle: HANDLE_ALL,
   })
   const item = batch.items.find((i) => i.file_id === entry.file_id)
   if (!item) throw new Error(`batch 里没有 ${entry.file_name}`)
@@ -974,7 +974,7 @@ async function checkSettingsPage() {
 
 /** img_direct 一步（M6-1，见文件开头）。 */
 async function checkImageDirect(opts: SmokeConfig['image_cache']) {
-  const projects = await request<MyProject[]>('/api/projects', { handle: true })
+  const projects = await request<MyProject[]>('/api/projects', { handle: HANDLE_ALL })
   const project = projects.find((p) => p.status === 'active') ?? projects[0]
   if (!project) return { skipped: '这个账号没有能进的项目' }
   let found: { path: string; fileIds: string[] }
@@ -1113,7 +1113,7 @@ export interface SmokeHooks {
 async function reportPage() {
   let meStatus = 0
   try {
-    await request<Me>('/api/me', { authRedirect: false, handle: true })
+    await request<Me>('/api/me', { authRedirect: false, handle: HANDLE_ALL })
     meStatus = 200
   } catch (e) {
     meStatus = e instanceof ApiError ? e.status : -1
@@ -1202,19 +1202,19 @@ export async function runSmoke(hooks: SmokeHooks) {
       const user = await request<Me>('/api/auth/login', {
         method: 'POST',
         body: { username: cfg.username, password: cfg.password },
-        handle: true,
+        handle: HANDLE_ALL,
       })
       return { id: user.id, username: user.username }
     })
 
     await step('me', async () => {
-      const user = await request<Me>('/api/me', { handle: true })
+      const user = await request<Me>('/api/me', { handle: HANDLE_ALL })
       if (user.id !== me.id) throw new Error(`/api/me 返回的用户不对：${user.username}`)
       return { username: user.username, roles: user.roles.map((r) => r.role_code) }
     })
 
     const menus = await step('menus', async () => {
-      const list = await request<MyMenu[]>('/api/me/menus', { handle: true })
+      const list = await request<MyMenu[]>('/api/me/menus', { handle: HANDLE_ALL })
       return { count: list.length, codes: list.map((m) => m.menu_code) }
     })
 
@@ -1232,7 +1232,7 @@ export async function runSmoke(hooks: SmokeHooks) {
       await step(
         'sse',
         async () => {
-          const projects = await request<MyProject[]>('/api/projects', { handle: true })
+          const projects = await request<MyProject[]>('/api/projects', { handle: HANDLE_ALL })
           const project = projects.find((p) => p.status === 'active') ?? projects[0]
           if (!project) {
             throw new Error('这个账号没有能进的项目，没法订阅实时通道（先用 web 的 npm run seed 建演示数据，或给这个账号授权一个项目）')
@@ -1388,9 +1388,9 @@ export async function runSmoke(hooks: SmokeHooks) {
     }
 
     await step('logout', async () => {
-      await request<void>('/api/auth/logout', { method: 'POST', handle: true })
+      await request<void>('/api/auth/logout', { method: 'POST', handle: HANDLE_ALL })
       try {
-        await request<Me>('/api/me', { authRedirect: false, handle: true })
+        await request<Me>('/api/me', { authRedirect: false, handle: HANDLE_ALL })
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) return { after_logout: 401 }
         throw e

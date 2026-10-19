@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/dialog'
 import FolderTree from '@/components/files/FolderTree.vue'
 import { type TreeFolder, useFolderTree } from '@/composables/useFolderTree'
+import { HANDLE_ALL } from '@/api/http'
 
 export interface PickedFolder {
   id: string
@@ -90,7 +91,7 @@ async function select(id: string) {
   selectedId.value = id
   if (id === tree.rootId.value) return
   try {
-    const folder = await getFolder(id, true)
+    const folder = await getFolder(id, HANDLE_ALL)
     if (selectedId.value !== id) return
     await tree.revealPath(folder)
     // 父文件夹之前就加载过、而这个文件夹是后来新建的：重新加载父文件夹。

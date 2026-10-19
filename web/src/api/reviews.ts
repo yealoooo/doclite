@@ -7,7 +7,7 @@
 // 404（`details.ids` 列出不存在、已删除、不在这个项目里的文件）；409 `invalid_state`（那一行已经不是 open、
 // 文件不是待审核 / 已通过）；403 `forbidden`（菜单不对或进不了项目，走全局处理）。
 
-import { request, type RequestOptions } from './http'
+import { type Handle, request } from './http'
 import type {
   AssignResult,
   FileReviews,
@@ -18,8 +18,6 @@ import type {
   ReopenResult,
   ReviewSummary,
 } from './types'
-
-type Handle = RequestOptions['handle']
 
 /** 按选中的文件分配、批量改派一次最多的 file_id 数（超过 server 返回 400）。 */
 export const MAX_REVIEW_FILE_IDS = 500

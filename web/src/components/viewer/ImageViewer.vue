@@ -2,30 +2,27 @@
 // 原图查看器（M2-4，基于 OpenSeadragon；design §4.4 的"看原图"，用户决定 Q1）。
 //
 // - 先显示封面（当作原图大小，缩放、位置和原图一致），原图就绪后盖上去，画完再拿掉封面。
-// - 原图：壳里用 M2-3 的分块（只取看得到的块）；浏览器里 JPEG、PNG 整图模式，TIFF 在 Worker 里按封面的预算解码
-//   （lib/viewer/load-original.ts）。同一个查看器同时只加载一张原图：换图（fileId、snapshot_id 变了）时先取消上一张
-//   的请求、停掉它的 Worker，再开始新的。壳里换文件后先只显示封面，停留 SHELL_SWITCH_SETTLE_MS 再取分块描述
-//   （快速翻页时中间那几张不发请求，壳那边就不会下载、切块；M2-4 审查第 1 轮）。
-// - 浏览器里页面上的查看器共用一份内存预算（对比时两侧共用，lib/viewer/budget.ts），放不下的那一张只显示封面。
+// - 原图：客户端里用 M2-3 的分块（只取看得到的块，lib/viewer/load-original.ts）；浏览器里只显示封面，提示"请在客户端中
+//   使用"。同一个查看器同时只加载一张原图：换图（fileId、snapshot_id 变了）时先取消上一张的请求，再开始新的。换文件后
+//   先只显示封面，停留 SWITCH_SETTLE_MS 再取分块描述（快速翻页时中间那几张不发请求，壳那边就不会下载、切块；M2-4
+//   审查第 1 轮）。
 // - 取块失败（壳里 503、超时等，每块已自动重试过）：OpenSeadragon 不会再取这一块，那里只能显示低一级的块（发虚）
 //   或空白；失败的块数到 TILE_FAILURE_NOTICE 就提示，带"重试"（reload）。一块都没取到就按加载失败（保留封面，可以重试）。
 // - 操作：适合窗口、100%、滚轮缩放、拖动平移、旋转查看（只转视图，不保存）。按钮和键盘由使用它的页面做，
 //   通过 ref 调下面暴露的方法（M2-6 的键位见 roadmap Q3）。OpenSeadragon 自带的按键已关掉。
-// - 三种提示：加载中（带下载进度）、失败（可以重试）、超出预算或解不了（只显示封面，提示下载原图；浏览器里另提示
-//   改用客户端）。页面要自己显示提示时把 `overlays` 设为 false，按 `status` 事件显示。
+// - 三种提示：加载中、失败（可以重试）、太大或解不了（只显示封面，提示下载原图）。页面要自己显示提示时把 `overlays`
+//   设为 false，按 `status` 事件显示。
 // - 截图脚本用的属性：data-testid=image-viewer，data-state（empty、loading、ready、too_large、unsupported、failed）、
-//   data-step、data-mode（tiles、image、worker）、data-cover（none、loading、loaded、failed）、data-zoom（百分比）、
-//   data-rotation、data-file-id、data-snapshot-id、data-tile-requests（壳里这张图请求过的块数）、
+//   data-step、data-mode（tiles）、data-cover（none、loading、loaded、failed）、data-zoom（百分比）、
+//   data-rotation、data-file-id、data-snapshot-id、data-tile-requests（这张图请求过的块数）、
 //   data-tile-failures（这张图没取到的块数）、data-view-zoom、data-view-center（OpenSeadragon 的视口缩放和中心）。
 import { AlertTriangleIcon, DownloadIcon, ImageOffIcon, LoaderCircleIcon, RotateCwIcon } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 
 import { Button } from '@/components/ui/button'
-import { isTauri } from '@/lib/client'
-import { formatBytes } from '@/lib/files'
 import { imageSrc } from '@/lib/image-url'
 import { ViewerLoadError } from '@/lib/viewer/errors'
-import { type LoadedOriginal, loadOriginal, type LoadStep, type OriginalMode, type ViewerImageInfo } from '@/lib/viewer/load-original'
+import { loadOriginal, type LoadStep, type ViewerImageInfo } from '@/lib/viewer/load-original'
 import { addImage, CoverTileSource, createOsdViewer, type OsdTiledImage, type OsdViewer } from '@/lib/viewer/osd'
 
 export type ViewerPhase = 'empty' | 'loading' | 'ready' | 'too_large' | 'unsupported' | 'failed'
@@ -33,25 +30,23 @@ export type ViewerPhase = 'empty' | 'loading' | 'ready' | 'too_large' | 'unsuppo
 /** 查看器的状态（`status` 事件、`getStatus()`）。 */
 export interface ViewerStatus {
   phase: ViewerPhase
-  /** loading 时在做什么：tiles 等壳准备分块；download 下载（progress 有值）；decode 解码；render 取块、画出来。 */
+  /** loading 时在做什么：tiles 等壳准备分块；render 取块、画出来。 */
   step: LoadStep | null
-  /** 下载进度 0–1（没有时为 null）。 */
-  progress: number | null
-  /** 失败、超出预算时的错误码和说明。 */
+  /** 失败、太大时的错误码和说明。 */
   code: string | null
   message: string | null
-  /** 失败时能不能重试（超出预算、解不了的不能）。 */
+  /** 失败时能不能重试（太大、解不了的不能）。 */
   retryable: boolean
-  /** 原图从哪来。 */
-  mode: OriginalMode | null
+  /** 原图从哪来：客户端的分块（取到分块描述之后）。 */
+  mode: 'tiles' | null
   cover: 'none' | 'loading' | 'loaded' | 'failed'
-  /** 壳里这张图请求过的块数（data-tile-requests）。 */
+  /** 这张图请求过的块数（data-tile-requests）。 */
   tileRequests: number
   /** 这张图没取到的块数（自动重试之后仍失败的；data-tile-failures）。 */
   tileFailures: number
   /** 从开始加载到原图画完的毫秒数（ready 之后有值）。 */
   elapsedMs: number | null
-  /** 原图加载的细节（壳：分块描述；浏览器 TIFF：各步耗时和常驻内存）。 */
+  /** 原图加载的细节（分块描述的几项）。 */
   detail: Record<string, unknown> | null
 }
 
@@ -70,7 +65,7 @@ const props = withDefaults(
     fileId: string | null
     /** batch 的一项或 snapshots 的一个版本；没有时显示空白。 */
     info: ViewerImageInfo | null | undefined
-    /** 在查看器里显示加载、失败、超出预算的提示（默认显示）。 */
+    /** 在查看器里显示加载、失败、太大的提示（默认显示）。 */
     overlays?: boolean
   }>(),
   { overlays: true },
@@ -83,9 +78,8 @@ const emit = defineEmits<{
   download: []
 }>()
 
-const inShell = isTauri()
-/** 壳里换文件之后停留多久再取分块描述（毫秒，见文件开头）。 */
-const SHELL_SWITCH_SETTLE_MS = 250
+/** 换文件之后停留多久再取分块描述（毫秒，见文件开头）。 */
+const SWITCH_SETTLE_MS = 250
 /** 没取到的块到这个数就提示（每块已经自动重试过，剩下的都看得出来：发虚或空白，所以 1 块就提示）。 */
 const TILE_FAILURE_NOTICE = 1
 const canvasEl = ref<HTMLElement | null>(null)
@@ -98,7 +92,6 @@ function blankStatus(phase: ViewerPhase): ViewerStatus {
   return {
     phase,
     step: null,
-    progress: null,
     code: null,
     message: null,
     retryable: false,
@@ -120,7 +113,6 @@ function emitStatus() {
 interface Session {
   ac: AbortController
   startedAt: number
-  original: LoadedOriginal | null
   /** 原图在 OpenSeadragon 里的图层（加进去之后）。 */
   originalItem: OsdTiledImage | null
   /** 原图取到的块数（判断"一块都没取到"）。 */
@@ -135,7 +127,7 @@ interface Session {
 let session: Session | null = null
 /** 让 reload() 在 fileId、snapshot_id 没变时也重新加载。 */
 const reloadToken = ref(0)
-/** 最近一次换文件（fileId 变了；不含第一次显示）的时间，壳里从这时起停留 SHELL_SWITCH_SETTLE_MS。 */
+/** 最近一次换文件（fileId 变了；不含第一次显示）的时间，从这时起停留 SWITCH_SETTLE_MS。 */
 let switchedAt = 0
 
 function stopSession() {
@@ -143,7 +135,6 @@ function stopSession() {
   session = null
   if (!s) return
   s.ac.abort()
-  s.original?.dispose()
   const v = osd.value
   if (v) {
     v.imageLoader.clear()
@@ -168,7 +159,6 @@ function startSession() {
   const s: Session = {
     ac: new AbortController(),
     startedAt: performance.now(),
-    original: null,
     originalItem: null,
     tilesLoaded: 0,
     coverItem: null,
@@ -179,17 +169,16 @@ function startSession() {
   addCover(s, v, fileId, info)
   emitStatus()
 
-  // 壳里刚换了文件：从换的那一刻起停留一会儿再取分块描述（重试、同一个文件换了版本不停）。
-  const settleMs = inShell && switchedAt ? Math.max(0, Math.round(SHELL_SWITCH_SETTLE_MS - (performance.now() - switchedAt))) : 0
+  // 刚换了文件：从换的那一刻起停留一会儿再取分块描述（重试、同一个文件换了版本不停）。
+  const settleMs = switchedAt ? Math.max(0, Math.round(SWITCH_SETTLE_MS - (performance.now() - switchedAt))) : 0
   loadOriginal(
     fileId,
     info,
     s.ac.signal,
     {
-      onStep(step, progress) {
+      onStep(step) {
         if (session !== s) return
         status.step = step
-        status.progress = progress
         emitStatus()
       },
       onTile() {
@@ -200,12 +189,8 @@ function startSession() {
     { settleMs },
   )
     .then((orig) => {
-      if (session !== s) {
-        orig.dispose()
-        return
-      }
-      s.original = orig
-      status.mode = orig.mode
+      if (session !== s) return
+      status.mode = 'tiles'
       status.detail = orig.detail
       emitStatus()
       addImage(v, {
@@ -306,7 +291,6 @@ function originalShown(s: Session, v: OsdViewer) {
   }
   status.phase = 'ready'
   status.step = null
-  status.progress = null
   status.elapsedMs = Math.round(performance.now() - s.startedAt)
   emitStatus()
 }
@@ -315,7 +299,6 @@ function fail(err: ViewerLoadError) {
   const kind = err.kind
   status.phase = kind === 'too_large' ? 'too_large' : kind === 'unsupported' ? 'unsupported' : 'failed'
   status.step = null
-  status.progress = null
   status.code = err.code
   status.message = err.message
   status.retryable = kind === 'failed'
@@ -517,36 +500,21 @@ const loadingText = computed(() => {
   switch (status.step) {
     case 'tiles':
       return '客户端正在准备原图（第一次打开大图要等几秒）'
-    case 'wait':
-      return '等另一张原图解完（浏览器里的内存预算）'
-    case 'download': {
-      const pct = status.progress == null ? '' : ` ${Math.floor(status.progress * 100)}%`
-      return `正在下载原图${pct}`
-    }
-    case 'decode':
-      return '正在解码原图'
     default:
       return '正在显示原图'
   }
 })
 
-const downloadSize = computed(() => {
-  if (status.step !== 'download' || status.progress == null || !props.info) return ''
-  const total = props.info.file_size
-  return `${formatBytes(Math.round(total * status.progress))} / ${formatBytes(total)}`
-})
-
 const problemTitle = computed(() => {
   const coverNote = status.cover === 'loaded' ? '，只显示封面' : ''
-  if (status.phase === 'too_large' && status.code === 'over_budget') return `浏览器里的内存不够再打开这张原图${coverNote}`
-  if (status.phase === 'too_large') return inShell ? `原图太大${coverNote}` : `原图太大，浏览器里看不了${coverNote}`
+  if (status.phase === 'too_large') return `原图太大${coverNote}`
   if (status.phase === 'unsupported') return `看不了原图${coverNote}`
   return '原图加载失败'
 })
 
 const problemHint = computed(() => {
   if (status.phase === 'failed') return status.retryable ? '可以重试，或者下载原图查看。' : '可以下载原图查看。'
-  return inShell ? '可以下载原图，用别的软件查看。' : '可以下载原图，或者改用客户端查看（客户端按块显示大图，不受浏览器的限制）。'
+  return '可以下载原图，用别的软件查看。'
 })
 </script>
 
@@ -593,14 +561,7 @@ const problemHint = computed(() => {
       >
         <LoaderCircleIcon class="size-3.5 animate-spin text-muted-foreground" />
         <span>{{ loadingText }}</span>
-        <span v-if="downloadSize" class="font-mono text-[11px] text-muted-foreground">{{ downloadSize }}</span>
         <span v-if="status.cover === 'loaded'" class="text-muted-foreground">· 先显示封面</span>
-        <span
-          v-if="status.step === 'download' && status.progress != null"
-          class="absolute right-3 bottom-0 left-3 h-0.5 overflow-hidden rounded-full bg-muted"
-        >
-          <span class="block h-full bg-info transition-[width]" :style="{ width: `${Math.floor(status.progress * 100)}%` }" />
-        </span>
       </div>
 
       <!-- 原图画出来了，但有块没取到（那里发虚或空白） -->
@@ -617,7 +578,7 @@ const problemHint = computed(() => {
         </Button>
       </div>
 
-      <!-- 失败、超出预算、解不了 -->
+      <!-- 失败、太大、解不了 -->
       <div
         v-else-if="status.phase === 'failed' || status.phase === 'too_large' || status.phase === 'unsupported'"
         class="absolute bottom-4 left-1/2 w-[min(460px,calc(100%-2rem))] -translate-x-1/2 rounded-lg bg-background p-3 text-[13px] text-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.08),0_2px_2px_rgba(0,0,0,0.04),0_8px_16px_-4px_rgba(0,0,0,0.12)]"

@@ -1,6 +1,6 @@
 // 会话：登录、退出、当前用户和菜单。
 
-import { request } from './http'
+import { HANDLE_ALL, request } from './http'
 import type { Me, MyMenu } from './types'
 
 /** 登录。错误（`invalid_credentials`、`user_disabled`……）由登录页自己显示。 */
@@ -8,13 +8,13 @@ export function login(username: string, password: string) {
   return request<Me>('/api/auth/login', {
     method: 'POST',
     body: { username, password },
-    handle: true,
+    handle: HANDLE_ALL,
   })
 }
 
 /** 退出。失败时抛出 ApiError，由调用方提示（会话可能仍然有效）。 */
 export function logout() {
-  return request<void>('/api/auth/logout', { method: 'POST', handle: true })
+  return request<void>('/api/auth/logout', { method: 'POST', handle: HANDLE_ALL })
 }
 
 /**

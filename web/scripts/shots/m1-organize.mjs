@@ -1,22 +1,18 @@
-// M1-12 的截图清单和断言：文件目录页的整理和浏览器上传。
+// M1-12 的截图清单和断言：文件目录页的整理（上传只在客户端里，M10-2 起样本用接口传）。
 //
 //   INIT_ADMIN_PASSWORD=admin123456 [SHOTS_TMP=<临时目录>] \
 //     npm run screenshots -- --spec scripts/shots/m1-organize.mjs --base http://localhost:<preview 端口>
 //
 // 前端地址是 vite preview 或 dev（/api 代理到 server）。JPEG、TIFF 样本读 web 自己的 `scripts/samples/`，见
 // scripts/lib/upload-samples.mjs。
-// 局域网地址（非安全上下文）上的上传另见 m1-upload-lan.mjs。
 //
 // 只看界面的截图（右键菜单、移动对话框、多选、删除确认、错误提示）用 npm run seed 的演示文件夹（BOX2、BOX3），不提交改动；
 // 会改数据的（整理流程、上传结果、两个页面的实时刷新）各自在 DEMO-A 根下建一个"截图验证 M1-12 …"临时文件夹，
 // 做完在 after 里删掉（软删除；前面失败了也删）。
 //
 // 断言（失败时这一张算失败，脚本退出码 1）：
-// - files-organize：界面上新建文件夹 → 上传一个带两层子文件夹的目录（注入合成的 File 列表）→ 多选移动 3 个文件
-//   → F2 改名 → 删除一个子文件夹；然后用接口核对文件夹结构、各文件的位置和顺序、文件日志条数，以及封面
-//   （batch 里有 cover_url、是 JPEG、长边 ≤ 400、方向和原图一致）。
-// - files-upload-result：改名、之前已上传过、内容重复已跳过、低 DPI、无封面（方向 6 的 TIFF：has_cover 为 false，
-//   batch 的 cover_url 为 null）、Windows 保留名失败、不支持的格式忽略，各自的状态都对。
+// - files-organize：界面上新建文件夹 → 用接口传一个带两层子文件夹的样本目录 → 多选移动 3 个文件 → F2 改名
+//   → 删除一个子文件夹；然后用接口核对文件夹结构、各文件的位置和顺序、文件日志条数。
 // - files-realtime：两个页面打开同一个文件夹，在一个页面里删除、移动、复制（⌘C）文件，另一个页面 3 秒内更新
 //   （另存一张页面 B 的截图 files-realtime-other.png）。
 // - files-folder-ops：文件夹的 F2 改名（重名、保留名的提示）、改备注、移动（选择框里不能选它自己的子树），
@@ -28,7 +24,7 @@
 
 import path from 'node:path'
 
-import { checkCovers, injectFiles, orientedTiff, sample, scanPng, waitUploadDone } from '../lib/upload-samples.mjs'
+import { sample, scanPng } from '../lib/upload-samples.mjs'
 import { installWailsMock, shellOrigin } from '../lib/wails-mock.mjs'
 
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
@@ -220,58 +216,32 @@ export function assert(cond, msg) {
 }
 
 /**
- * 上传一个带两层子文件夹的样本目录（注入合成的 File 列表，走"上传文件夹"的同一段代码），页面要已经打开目标文件夹。
- * 断言：支持的都入库、都带上了封面，Thumbs.db 不上传、说明.txt 忽略；batch 里的封面是 JPEG、长边 ≤ 400、方向一致。
- * 输出各种格式生成封面的耗时。返回 {top, uploaded, byPath}。
+ * 用接口在 `parentId` 下建一个带两层子文件夹的样本目录并上传（M10-2 起浏览器里不能上传）：PNG 带合成的封面，
+ * JPEG、TIFF 不带。同一个文件夹里按文件名的自然顺序传（和客户端的"上传文件夹"一样）。返回 {top}。
  */
-export async function uploadSampleFolder(page, ctx, prefix = '  ') {
-  const samples = {
-    jpeg: await sample('jpeg-gray.jpg'),
-    exif6: await sample('jpeg-exif6.jpg'),
-    tiffNone: await sample('tiff-none-gray8.tif'),
-    tiffLzw: await sample('tiff-lzw-rgb.tif'),
-    tiffG4: await sample('tiff-g4-1bit.tif'),
-  }
+export async function uploadSampleFolder(ctx, parentId, prefix = '  ') {
   const seed = `M1-12 upload ${stamp()} ${Math.random()}`
   const top = '扫描批次'
-  const files = [
-    { path: `${top}/JPEG_A4.jpg`, name: 'JPEG_A4.jpg', data: samples.jpeg },
-    { path: `${top}/盒 001/IMG_10.png`, name: 'IMG_10.png', data: scanPng(`${seed}#10`, 10).png },
-    { path: `${top}/盒 001/IMG_2.png`, name: 'IMG_2.png', data: scanPng(`${seed}#2`, 2).png },
-    { path: `${top}/盒 001/IMG_1.png`, name: 'IMG_1.png', data: scanPng(`${seed}#1`, 1).png },
-    { path: `${top}/盒 001/TIFF_none.tif`, name: 'TIFF_none.tif', data: samples.tiffNone },
-    { path: `${top}/盒 001/卷内/TIFF_lzw.tif`, name: 'TIFF_lzw.tif', data: samples.tiffLzw },
-    { path: `${top}/盒 001/卷内/TIFF_g4.tif`, name: 'TIFF_g4.tif', data: samples.tiffG4 },
-    { path: `${top}/盒 001/卷内/JPEG_exif6.jpg`, name: 'JPEG_exif6.jpg', data: samples.exif6 },
-    { path: `${top}/盒 001/卷内/Thumbs.db`, name: 'Thumbs.db', data: Buffer.from('junk') },
-    { path: `${top}/盒 002/IMG_1.png`, name: 'IMG_1.png', data: scanPng(`${seed}#b1`, 1).png },
-    { path: `${top}/盒 002/IMG_2.png`, name: 'IMG_2.png', data: scanPng(`${seed}#b2`, 2).png },
-    { path: `${top}/盒 002/说明.txt`, name: '说明.txt', data: Buffer.from('原件说明') },
-  ]
-  await injectFiles(page, 'folder', files)
-  const items = await waitUploadDone(page)
-  const byPath = new Map(items.map((i) => [i.path, i]))
-  assert(!items.some((i) => i.name === 'Thumbs.db'), 'Thumbs.db 应该直接忽略')
-  assert(byPath.get(`${top}/盒 002/说明.txt`)?.state === 'skipped', '说明.txt 应该是"已忽略"')
-  const uploaded = items.filter((i) => i.state !== 'skipped')
-  for (const it of uploaded) assert(it.state === 'done' && it.fileId, `${it.path} 应该已入库：${it.state} ${it.text}`)
-  for (const it of uploaded) assert(it.hasCover === true, `${it.path} 应该带上了封面：${it.text}`)
-  const ms = (p) => byPath.get(`${top}/${p}`)?.coverMs
-  console.log(
-    `${prefix}上传文件夹：${uploaded.length} 个入库、1 个不支持的格式忽略、Thumbs.db 不上传；封面耗时 JPEG(A4 200dpi 灰度) ${ms('JPEG_A4.jpg')} ms、` +
-      `JPEG EXIF6 ${ms('盒 001/卷内/JPEG_exif6.jpg')} ms、TIFF 无压缩 ${ms('盒 001/TIFF_none.tif')} ms、TIFF LZW 彩色 ${ms('盒 001/卷内/TIFF_lzw.tif')} ms、` +
-      `TIFF G4 ${ms('盒 001/卷内/TIFF_g4.tif')} ms（G4 生成了封面）、PNG ${ms('盒 001/IMG_1.png')} ms`,
-  )
-  // 封面（batch）。
-  const covers = await checkCovers(
-    ctx.api,
-    uploaded.map((i) => i.fileId),
-  )
-  console.log(
-    `     封面：${covers.length} 个都有 cover_url，JPEG，长边 ≤ 400（${[...new Set(covers.map((c) => `${c.width}×${c.height}`))].join('、')}），方向和原图一致`,
-  )
-
-  return { top, uploaded, byPath }
+  const mk = (parent, name) => ctx.api('POST', '/api/folders', { parent_id: parent, folder_name: name })
+  const put = async (folderId, name, file) => {
+    const form = new FormData()
+    form.append('file_name', name)
+    form.append('file', new Blob([await sample(file)]), 'original')
+    return ctx.api('POST', `/api/folders/${folderId}/files`, form)
+  }
+  const t = await mk(parentId, top)
+  const box1 = await mk(t.id, '盒 001')
+  const inner = await mk(box1.id, '卷内')
+  const box2 = await mk(t.id, '盒 002')
+  await put(t.id, 'JPEG_A4.jpg', 'jpeg-gray.jpg')
+  for (const n of [1, 2, 10]) await apiUploadPng(ctx, box1.id, `IMG_${n}.png`, scanPng(`${seed}#${n}`, n))
+  await put(box1.id, 'TIFF_none.tif', 'tiff-none-gray8.tif')
+  await put(inner.id, 'JPEG_exif6.jpg', 'jpeg-exif6.jpg')
+  await put(inner.id, 'TIFF_g4.tif', 'tiff-g4-1bit.tif')
+  await put(inner.id, 'TIFF_lzw.tif', 'tiff-lzw-rgb.tif')
+  for (const n of [1, 2]) await apiUploadPng(ctx, box2.id, `IMG_${n}.png`, scanPng(`${seed}#b${n}`, n))
+  console.log(`${prefix}用接口上传样本目录：10 个文件（${top}/{盒 001/卷内, 盒 002}）`)
+  return { top }
 }
 
 // ---------- 壳的模拟（files-shell-upload） ----------
@@ -294,7 +264,6 @@ function organizeShellMock() {
 // ---------- 各张截图 ----------
 
 let organizeTemp = null
-let resultTemp = null
 let realtimeTemp = null
 let realtimePage = null
 let folderOpsTemp = null
@@ -462,9 +431,8 @@ export default {
         assert(organizeTemp.remark === '截图脚本临时建的，做完会删掉', `备注不对：${organizeTemp.remark}`)
         console.log(`  1. 新建文件夹「${name}」（带备注）`)
 
-        // 2. 上传文件夹（两层子文件夹，注入合成文件；和 m1-upload-lan.mjs 共用）。
-        await openFolderId(page, organizeTemp.id)
-        const { top } = await uploadSampleFolder(page, ctx, '  2. ')
+        // 2. 用接口传一个带两层子文件夹的样本目录。
+        const { top } = await uploadSampleFolder(ctx, organizeTemp.id, '  2. ')
         // 结构和顺序（接口）。
         const batch = await resolvePath(ctx.api, organizeTemp.id, top)
         assert(batch.children.folders.map((f) => f.folder_name).join('|') === '盒 001|盒 002', `扫描批次的子文件夹不对：${batch.children.folders.map((f) => f.folder_name)}`)
@@ -558,82 +526,6 @@ export default {
       async after() {
         await dropTemp(organizeTemp)
         organizeTemp = null
-      },
-      delay: 500,
-    },
-    // 上传结果：改名、之前已上传过、内容重复已跳过、低 DPI、无封面、失败（Windows 保留名）、忽略。
-    {
-      name: 'files-upload-result',
-      user: admin,
-      path: '/files',
-      waitFor: '[data-testid=files-page]',
-      async prepare(page) {
-        const ctx = await context(page)
-        const seed = `M1-12 result ${stamp()} ${Math.random()}`
-        resultTemp = await makeTemp(ctx, '上传结果')
-        // 文件夹里先有两页（接口上传）。
-        const a = scanPng(`${seed}#a`, 1)
-        const b = scanPng(`${seed}#b`, 2)
-        await apiUploadPng(ctx, resultTemp.id, 'IMG_0001.png', a)
-        await apiUploadPng(ctx, resultTemp.id, 'IMG_0002.png', b)
-        await openFolderId(page, resultTemp.id)
-        await waitCovers(page)
-        const files = [
-          // 同名、内容不同：自动改名为 IMG_0001 (1).png。
-          { name: 'IMG_0001.png', data: scanPng(`${seed}#c`, 1).png },
-          // 同名、同内容：之前已上传过（200）。
-          { name: 'IMG_0002.png', data: b.png },
-          // 低 DPI（150）。
-          { name: 'IMG_0003.png', data: scanPng(`${seed}#d`, 3, 150).png },
-          // A4 300 DPI 的 JPEG（scripts/samples），DPI 正常。
-          { name: 'JPEG_A4.jpg', data: await sample('jpeg-rgb.jpg') },
-          // 方向 6 的 TIFF：浏览器里不生成封面，照样入库。
-          { name: 'TIFF_方向6.tif', data: orientedTiff(seed) },
-          // Windows 保留名：server 400 invalid_input。
-          { name: 'CON.png', data: scanPng(`${seed}#e`, 5).png },
-          // 内容和 IMG_0002.png 相同、名字不同：内容重复，已跳过。
-          { name: '复印件.png', data: b.png },
-          // 不支持的格式：忽略。
-          { name: '说明.txt', data: Buffer.from('原件说明') },
-        ]
-        await injectFiles(page, 'files', files)
-        const items = await waitUploadDone(page)
-        const by = new Map(items.map((i) => [i.name, i]))
-        const expect = {
-          'IMG_0001.png': 'done',
-          'IMG_0002.png': 'already',
-          'IMG_0003.png': 'done',
-          'JPEG_A4.jpg': 'done',
-          'TIFF_方向6.tif': 'done',
-          'CON.png': 'failed',
-          '复印件.png': 'duplicate',
-          '说明.txt': 'skipped',
-        }
-        for (const [n, st] of Object.entries(expect)) assert(by.get(n)?.state === st, `${n} 应为 ${st}：${by.get(n)?.state} ${by.get(n)?.text}`)
-        assert(by.get('IMG_0001.png').text.includes('IMG_0001 (1).png'), `改名的提示不对：${by.get('IMG_0001.png').text}`)
-        assert(by.get('IMG_0003.png').warnings.includes('low_dpi'), 'IMG_0003.png 应有 low_dpi')
-        assert(by.get('IMG_0003.png').text.includes('150 dpi，低于 200'), `低 DPI 的提示不对：${by.get('IMG_0003.png').text}`)
-        assert(by.get('复印件.png').text.includes('项目里已有相同内容'), `重复的提示不对：${by.get('复印件.png').text}`)
-        assert(by.get('CON.png').text.includes('Windows 保留名'), `保留名的失败说明不对：${by.get('CON.png').text}`)
-        const tiff = by.get('TIFF_方向6.tif')
-        assert(tiff.hasCover === false && tiff.cover === 'none', `方向 6 的 TIFF 应无封面：${tiff.text}`)
-        assert(tiff.text.includes('无封面'), `无封面的提示不对：${tiff.text}`)
-        for (const n of ['IMG_0001.png', 'IMG_0003.png', 'JPEG_A4.jpg']) assert(by.get(n).hasCover === true, `${n} 应带上封面`)
-        const covers = await checkCovers(
-          ctx.api,
-          ['IMG_0001.png', 'IMG_0003.png', 'JPEG_A4.jpg', 'TIFF_方向6.tif'].map((n) => by.get(n).fileId),
-          [tiff.fileId],
-        )
-        const counts = await page.$eval('[data-testid=upload-job] [data-testid=upload-job-counts]', (el) => el.textContent.replace(/\s+/g, ' '))
-        console.log(`  断言 上传结果：${counts}`)
-        console.log(
-          `  断言 封面：有封面的 ${covers.filter((c) => c.cover_url).length} 个 cover_url 可下载、JPEG、长边 ≤ 400；方向 6 的 TIFF 上传响应 has_cover=false、batch cover_url=null` +
-            `；JPEG A4 300 DPI 彩色的封面耗时 ${by.get('JPEG_A4.jpg').coverMs} ms`,
-        )
-      },
-      async after() {
-        await dropTemp(resultTemp)
-        resultTemp = null
       },
       delay: 500,
     },
@@ -845,7 +737,6 @@ export default {
         assert(calls[1].folderId === folderId && calls[1].mode === 'files', `第 2 次参数不对：${JSON.stringify(calls[1])}`)
         const uploads = await page.evaluate(() => window.__shellCalls.filter((c) => c.cmd === 'api_fetch' && /\/files$/.test(c.args.path)).length)
         assert(uploads === 0, '壳里不应从页面发上传请求')
-        assert(!(await page.$('[data-testid=upload-panel]')), '壳里不应出现浏览器上传的结果列表')
         console.log(`  断言 壳：上传文件夹、上传文件各调 1 次 pick_and_enqueue_upload（folderId=BOX3，mode=folder/files），提示"已加入上传队列"，页面没有自己发上传请求`)
       },
       async after(page) {

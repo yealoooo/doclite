@@ -25,8 +25,8 @@
 //   m2-review-batch-confirm（批量通过的确认框，中途另存）、m2-review-batch-done（批量通过、撤回其中一个之后）、
 //   m2-review-other-projects（页头"其他项目还有 n 个待审"的弹出层，中途另存）、m2-review-other-projects-switched（点它切到
 //   DEMO-B 之后）、m2-review-stale-guards（验收第 1 轮第 1、2、4 条之后；中途另存 m2-review-showing-old：同位切换正在看
-//   上一轮时不能审）、m2-review-unseen（验收第 1 轮第 3 条：只看了封面的标记；中途另存 m2-review-cover-confirm：原图没加载
-//   出来时的确认框）。
+//   上一轮时不能审）。浏览器里只显示封面（M10-2 起不看原图），照样能审；原来靠浏览器里加载失败、超出预算造"只看了封面"
+//   的 m2-review-unseen 删掉了。
 // - 壳（壳模式的地址 + Wails 桥的模拟，scripts/lib/wails-mock.mjs；分块由 devshell 用客户端的 Go 代码现场切，api_stream
 //   的实时事件照常）：shell-review（客户端分块显示，给下一张提前切块）、shell-review-compare（第 2 轮按 C 对比，两侧都是分块）。
 //
@@ -48,9 +48,6 @@
 //   第 2 条：最后一张待审驳回后（停在它上面）被重扫回来：按 R 面板里没有上一轮的原因和说明，直接按 Enter 被拦下；
 //   第 4 条：第 2 轮文件按 C 对比后，并排时第一次按 V 直接显示左边（上一轮）：操作区不能审、提示"按 V 切回"，按 A 不通过；
 //   再按 V 切回当前版本，按 A 通过的是 v2。
-// - m2-review-unseen（验收第 1 轮第 3 条，CDP 改 batch 的响应）：原图、封面都没显示出来时 A、R 都不响应、提示"没看到
-//   这一版"；原图加载失败、封面显示了时 A 先弹"只看了封面"的确认框，取消不通过、确认后通过；原图超出浏览器预算、只显示
-//   封面时 A 直接通过，画面上标出"只看了封面"。
 // - m2-review-big-event：505 页按文件夹分给 demo_reviewer、再按子树改派走：页面之外订阅 SSE 核对两次事件都只带
 //   folder_ids（Q10）；分来的靠核对计数发现、整体重拉后出现，改派走的按文件夹整体重拉后消失（都在 5 秒内）。
 // - m2-review-batch-done：Shift、⌘ 点选 5 个（其中 1 个已通过）→ 确认框写"批量通过 4 个文件"、"另有 1 个不是待审"
@@ -349,8 +346,11 @@ async function setTab(page, state) {
   await page.waitForSelector('[data-testid=review-page][data-list=ready]', { timeout: 10000 })
 }
 
-/** 等当前文件（或指定的文件）的原图状态是 ready（或 states 之一）。 */
-async function waitReady(page, fileId, states = ['ready'], timeout = 20000) {
+/**
+ * 等当前文件（或指定的文件）的原图状态落定（states 之一）。默认：壳里画完（ready），浏览器里只显示封面（unsupported，
+ * M10-2 起浏览器里不看原图，照样能审）。
+ */
+async function waitReady(page, fileId, states = ['ready', 'unsupported'], timeout = 20000) {
   try {
     await page.waitForFunction(
       (fid, st) => {
@@ -448,8 +448,6 @@ let tempBig = null
 let tempOther = null
 let tempStale = null
 let tempStale2 = null
-let tempUnseen = null
-let unseenCdp = null
 let notAssigneeHandler = null
 
 function demoFile(ctx, key) {
@@ -535,7 +533,7 @@ export default {
         await page.keyboard.press('c')
         await page.waitForSelector('[data-testid=compare-viewer]', { timeout: 5000 })
         await page.waitForFunction(
-          () => [...document.querySelectorAll('[data-testid=compare-pane] [data-testid=image-viewer]')].every((v) => v.dataset.state === 'ready'),
+          () => [...document.querySelectorAll('[data-testid=compare-pane] [data-testid=image-viewer]')].every((v) => ['ready', 'unsupported'].includes(v.dataset.state)),
           { timeout: 20000 },
         )
         const reviews = await ctx.rev1('GET', `/api/files/${f.file_id}/reviews`)
@@ -906,7 +904,7 @@ export default {
         // ---- 第 4 条：同位切换正在看左边（上一轮）时不能审；并排时第一次按 V 直接显示左边 ----
         await page.keyboard.press('c')
         await page.waitForFunction(
-          () => [...document.querySelectorAll('[data-testid=compare-pane] [data-testid=image-viewer]')].every((v) => v.dataset.state === 'ready'),
+          () => [...document.querySelectorAll('[data-testid=compare-pane] [data-testid=image-viewer]')].every((v) => ['ready', 'unsupported'].includes(v.dataset.state)),
           { timeout: 20000 },
         )
         await page.waitForSelector('[data-testid=review-actions][data-can-act=true]', { timeout: 5000 })
@@ -938,111 +936,6 @@ export default {
       async after() {
         await dropTemp(tempStale)
         await dropTemp(tempStale2)
-      },
-    },
-    {
-      // 验收第 1 轮的第 3 条：审的必须是看到的那一版（确认框那一张中途另存 m2-review-cover-confirm.png）。
-      // 用 CDP 在响应阶段改 batch 的结果来造三种情况（不动真实存储）：P_01 两个地址都为 null（原图、封面都看不到）；
-      // P_02 原图地址连不上（加载失败、封面照常）；P_03 宽高改成 2 万 × 2 万（超出浏览器预算，只显示封面）。
-      name: 'm2-review-unseen',
-      user: REV1,
-      path: '/review',
-      waitFor: '[data-testid=review-page]',
-      async prepare(page) {
-        const ctx = await context(page)
-        tempUnseen = await makeTemp(ctx, '没看到这一版', 4)
-        const [u1, u2, u3, u4] = tempUnseen.files
-        unseenCdp = await page.createCDPSession()
-        await unseenCdp.send('Fetch.enable', { patterns: [{ urlPattern: '*/api/files/batch*', requestStage: 'Response' }] })
-        unseenCdp.on('Fetch.requestPaused', async (ev) => {
-          try {
-            const { body, base64Encoded } = await unseenCdp.send('Fetch.getResponseBody', { requestId: ev.requestId })
-            const data = JSON.parse(base64Encoded ? Buffer.from(body, 'base64').toString('utf8') : body)
-            for (const it of data.items ?? []) {
-              if (it.file_id === u1.file_id) Object.assign(it, { original_url: null, cover_url: null, url_error: { code: 'storage_unavailable', message: '存储已停用（截图模拟）' } })
-              if (it.file_id === u2.file_id) it.original_url = 'http://127.0.0.1:9/m2-6-unreachable.png'
-              if (it.file_id === u3.file_id) Object.assign(it, { width_px: 20000, height_px: 20000 })
-            }
-            await unseenCdp.send('Fetch.fulfillRequest', {
-              requestId: ev.requestId,
-              responseCode: ev.responseStatusCode ?? 200,
-              responseHeaders: (ev.responseHeaders ?? []).filter((h) => h.name.toLowerCase() !== 'content-length'),
-              body: Buffer.from(JSON.stringify(data)).toString('base64'),
-            })
-          } catch {
-            await unseenCdp.send('Fetch.continueRequest', { requestId: ev.requestId }).catch(() => {})
-          }
-        })
-        await page.goto(`${ctx.origin}/review?folder=${tempUnseen.id}`, { waitUntil: IDLE })
-        await page.waitForSelector('[data-testid=review-page][data-list=ready][data-stream=open]', { timeout: 15000 })
-        await rest(page)
-        // P_01：原图、封面都没显示出来：不能审。
-        await page.waitForSelector(`[data-testid=review-page][data-current="${u1.file_id}"][data-seen=none]`, { timeout: 10000 })
-        await page.waitForSelector('[data-testid=review-actions][data-can-act=false]', { timeout: 3000 })
-        const hint1 = await page.$eval('[data-testid=review-blocked]', (e) => e.textContent ?? '')
-        assert(hint1.includes('没看到这一版'), `原图、封面都没显示时的提示：${hint1}`)
-        await page.keyboard.press('a')
-        await page.keyboard.press('r')
-        await sleep(800)
-        assert((await ctx.mgr('GET', `/api/files/${u1.file_id}/reviews`)).review_status === 'pending', '原图、封面都没显示出来时不该能审')
-        assert(!(await page.$('[data-testid=review-actions][data-panel=open]')), '原图、封面都没显示出来时 R 不该打开面板')
-        console.log('  ✓ 原图、封面都没显示出来：A、R 都不响应，提示"没看到这一版"')
-        // P_02：原图加载失败、封面显示了：先确认。
-        await clickRow(page, u2.file_id)
-        await page.waitForSelector(`[data-testid=review-page][data-current="${u2.file_id}"][data-seen=cover-confirm]`, { timeout: 10000 })
-        await page.waitForSelector('[data-testid=review-cover-only][data-seen=cover-confirm]', { timeout: 3000 })
-        await rest(page)
-        await page.keyboard.press('a')
-        await page.waitForSelector('[role=alertdialog]', { visible: true, timeout: 5000 })
-        await sleep(300)
-        const dlg = await page.$eval('[role=alertdialog]', (el) => el.textContent ?? '')
-        assert(dlg.includes('只看了封面'), `确认框文字：${dlg}`)
-        await page.mouse.move(5, 895)
-        await page.screenshot({ path: path.join(OUT_DIR, 'm2-review-cover-confirm.png') })
-        await page.keyboard.press('Escape')
-        await page.waitForSelector('[role=alertdialog]', { hidden: true, timeout: 5000 })
-        await sleep(300)
-        assert((await ctx.mgr('GET', `/api/files/${u2.file_id}/reviews`)).review_status === 'pending', '确认框取消后不该通过')
-        await page.keyboard.press('a')
-        await page.waitForSelector('[role=alertdialog]', { visible: true, timeout: 5000 })
-        await sleep(250)
-        const buttons = await page.$$('[role=alertdialog] button')
-        await buttons[buttons.length - 1].click()
-        await page.waitForSelector('[role=alertdialog]', { hidden: true, timeout: 5000 })
-        let r2 = null
-        for (let i = 0; i < 30 && r2?.review_status !== 'approved'; i++) {
-          await sleep(200)
-          r2 = await ctx.mgr('GET', `/api/files/${u2.file_id}/reviews`)
-        }
-        assert(r2.review_status === 'approved', `确认后应该通过，实际 ${r2.review_status}`)
-        console.log('  ✓ 原图加载失败、只显示了封面：按 A 先弹"只看了封面"确认框，取消不通过，确认后通过')
-        // P_03：原图太大（超出浏览器预算），只显示封面：可以直接审，画面上标出"只看了封面"。
-        await page.waitForSelector(`[data-testid=review-page][data-current="${u3.file_id}"][data-seen=cover]`, { timeout: 10000 })
-        await page.waitForSelector('[data-testid=review-cover-only][data-seen=cover]', { timeout: 3000 })
-        await rest(page)
-        await page.keyboard.press('a')
-        let r3 = null
-        for (let i = 0; i < 30 && r3?.review_status !== 'approved'; i++) {
-          await sleep(200)
-          r3 = await ctx.mgr('GET', `/api/files/${u3.file_id}/reviews`)
-        }
-        assert(r3.review_status === 'approved', `原图太大只看封面时按 A 应该直接通过，实际 ${r3.review_status}`)
-        assert(!(await page.$('[role=alertdialog]')), '原图太大只看封面时不该弹确认框')
-        await waitReady(page, u4.file_id)
-        // 截图：回到 P_02 那种"只看了封面"的样子（已通过，看标记）。
-        await clickRow(page, u2.file_id)
-        await page.waitForSelector('[data-testid=review-cover-only]', { timeout: 10000 })
-        await waitNoToast(page)
-        await rest(page)
-        console.log('  ✓ 原图太大、只显示封面：A 直接通过（不弹确认框），画面上标出"只看了封面"')
-      },
-      async after() {
-        if (unseenCdp) {
-          await unseenCdp.send('Fetch.disable').catch(() => {})
-          await unseenCdp.detach().catch(() => {})
-          unseenCdp = null
-        }
-        await dropTemp(tempUnseen)
       },
     },
     {

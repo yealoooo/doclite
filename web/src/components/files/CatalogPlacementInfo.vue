@@ -11,7 +11,7 @@ import { LoaderCircleIcon } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import { getFileCatalog } from '@/api/catalog'
-import { errorMessage, isApiError } from '@/api/http'
+import { errorMessage, HANDLE_ALL, isApiError } from '@/api/http'
 import type { CatalogPlacement } from '@/api/types'
 import { placementNo } from '@/lib/catalog'
 
@@ -37,7 +37,7 @@ async function load(fileId: string) {
   const my = ++seq
   loading.value = true
   try {
-    const res = await getFileCatalog(fileId, true)
+    const res = await getFileCatalog(fileId, HANDLE_ALL)
     if (my !== seq || props.fileId !== fileId) return
     placement.value = res.placement
     loadedFor.value = fileId

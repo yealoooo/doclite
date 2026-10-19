@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { checkEntryName, checkRemark, MAX_ENTRY_NAME_CHARS } from '@/lib/validate'
+import { HANDLE_ALL } from '@/api/http'
 
 import { opErrorText } from './op-errors'
 
@@ -83,12 +84,12 @@ async function submit() {
         open.value = false
         return
       }
-      const saved = await updateFolder(f.id, body, true)
+      const saved = await updateFolder(f.id, body, HANDLE_ALL)
       emit('saved', saved, false)
     } else if (props.parent) {
       const saved = await createFolder(
         { parent_id: props.parent.id, folder_name: name.value, remark: remark.value.trim() || undefined },
-        true,
+        HANDLE_ALL,
       )
       emit('saved', saved, true)
     }

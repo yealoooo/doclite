@@ -1,7 +1,5 @@
 // 审核分配操作的错误文案（M2-5）。server 的 message 已经说明了原因（例如审核人不合格是哪一条、超过上限），
-// 这里按错误码补上"该怎么办"。错误码见 design §7（M2-1）。
-
-import { toast } from 'vue-sonner'
+// 这里按错误码补上"该怎么办"。错误码见 design §7（M2-1）。提示用 api/http.ts 的 toastOpError（全局处理过的不重复提示）。
 
 import { ApiError, errorMessage } from '@/api/http'
 
@@ -18,26 +16,4 @@ export function reviewOpErrorText(e: unknown): string {
     default:
       return e.message
   }
-}
-
-/**
- * 请求封装已经全局处理过（并提示过）的错误：401（跳登录页）、403 `forbidden`（刷新菜单）、426（升级提示）。
- * 调用方传了 `handle: true` 时其余错误都不弹提示，由调用方提示一次。
- */
-export function handledGlobally(e: unknown): boolean {
-  return (
-    e instanceof ApiError &&
-    (e.status === 401 || (e.status === 403 && e.code === 'forbidden') || e.status === 426)
-  )
-}
-
-/** 操作失败的提示（全局已经提示过的不再重复）。 */
-export function toastOpError(e: unknown, text = reviewOpErrorText(e), description?: string) {
-  if (handledGlobally(e)) return
-  toast.error(text, description ? { description } : undefined)
-}
-
-/** 4xx：这次操作的前提已经不成立（状态变了、文件夹没了、超过上限……），重试也没用。 */
-export function isClientError(e: unknown): boolean {
-  return e instanceof ApiError && e.status >= 400 && e.status < 500
 }

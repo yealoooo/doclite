@@ -1,6 +1,8 @@
-// M2-8 验收（Mac）：在一个新的演示文件夹上把审核循环整个走一遍——分配、改派、两人全键盘审核并驳回、扫描员在浏览器
-// 和壳里重扫、自动回到原审核人（第 2 轮）对比后通过、撤回一页的通过再通过、停用审核人后重扫变成待分配并由负责人重新
-// 分配——再用接口还原 3 个文件的全过程，最后在浏览器和壳里各打开 G4 TIFF 和 200 MB TIFF，记下耗时和内存。
+// M2-8 验收（Mac）：在一个新的演示文件夹上把审核循环整个走一遍——分配、改派、两人全键盘审核并驳回、扫描员在壳里重扫、
+// 自动回到原审核人（第 2 轮）对比后通过、撤回一页的通过再通过、停用审核人后重扫变成待分配并由负责人重新分配——再用接口
+// 还原 3 个文件的全过程，最后在壳里打开 G4 TIFF 和 200 MB TIFF，记下耗时和内存。
+// M10-2 起浏览器里不能重扫、不看原图（只显示封面，照样能审）：原来浏览器里重扫的几页并进壳的重扫一步，浏览器里打开大图的
+// 两张删掉了；浏览器里审核的几步照常，原图那一步等的是"只显示封面"。
 //
 //   INIT_ADMIN_PASSWORD=admin123456 SHOTS_TMP=<临时目录> \
 //   M2_ACCEPT_SHELL=<打包的壳>/Doclite.app/Contents/MacOS/Doclite M2_ACCEPT_SERVER=http://127.0.0.1:<网页入口的端口> \
@@ -27,29 +29,25 @@
 //  1. m2-accept-assign：demo_manager 在 /review-assign 按文件夹把 26 页分给 demo_reviewer（确认框"含子文件夹，共 26 个
 //     待分配"，中途另存 m2-accept-assign-confirm）；接口核对 26 个文件各一行 open、assign_review 日志。
 //  2. m2-accept-reassign：在盒 03 全选 8 页，批量改派给 demo_reviewer2；接口核对旧行 cancelled、新行 open、reassign_review。
-//  3. m2-accept-review-browser：demo_reviewer 在浏览器的 /review 只用键盘审完 18 页（A 通过，R → 数字勾原因 → Tab 写
+//  3. m2-accept-review-browser：demo_reviewer 在浏览器的 /review（只显示封面）只用键盘审完 18 页（A 通过，R → 数字勾原因 → Tab 写
 //     说明 → Enter 驳回），驳回 4 页；接口核对每个文件的结论、原因、说明、所审快照和日志。
 //  4. m2-accept-review-shell：demo_reviewer2 在壳模式（Wails 桥的模拟，分块由 devshell 用客户端的 Go 代码现场切）只用键盘审完
 //     8 页，驳回 3 页；断言用的是分块、给下一张调了 prepare_tiles。打包的壳里的键盘操作没法自动化，写在给用户的演示步骤里。
-//  5. m2-accept-rescan-browser：demo_scanner 在浏览器的 /scan 待重扫列表里重扫 3 页（2 页回到 demo_reviewer、1 页回到
-//     demo_reviewer2）；接口核对 v2 快照、封面、自动再分配（assigned_by 沿用驳回那一行）和 rescan 日志。
-//  6. m2-accept-rescan-shell：打包的壳 `--smoke` 的 rescan 一步各重扫 1 页（demo_reviewer、demo_reviewer2 各一页）；核对同上，
-//     另核对快照的 sha 等于本地文件。
+//  5. m2-accept-rescan-shell：打包的壳 `--smoke` 的 rescan 一步重扫 5 页（3 页回到 demo_reviewer、2 页回到 demo_reviewer2；
+//     没给 M2_ACCEPT_SHELL 时按壳的字段用接口重扫）；接口核对 v2 快照、封面、自动再分配（assigned_by 沿用驳回那一行）、
+//     rescan 日志，快照的 sha 等于本地文件。
 //  7. m2-accept-round2-browser：demo_reviewer 打开第 2 轮的 3 页：横幅"上一轮因…被驳回"，按 C 对比（左 v1 标驳回原因、
 //     右 v2，中途另存 m2-accept-round2-compare），按 A 通过 v2；再在页面上撤回其中一页的通过、按 A 再通过。
 //  8. m2-accept-round2-shell：demo_reviewer2 在壳模式里对比（两侧都是分块，中途另存 m2-accept-round2-shell-compare）后
 //     通过他的 2 页。
-//  9. m2-accept-disabled-rescan：admin 停用 demo_reviewer2，demo_scanner 在浏览器重扫他驳回的最后一页 → 对话框"…已不能再审
-//     这个项目，改为待分配"；接口核对 unassigned、没有 open 分配、rescan 日志带 skipped_reviewer。
+//  9. m2-accept-disabled-rescan：admin 停用 demo_reviewer2，demo_scanner 按壳的字段用接口重扫他驳回的最后一页 → 待分配；接口核对 unassigned、没有 open 分配、rescan 日志带 skipped_reviewer。
 // 10. m2-accept-reassign-unassigned：demo_manager 在 /review-assign 把这一页分给 demo_reviewer（右栏日志看得到"已不能再审"
 //     和新的分配）；after 里重新启用 demo_reviewer2（前面失败了也启用）。
 // 11. m2-accept-final：demo_reviewer 对比后通过这一页。
-// 12. m2-accept-restore：用 `GET /api/files/{fid}/logs`、`/reviews`、`/snapshots` 还原 3 个文件的全过程并断言（A：驳回 → 浏览器
-//     重扫 → 通过 → 撤回 → 再通过；B：改派 → 驳回 → 壳重扫 → 通过；C：改派 → 驳回 → 审核人停用后重扫 → 负责人重新分配 → 通过），
+// 12. m2-accept-restore：用 `GET /api/files/{fid}/logs`、`/reviews`、`/snapshots` 还原 3 个文件的全过程并断言（A：驳回 → 重扫
+//     → 通过 → 撤回 → 再通过；B：改派 → 驳回 → 壳重扫 → 通过；C：改派 → 驳回 → 审核人停用后重扫 → 负责人重新分配 → 通过），
 //     打印一行 `ACCEPT_IDS {...}` 给外面的 SQL 核对；核对 seed 的文件夹的计数没变。截图是 C 在 /review-assign 右栏的日志。
-// 13. m2-accept-big-browser-g4、m2-accept-big-browser-200mb：浏览器（独立的上下文）打开 DEMO-A/M2-8 大图样本 的 G4 TIFF（a4-g4-1bit.tif）、
-//     a3-600-none-rgb.tif，记下到画完的耗时和渲染进程的内存峰值。
-// 14. m2-accept-big-shell：打包的壳 `--smoke`（cold，tiles + viewer 两步只对这一个文件）各打开这两张，记下切块耗时、viewer
+// 13. m2-accept-big-shell：打包的壳 `--smoke`（cold，tiles + viewer 两步只对这一个文件）各打开这两张，记下切块耗时、viewer
 //     画完的耗时、壳进程和 WebKit 的 WebContent 进程的内存峰值。截图只是 M2-8 大图样本 文件夹。
 
 import { spawn, execFileSync } from 'node:child_process'
@@ -69,12 +67,8 @@ import {
   login as loginPage,
   openFolder,
   pageOrigin,
-  openViewer,
-  sampleMemory,
-  settle,
   shotsTmp,
   sleep,
-  waitViewer,
 } from '../lib/viewer-shots.mjs'
 
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
@@ -135,8 +129,7 @@ const REJECTS_REV2 = {
   '盒 03/IMG_0008.png': { keys: ['4'], reasons: ['stain'], comment: '中间一大块墨迹' },
 }
 /** 谁在哪里重扫：A、B、C 是最后还原过程的 3 个文件。盒 04/IMG_0003 留着待重扫（给用户亲手演示）。 */
-const RESCAN_BROWSER = ['盒 01/IMG_0002.png', '盒 02/IMG_0004.png', '盒 03/IMG_0002.png']
-const RESCAN_SHELL = ['盒 01/IMG_0006.png', '盒 03/IMG_0005.png']
+const RESCAN_SHELL = ['盒 01/IMG_0002.png', '盒 02/IMG_0004.png', '盒 03/IMG_0002.png', '盒 01/IMG_0006.png', '盒 03/IMG_0005.png']
 const FILE_A = '盒 01/IMG_0002.png'
 const FILE_B = '盒 03/IMG_0005.png'
 const FILE_C = '盒 03/IMG_0008.png'
@@ -549,7 +542,7 @@ async function openReview(page, folderId, { tab } = {}) {
   }
 }
 
-/** 等当前文件（或指定的文件）的原图状态是 ready。 */
+/** 等当前文件（或指定的文件）的原图状态落定：壳里画完（ready），浏览器里只显示封面（unsupported，照样能审）。 */
 async function waitReady(page, fileId, timeout = 30000) {
   try {
     await page.waitForFunction(
@@ -557,7 +550,7 @@ async function waitReady(page, fileId, timeout = 30000) {
         const el = document.querySelector('[data-testid=review-page]')
         if (!el || !el.dataset.current) return false
         if (fid && el.dataset.current !== fid) return false
-        return el.dataset.phase === 'ready'
+        return el.dataset.phase === 'ready' || el.dataset.phase === 'unsupported'
       },
       { timeout, polling: 50 },
       fileId ?? null,
@@ -680,7 +673,8 @@ async function compareAndApprove(page, ctx, f, reviewer, rj, { mode, shot } = {}
   await page.waitForFunction(
     (m) => {
       const v = [...document.querySelectorAll('[data-testid=compare-pane] [data-testid=image-viewer]')]
-      return v.length === 2 && v.every((x) => x.dataset.state === 'ready' && (!m || x.dataset.mode === m))
+      // 浏览器里两侧只显示封面（unsupported）；壳里要画完、用分块。
+      return v.length === 2 && v.every((x) => (m ? x.dataset.state === 'ready' && x.dataset.mode === m : ['ready', 'unsupported'].includes(x.dataset.state)))
     },
     { timeout: 30000 },
     mode ?? null,
@@ -720,38 +714,6 @@ async function compareAndApprove(page, ctx, f, reviewer, rj, { mode, shot } = {}
 
 async function waitRescanList(page) {
   await page.waitForSelector('[data-testid=rescan-list][data-state=ready]', { timeout: 15000 })
-}
-
-/** 在待重扫列表上重扫一页（注入一张新扫的 PNG，和选择框同一段代码），返回对话框的结果。 */
-async function rescanOnPage(page, f, name, png) {
-  await waitRescanList(page)
-  const item = `[data-testid=rescan-item][data-file-id="${f.file_id}"]`
-  await page.waitForSelector(item, { timeout: 8000 })
-  await page.$eval(item, (el) => el.scrollIntoView({ block: 'center' }))
-  await page.click(`${item} [data-testid=rescan-item-upload]`)
-  await page.waitForSelector(`[data-testid=rescan-dialog][data-file-id="${f.file_id}"] [data-testid=rescan-input]`, { timeout: 5000 })
-  await page.evaluate(
-    (n, b64) => {
-      const bin = atob(b64)
-      const bytes = new Uint8Array(bin.length)
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-      document.querySelector('[data-testid=rescan-input]').dispatchEvent(new CustomEvent('doclite-inject-files', { detail: [new File([bytes], n, { type: 'image/png' })] }))
-    },
-    name,
-    png.toString('base64'),
-  )
-  await page.waitForSelector('[data-testid=rescan-dialog] [data-testid=rescan-result]', { timeout: 30000 })
-  return page.$eval('[data-testid=rescan-dialog]', (d) => ({
-    result: d.querySelector('[data-testid=rescan-result]')?.dataset.result,
-    title: d.querySelector('[data-testid=rescan-result-title]')?.textContent.replace(/\s+/g, ' ').trim(),
-    reassign: d.querySelector('[data-testid=rescan-reassign]')?.textContent.trim() ?? null,
-  }))
-}
-
-async function closeRescanDialog(page) {
-  await page.click('[data-testid=rescan-dialog] [data-testid=rescan-close]')
-  await page.waitForFunction(() => !document.querySelector('[data-testid=rescan-dialog]') && document.body.style.pointerEvents !== 'none', { timeout: 5000 })
-  await sleep(200)
 }
 
 // ---------- 打包的壳（--smoke） ----------
@@ -1032,39 +994,6 @@ export default {
       await rest(page)
     }),
     {
-      name: 'm2-accept-rescan-browser',
-      user: SCANNER,
-      path: '/scan',
-      waitFor: '[data-testid=rescan-list]',
-      async prepare(page) {
-        const ctx = await context(page)
-        await waitRescanList(page)
-        const total = Number(await page.$eval('[data-testid=rescan-list]', (e) => e.dataset.total))
-        const api = await ctx.scanner('GET', `/api/projects/${ctx.project.id}/rescans?limit=2000`)
-        assert(total === api.total, `角标 ${total}、接口 ${api.total}`)
-        const ours = api.items.filter((i) => Object.values(ctx.files).some((f) => f.file_id === i.file_id))
-        assert(ours.length === 7, `演示文件夹应有 7 页待重扫：${ours.length}`)
-        for (const key of RESCAN_BROWSER) {
-          const f = file(ctx, key)
-          const reviewer = key in REJECTS_REV1 ? REV1 : REV2
-          const name = `${f.file_name.replace('.png', '')} 重扫.png`
-          const p = newPage(`浏览器重扫 ${key}`, Number(f.file_name.slice(4, 8)), key === FILE_A ? 300 : 200)
-          const t0 = Date.now()
-          const r = await rescanOnPage(page, f, name, p.png)
-          const ms = Date.now() - t0
-          assert(r.result === 'done', `${key} 重扫结果：${JSON.stringify(r)}`)
-          assert(r.reassign === `自动分给 ${ctx.displayName(reviewer)}`, `${key} 的说明：${r.reassign}`)
-          await verifyRescan(ctx, f, { uploadName: name, reviewer })
-          state.rescanned[key] = { where: '浏览器', name, ms }
-          console.log(`  ✓ 浏览器重扫 ${key}（${ms} ms）：${r.title}；${r.reassign}`)
-          await closeRescanDialog(page)
-        }
-        await page.waitForFunction((n) => document.querySelector('[data-testid=rescan-list]')?.dataset.total === String(n), { timeout: 5000 }, total - 3)
-        await waitCovers(page)
-        await rest(page)
-      },
-    },
-    {
       name: 'm2-accept-rescan-shell',
       user: SCANNER,
       path: '/scan',
@@ -1075,7 +1004,7 @@ export default {
           const f = file(ctx, key)
           const reviewer = key in REJECTS_REV1 ? REV1 : REV2
           const name = `${f.file_name.replace('.png', '')} 壳重扫.png`
-          const p = newPage(`壳重扫 ${key}`, Number(f.file_name.slice(4, 8)))
+          const p = newPage(`壳重扫 ${key}`, Number(f.file_name.slice(4, 8)), key === FILE_A ? 300 : 200)
           const local = path.join(shotsTmp('m2-accept-rescan-files'), name)
           writeFileSync(local, p.png)
           const sha = createHash('sha256').update(p.png).digest('hex')
@@ -1182,17 +1111,21 @@ export default {
         console.log(`  已停用 ${REV2}`)
         const name = `${c.file_name.replace('.png', '')} 重扫.png`
         const p = newPage(`停用后重扫 ${FILE_C}`, Number(c.file_name.slice(4, 8)))
-        const r = await rescanOnPage(page, c, name, p.png)
-        assert(r.result === 'done', `重扫结果：${JSON.stringify(r)}`)
-        assert(r.reassign === `${ctx.displayName(REV2)} 已不能再审这个项目，改为待分配`, `说明：${r.reassign}`)
+        // 浏览器里不能重扫（M10-2）：照壳的字段用接口重扫。
+        const form = new FormData()
+        form.append('file_name', name)
+        form.append('content_sha256', createHash('sha256').update(p.png).digest('hex'))
+        form.append('cover', new Blob([p.cover], { type: 'image/jpeg' }), 'cover.jpg')
+        form.append('file', new Blob([p.png], { type: 'image/png' }), 'page.png')
+        const r = await ctx.scanner('POST', `/api/files/${c.file_id}/rescan`, form)
+        assert(r.review_status === 'unassigned' && !r.reviewer_id, `重扫结果：${JSON.stringify(r)}`)
         await verifyRescan(ctx, c, { uploadName: name, reviewer: null, skipped: ctx.displayName(REV2) })
-        state.rescanned[FILE_C] = { where: '浏览器（审核人已停用）', name }
-        console.log(`  ✓ 停用 ${REV2} 后在浏览器重扫 ${FILE_C}：${r.title}；${r.reassign}；接口核对 unassigned、没有 open 分配、rescan 日志带 skipped_reviewer`)
+        state.rescanned[FILE_C] = { where: '接口（审核人已停用）', name }
+        console.log(`  ✓ 停用 ${REV2} 后重扫 ${FILE_C}：v${r.version_no} 待分配；接口核对 unassigned、没有 open 分配、rescan 日志带 skipped_reviewer`)
+        await page.reload({ waitUntil: IDLE })
+        await waitRescanList(page)
         await sleep(300)
         await rest(page)
-      },
-      async after(page) {
-        await closeRescanDialog(page).catch(() => {})
       },
     },
     {
@@ -1328,32 +1261,6 @@ export default {
         await rest(page)
       },
     },
-    ...[BIG_G4, BIG_200].map((name) => ({
-      name: name === BIG_G4 ? 'm2-accept-big-browser-g4' : 'm2-accept-big-browser-200mb',
-      path: '/login',
-      waitFor: '#username',
-      init: async () => {},
-      async prepare(page) {
-        const origin = new URL(page.url()).origin
-        await loginPage(page, origin, admin, adminPassword)
-        const ctx = await context(page)
-        const folder = await bench(ctx)
-        const f = (await ctx.admin('GET', `/api/folders/${folder.id}/children`)).files.find((x) => x.file_name === name)
-        assert(f, `${BENCH_FOLDER} 里没有 ${name}`)
-        await openFolder(page, origin, folder.id)
-        const mem = sampleMemory(page.browser(), 50)
-        const t0 = Date.now()
-        await openViewer(page, name)
-        const d = await waitViewer(page, ['ready'], { timeout: 120000 })
-        const ms = Date.now() - t0
-        await settle(page)
-        await sleep(2000)
-        const peak = mem.stop()
-        state[`browser ${name}`] = { ms, ...peak, mode: d.mode }
-        console.log(`  浏览器打开 ${name}（${d.mode}）：${ms} ms 画完；渲染进程 RSS 打开前 ${peak.rendererBase} MiB、峰值 ${peak.renderer} MiB、画完 2 秒后 ${peak.rendererEnd} MiB；GPU 进程峰值 ${peak.gpu} MiB`)
-      },
-      delay: 300,
-    })),
     {
       name: 'm2-accept-big-shell',
       user: admin,
@@ -1383,7 +1290,7 @@ export default {
         }
         await openFolder(page, ctx.origin, folder.id)
         await waitCovers(page)
-        console.log(`STATE ${JSON.stringify({ timings: state.timings, rescanned: state.rescanned, shellRuns: state.shellRuns.map(({ steps, ...r }) => r), browser: Object.fromEntries(Object.entries(state).filter(([k]) => k.startsWith('browser '))) })}`)
+        console.log(`STATE ${JSON.stringify({ timings: state.timings, rescanned: state.rescanned, shellRuns: state.shellRuns.map(({ steps, ...r }) => r) })}`)
       },
     },
   ],

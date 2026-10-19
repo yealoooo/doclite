@@ -5,7 +5,7 @@
 // - 数据：`GET /api/projects/{pid}/catalog-summary?folder_id=`（每次实时聚合）。根文件夹（不传 folder_id）是整个项目：
 //   总数（FlowSteps：已上传 → 审核通过 → 已归档 → 已锁定 → 可导出）；它的 children 是按文件夹的表的第一层，
 //   点箭头逐层展开（FolderProgressTable，展开时取那个文件夹的 catalog-summary）。
-// - 计数用 `useFolderSummaries`（和 /review-assign 的 useReviewCounts 同一套）：每个加载过的文件夹记下 parent 关系，
+// - 计数用 `useFolderSummaries`（和 /review-assign 的计数同一套）：每个加载过的文件夹记下 parent 关系，
 //   `files.changed` 只带文件直接所在的文件夹，沿 parent 链刷新祖先里已加载的（不认识的文件夹用
 //   `GET /api/folders/{id}` 补祖先链，要 files 或 scan 菜单；没有时刷新全部已加载的）。
 // - 实时（useProjectStream，去抖：最后一条事件后 300 ms，最多等 1 秒）：`files.changed` 按路径刷新；
@@ -21,11 +21,13 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 
 import { getCatalogSummary } from '@/api/catalog'
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import type { CatalogCounts, CatalogSummary, ProjectEvent } from '@/api/types'
 import { Button } from '@/components/ui/button'
+import StreamStatus from '@/components/app/StreamStatus.vue'
 import { useFolderSummaries } from '@/composables/useFolderSummaries'
-import { useProjectStream } from '@/composables/useProjectStream'
+import { useEventBatch, useProjectStream } from '@/composables/useProjectStream'
+import { formatClock } from '@/lib/format'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 
@@ -46,7 +48,7 @@ const sums = useFolderSummaries<CatalogCounts, CatalogSummary>(
   async (pid, folderId) => {
     // 错误由页面自己显示（根文件夹在页头，展开失败在 toast），不弹默认提示；404 由 useFolderSummaries 处理。
     try {
-      const s = await getCatalogSummary(pid, folderId, true)
+      const s = await getCatalogSummary(pid, folderId, HANDLE_ALL)
       if (folderId === null) refreshError.value = null
       return s
     } catch (e) {
@@ -202,18 +204,8 @@ async function refreshNow() {
 const pendingFolders = new Set<string>()
 let pendingAll = false
 let pendingStructure = false
-let applyTimer: ReturnType<typeof setTimeout> | null = null
-let firstPendingAt = 0
-const EVENT_DEBOUNCE_MS = 300
-const EVENT_MAX_WAIT_MS = 1000
-
-function scheduleApply() {
-  const now = Date.now()
-  if (!firstPendingAt) firstPendingAt = now
-  if (applyTimer) clearTimeout(applyTimer)
-  const wait = Math.min(EVENT_DEBOUNCE_MS, Math.max(0, firstPendingAt + EVENT_MAX_WAIT_MS - now))
-  applyTimer = setTimeout(() => void applyEvents(), wait)
-}
+// 一轮超过去抖时间时不叠加，跑完再补一次（审查第 1 轮，useEventBatch）。
+const batch = useEventBatch(applyEvents)
 
 function onEvent(e: ProjectEvent) {
   if (e.type === 'resync' || e.type === 'catalog.changed') pendingAll = true
@@ -222,47 +214,27 @@ function onEvent(e: ProjectEvent) {
     if (e.folder_ids?.length) e.folder_ids.forEach((id) => pendingFolders.add(id))
     else pendingAll = true
   } else return
-  scheduleApply()
+  batch.schedule()
 }
 
-/** 一轮刷新正在跑（审查第 1 轮：一轮超过去抖时间时不叠加，跑完再补一次）。 */
-let applying = false
-/** 跑的期间又到了该刷新的时候：跑完马上再来一轮（这期间攒下的事件一起处理）。 */
-let applyAgain = false
-
 async function applyEvents() {
-  applyTimer = null
-  firstPendingAt = 0
   if (!alive) return
-  if (applying) {
-    applyAgain = true
+  const folders = new Set(pendingFolders)
+  const structure = pendingStructure
+  const all = pendingAll || structure
+  pendingFolders.clear()
+  pendingAll = false
+  pendingStructure = false
+  if (rootState.value !== 'ready') {
+    // 第一次还没取到（或失败了）：重新取根文件夹。
+    await loadRoot()
     return
   }
-  applying = true
-  try {
-    const folders = new Set(pendingFolders)
-    const structure = pendingStructure
-    const all = pendingAll || structure
-    pendingFolders.clear()
-    pendingAll = false
-    pendingStructure = false
-    if (rootState.value !== 'ready') {
-      // 第一次还没取到（或失败了）：重新取根文件夹。
-      await loadRoot()
-      return
-    }
-    // "全部"只是根和看得见的展开链上的文件夹（syncTracked 之后 useFolderSummaries 只跟踪这些）。
-    if (structure) sums.forgetUnloadedParents()
-    if (all) await sums.refreshAll()
-    else await sums.refreshForFolders(folders)
-    syncTracked()
-  } finally {
-    applying = false
-    if (applyAgain && alive) {
-      applyAgain = false
-      void applyEvents()
-    }
-  }
+  // "全部"只是根和看得见的展开链上的文件夹（syncTracked 之后 useFolderSummaries 只跟踪这些）。
+  if (structure) sums.forgetUnloadedParents()
+  if (all) await sums.refreshAll()
+  else await sums.refreshForFolders(folders)
+  syncTracked()
 }
 
 const stream = useProjectStream(() => project.currentId, {
@@ -271,11 +243,8 @@ const stream = useProjectStream(() => project.currentId, {
     if (!first || rootState.value === 'ready') {
       // 重连（断开期间的事件不会补发），或第一次连上时已经取好了（加载和连接建立之间可能漏了事件）：全部刷新。
       pendingAll = true
-      scheduleApply()
+      batch.schedule()
     }
-  },
-  onStopped: (err) => {
-    if (err.status === 403 || err.status === 404) void project.refresh()
   },
 })
 
@@ -285,15 +254,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   alive = false
-  if (applyTimer) clearTimeout(applyTimer)
-  applyTimer = null
 })
-
-function timeText(d: Date | null): string {
-  if (!d) return ''
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
-}
 </script>
 
 <template>
@@ -314,19 +275,9 @@ function timeText(d: Date | null): string {
         刷新失败：{{ refreshError }}
       </span>
       <span v-if="updatedAt" class="shrink-0 text-xs text-muted-foreground tabular-nums" data-testid="dashboard-updated">
-        更新于 {{ timeText(updatedAt) }}
+        更新于 {{ formatClock(updatedAt) }}
       </span>
-      <span
-        v-if="project.current"
-        class="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-        :title="stream.state.value === 'open' ? '已连接实时更新' : '实时更新已断开，正在重连'"
-      >
-        <span
-          class="size-1.5 rounded-full"
-          :class="stream.state.value === 'open' ? 'bg-ok' : stream.state.value === 'stopped' ? 'bg-destructive' : 'animate-pulse bg-warn'"
-        />
-        {{ stream.state.value === 'open' ? '实时' : stream.state.value === 'stopped' ? '已断开' : '连接中…' }}
-      </span>
+      <StreamStatus v-if="project.current" :state="stream.state.value" />
       <Button v-if="project.current" variant="outline" size="sm" data-testid="dashboard-refresh" @click="refreshNow">
         <RefreshCwIcon />刷新
       </Button>

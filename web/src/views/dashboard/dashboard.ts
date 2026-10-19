@@ -20,11 +20,6 @@ export function barWidth(part: number, total: number): string {
   return `${percent(part, total) ?? 0}%`
 }
 
-/** 数字加千分位；没有时 `…`。 */
-export function num(v: number | null | undefined): string {
-  return v == null ? '…' : v.toLocaleString()
-}
-
 /** "可导出"的说明（和导出预检勾"只导出审核通过的"时的"就绪"相同，按 `export.require_locked_item`）。 */
 export function exportableText(requireLocked: boolean): { short: string; long: string } {
   return requireLocked

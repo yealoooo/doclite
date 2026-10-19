@@ -1,7 +1,7 @@
 // 导出页（M4-5）用的名称、颜色和小工具：任务状态、格式、预检的不就绪原因、交付后变更的原因、范围的显示，以及
 // "新建导出"的地址约定（/catalog 的入口带着范围跳过来）。
 
-import type { ExportFormat, ExportTask, ReviewStatus } from '@/api/types'
+import type { ExportFormat, ExportTask } from '@/api/types'
 
 // ---------- 任务状态 ----------
 
@@ -105,14 +105,6 @@ export const CHANGE_ORDER = [
   'item_deleted',
 ] as const
 
-/** 审核状态的叫法（和 server 的"0012 第 3 页：待审"一致）。 */
-export const REVIEW_LABEL: Record<ReviewStatus, string> = {
-  unassigned: '待分配',
-  pending: '待审',
-  approved: '通过',
-  rejected: '驳回',
-}
-
 // ---------- 范围的显示 ----------
 
 /** 条目的称呼：有档号用档号，没有用"第 n 件"。 */
@@ -188,6 +180,3 @@ export function newExportQuery(draft: Partial<NewExportDraft> & Pick<NewExportDr
   if (draft.onlyApproved === false) q.approved = '0'
   return q
 }
-
-/** 地址栏里一次最多带多少个 id（太长的地址在一些代理上会被拒）；更多的在导出页里选。 */
-export const MAX_QUERY_IDS = 100

@@ -7,17 +7,14 @@
 //   双击或 Enter 打开（文件夹：进入；文件：由页面决定）。点空白处取消选择。
 // - 整理的快捷键（M1-12）交给页面：F2 重命名、Delete（或 Backspace）删除、Ctrl/⌘+C 复制（`command` 事件）。
 //   右键菜单由页面包在外面（按单元格上的 data-key 定位条目）。
-// - M3-6 挂接工作台的待归类池另用几个可选的 props（不给时和原来完全一样）：`dense`（窄格子、小封面，名字前加显示
-//   位置"#n"——区间选择按显示位置，用户决定 Q4）、`note`（每个文件多一行说明，例如"在 0012 第 3 页"）、
-//   `draggableFiles`（文件可以拖出去：`dragstart`、`dragend` 事件，拖什么由页面决定）、`visibleOwner`（在 image-info
-//   store 里登记可见范围用的名字）；可见的 file_id 变了发 `visible` 事件（页面按需取别的信息，例如归在哪个条目）。
+// - 归类页另用两个可选的 props（不给时和原来完全一样）：`dense`（窄格子、小封面，名字前加显示位置"#n"——区间选择
+//   按显示位置，用户决定 Q4）、`visibleOwner`（在 image-info store 里登记可见范围用的名字）。
 // - M9：子文件夹的格子、行上显示归档状态（FolderArchiveBadge：🔒 节点名 件号 / ✎ 修改中）。
 import { useResizeObserver } from '@vueuse/core'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { FolderIcon } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-import type { FileEntry } from '@/api/types'
 import FolderArchiveBadge from '@/components/catalog/FolderArchiveBadge.vue'
 import FileCover from '@/components/files/FileCover.vue'
 import type { Selection } from '@/composables/useSelection'
@@ -25,15 +22,7 @@ import { formatDateTime } from '@/lib/format'
 import { formatBytes, formatSpec, isLowDpi, reviewStatusOf } from '@/lib/files'
 import { useImageInfoStore } from '@/stores/image-info'
 
-import type { Entry, FileItemEntry, ViewMode } from './entries'
-
-/** 文件格子下面多显示的一行（M3-6）。`data` 原样放到这一行的元素上（截图脚本用）。 */
-export interface GridNote {
-  text: string
-  title?: string
-  tone?: 'muted' | 'info' | 'violet'
-  data?: Record<string, string | number>
-}
+import type { Entry, ViewMode } from './entries'
 
 const props = defineProps<{
   entries: Entry[]
@@ -41,14 +30,8 @@ const props = defineProps<{
   selection: Selection
   /** 窄格子、小封面，名字前显示位置"#n"（归类页的左栏和件的页）。只影响图标视图。 */
   dense?: boolean
-  /** 文件格子下面多显示的一行；返回 null 不显示。 */
-  note?: (file: FileEntry) => GridNote | null
-  /** 文件可以拖出去（发 dragstart、dragend）。 */
-  draggableFiles?: boolean
   /** 在 image-info store 里登记可见范围用的名字（同一页面有两个列表时区分），默认 files-grid。 */
   visibleOwner?: string
-  /** 可见范围上下各多渲染几行，默认 3。 */
-  overscan?: number
 }>()
 
 /** 整理的快捷键（M1-12）：F2 重命名、Delete 删除、Ctrl/⌘+C 复制。 */
@@ -57,9 +40,6 @@ export type GridCommand = 'rename' | 'delete' | 'copy'
 const emit = defineEmits<{
   open: [entry: Entry]
   command: [command: GridCommand]
-  dragstart: [entry: FileItemEntry, ev: DragEvent]
-  dragend: [ev: DragEvent]
-  visible: [fileIds: string[]]
 }>()
 
 const images = useImageInfoStore()
@@ -99,7 +79,7 @@ const virtualizer = useVirtualizer(
     count: rowCount.value,
     getScrollElement: () => scrollEl.value,
     estimateSize: () => rowHeight.value,
-    overscan: props.overscan ?? 3,
+    overscan: 3,
     paddingStart: props.view === 'icons' ? PAD : 0,
     paddingEnd: PAD,
   })),
@@ -122,33 +102,12 @@ const visibleFileIds = computed(() => {
   }
   return ids
 })
-watch(
-  visibleFileIds,
-  (ids) => {
-    images.setVisible(VISIBLE_OWNER, ids)
-    emit('visible', ids)
-  },
-  { immediate: true },
-)
+watch(visibleFileIds, (ids) => images.setVisible(VISIBLE_OWNER, ids), { immediate: true })
 onBeforeUnmount(() => images.clearVisible(VISIBLE_OWNER))
 
 /** 显示位置（从 1 起，dense 时名字前的"#n"）。 */
 function positionOf(entry: Entry): number {
   return (indexOfKey.value.get(entry.key) ?? 0) + 1
-}
-
-const NOTE_TONE: Record<NonNullable<GridNote['tone']>, string> = {
-  muted: 'text-muted-foreground',
-  info: 'text-info',
-  violet: 'text-violet-700',
-}
-
-function onDragStart(entry: Entry, ev: DragEvent) {
-  if (!props.draggableFiles || entry.kind !== 'file') {
-    if (props.draggableFiles) ev.preventDefault()
-    return
-  }
-  emit('dragstart', entry, ev)
 }
 
 // ---------- 选择和键盘 ----------
@@ -284,11 +243,8 @@ defineExpose({ scrollToKey })
               :data-folder-id="entry.kind === 'folder' ? entry.folder.id : undefined"
               :data-position="props.dense ? positionOf(entry) : undefined"
               :aria-selected="props.selection.isSelected(entry.key)"
-              :draggable="props.draggableFiles && entry.kind === 'file' ? 'true' : undefined"
               @click.stop="onCellClick(entry, $event)"
               @dblclick="emit('open', entry)"
-              @dragstart="onDragStart(entry, $event)"
-              @dragend="emit('dragend', $event)"
             >
               <template v-if="entry.kind === 'file'">
                 <FileCover
@@ -323,17 +279,6 @@ defineExpose({ scrollToKey })
                   {{ reviewStatusOf(entry.file.review_status).label }}
                   <span v-if="props.dense && entry.file.version_no > 1" class="font-mono">· v{{ entry.file.version_no }}</span>
                 </div>
-                <template v-if="props.note">
-                  <div
-                    v-for="n in [props.note(entry.file)]"
-                    :key="n ? 'note' : 'none'"
-                    class="h-4 w-full truncate text-center text-[11px] leading-4"
-                    :class="n ? NOTE_TONE[n.tone ?? 'muted'] : ''"
-                    :title="n?.title"
-                    data-testid="file-note"
-                    v-bind="n?.data ?? {}"
-                  >{{ n?.text ?? '' }}</div>
-                </template>
               </template>
               <template v-else>
                 <div class="flex items-center justify-center" :class="props.dense ? 'h-[102px] w-[72px]' : 'h-[130px] w-[92px]'">

@@ -10,7 +10,7 @@
 // 注意 403 `forbidden`（菜单不对或进不了项目）走全局处理（刷新会话、跳无权提示页），`handle` 拦不住：调用前先确认
 // 有菜单、能进这个项目。
 
-import { request, requestQuiet, type RequestOptions } from './http'
+import { type Handle, request } from './http'
 import type {
   ArchiveCategory,
   ArchiveCategoryList,
@@ -28,8 +28,6 @@ import type {
   UpdateArchiveItemBody,
   UpdatedArchiveCategory,
 } from './types'
-
-type Handle = RequestOptions['handle']
 
 /** 归类要用的项目设置（补上了默认值）：档号模板、著录项、锁定和导出的开关、归类编码的规则。 */
 export function getCatalogSettings(projectId: string, handle?: Handle) {
@@ -123,10 +121,6 @@ export const MAX_ITEMS_PAGE = 2000
 export const MAX_LOCK_ITEMS = 500
 /** 一次归档最多选多少个文件夹（展开子文件夹后也不能超过）。 */
 export const MAX_ARCHIVE_FOLDERS = 500
-/** 一件最多多少页。 */
-export const MAX_ITEM_PAGES = 2000
-/** 解除封存的原因最长多少字。 */
-export const MAX_UNSEAL_REASON_CHARS = 200
 
 /** 直接放在这个节点里的条目（不含下级节点），按件号排，keyset 分页。 */
 export function listArchiveItems(
@@ -230,7 +224,7 @@ export function deleteArchiveItem(id: string, rowVersion: number, handle?: Handl
  * 项目（不在这个项目里），这时当作没有这个条目，不是"你的权限变了"。
  */
 export function probeArchiveItem(id: string, handle?: Handle) {
-  return requestQuiet<ArchiveItem>(`/api/archive-items/${id}`, { handle })
+  return request<ArchiveItem>(`/api/archive-items/${id}`, { handle, quiet403: true })
 }
 
 /** 按项目现在的模板重新生成 `categoryId` 子树（不传是整个项目）里未锁定条目的档号。 */

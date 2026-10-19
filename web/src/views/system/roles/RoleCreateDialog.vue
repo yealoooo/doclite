@@ -2,7 +2,7 @@
 // 新建角色：编码、名称、说明。菜单在右侧的权限树里勾选后保存。
 import { ref, watch } from 'vue'
 
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import { createRole } from '@/api/system'
 import type { RoleItem } from '@/api/types'
 import { Button } from '@/components/ui/button'
@@ -52,7 +52,7 @@ async function submit() {
         role_name: roleName.value.trim(),
         description: description.value.trim() || undefined,
       },
-      true,
+      HANDLE_ALL,
     )
     emit('created', role)
     open.value = false

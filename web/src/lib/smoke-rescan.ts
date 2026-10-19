@@ -13,7 +13,7 @@
 // 账号要有 scan（或 files）菜单，看日志要 files 菜单（demo_scanner 两个都有）。
 
 import { batchFiles, getFileLogs, getFileSnapshots } from '@/api/files'
-import { request } from '@/api/http'
+import { HANDLE_ALL, request } from '@/api/http'
 import { listRescans } from '@/api/rescans'
 import type { MyProject, RescanItem } from '@/api/types'
 import { imageSrc } from '@/lib/image-url'
@@ -34,13 +34,13 @@ function loadCover(src: string): Promise<number> {
 
 export async function checkRescan(cfg: SmokeConfig['rescan']) {
   if (!cfg?.enabled) return { skipped: '没有设置 DOCLITE_SMOKE_RESCAN_PATH' }
-  const projects = await request<MyProject[]>('/api/projects', { handle: true })
+  const projects = await request<MyProject[]>('/api/projects', { handle: HANDLE_ALL })
   const project = cfg.project
     ? projects.find((p) => p.project_code === cfg.project)
     : (projects.find((p) => p.status === 'active') ?? projects[0])
   if (!project) throw new Error(cfg.project ? `进不了项目 ${cfg.project}` : '这个账号没有能进的项目')
 
-  const before = await listRescans(project.id, { limit: 2000 }, true)
+  const before = await listRescans(project.id, { limit: 2000 }, HANDLE_ALL)
   const target: RescanItem | undefined = cfg.file_id
     ? before.items.find((i) => i.file_id === cfg.file_id)
     : before.items[0]
@@ -54,7 +54,7 @@ export async function checkRescan(cfg: SmokeConfig['rescan']) {
   const lastReviewer = target.last_reject
 
   if (cfg.expect === 'incomplete') {
-    const logsBefore = (await getFileLogs(target.file_id, true)).logs.length
+    const logsBefore = (await getFileLogs(target.file_id, HANDLE_ALL)).logs.length
     let err: unknown = null
     try {
       const out = await rescanInShell(target.file_id)
@@ -65,9 +65,9 @@ export async function checkRescan(cfg: SmokeConfig['rescan']) {
     if (!isShellError(err) || err.kind !== 'invalid_request' || err.message !== MSG_INCOMPLETE) {
       throw err instanceof Error ? err : new Error(`拒绝的原因不对：${JSON.stringify(err)}`)
     }
-    const after = await listRescans(project.id, { limit: 2000 }, true)
+    const after = await listRescans(project.id, { limit: 2000 }, HANDLE_ALL)
     const still = after.items.find((i) => i.file_id === target.file_id)
-    const logsAfter = (await getFileLogs(target.file_id, true)).logs.length
+    const logsAfter = (await getFileLogs(target.file_id, HANDLE_ALL)).logs.length
     if (!still || still.version_no !== target.version_no || after.total !== before.total || logsAfter !== logsBefore) {
       throw new Error(`拒绝后文件应该原样留在待重扫列表里：still=${!!still} v${still?.version_no} total ${before.total}→${after.total} 日志 ${logsBefore}→${logsAfter}`)
     }
@@ -103,11 +103,11 @@ export async function checkRescan(cfg: SmokeConfig['rescan']) {
   const lastUpload = events.filter((e) => e.phase === 'uploading').pop()
   expect(lastUpload?.sent === r.file_size, `上传的最后一个进度事件应该是传完（${r.file_size}），实际 ${lastUpload?.sent}`)
 
-  const after = await listRescans(project.id, { limit: 2000 }, true)
+  const after = await listRescans(project.id, { limit: 2000 }, HANDLE_ALL)
   expect(!after.items.some((i) => i.file_id === target.file_id), '重扫后它还在待重扫列表里')
   expect(after.total === before.total - 1, `待重扫数应该从 ${before.total} 变成 ${before.total - 1}，实际 ${after.total}`)
 
-  const batch = await batchFiles([target.file_id], true)
+  const batch = await batchFiles([target.file_id], HANDLE_ALL)
   const info = batch.items[0]
   expect(!!info && info.snapshot_id === r.snapshot_id && info.version_no === r.version_no, 'batch 的当前快照不是这次重扫的')
   let coverWidth = 0
@@ -117,14 +117,14 @@ export async function checkRescan(cfg: SmokeConfig['rescan']) {
     else coverWidth = await loadCover(src)
   }
 
-  const snaps = await getFileSnapshots(target.file_id, true)
+  const snaps = await getFileSnapshots(target.file_id, HANDLE_ALL)
   const last = snaps.snapshots[snaps.snapshots.length - 1]
   expect(
     !!last && last.snapshot_type === 'rescan' && last.version_no === r.version_no && last.upload_name === out.localName,
     `快照历史的最后一个应该是 v${r.version_no} rescan（${out.localName}），实际 ${last ? `v${last.version_no} ${last.snapshot_type} ${last.upload_name}` : '无'}`,
   )
 
-  const logs = await getFileLogs(target.file_id, true)
+  const logs = await getFileLogs(target.file_id, HANDLE_ALL)
   const log = logs.logs[0]
   const d = (log?.detail ?? {}) as Record<string, unknown>
   expect(log?.action === 'rescan', `最新一条日志应该是 rescan，实际 ${log?.action}`)

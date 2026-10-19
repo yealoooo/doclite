@@ -14,7 +14,7 @@ import { computed, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 
 import { getArchiveItem, itemAction, unsealArchiveItem } from '@/api/catalog'
-import { ApiError, errorMessage, isApiError } from '@/api/http'
+import { ApiError, errorMessage, HANDLE_ALL, isApiError } from '@/api/http'
 import type { ArchiveItem } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -50,7 +50,7 @@ async function load() {
   if (!id) return
   busy.value = 'load'
   try {
-    const it = await getArchiveItem(id, true)
+    const it = await getArchiveItem(id, HANDLE_ALL)
     if (props.itemId === id) item.value = it
   } catch (e) {
     loadError.value = isApiError(e, 'not_found') ? '这一件已经不在了（可能刚被撤销归档）' : errorMessage(e)
@@ -74,7 +74,7 @@ async function unseal() {
   busy.value = 'unseal'
   note.value = ''
   try {
-    const res = await unsealArchiveItem(it.id, it.row_version, reason.value || null, true)
+    const res = await unsealArchiveItem(it.id, it.row_version, reason.value || null, HANDLE_ALL)
     open.value = false
     emit('unsealed', res)
   } catch (e) {
@@ -100,7 +100,7 @@ async function unlock() {
   busy.value = 'unlock'
   note.value = ''
   try {
-    const res = await itemAction(it.id, 'unlock', it.row_version, true)
+    const res = await itemAction(it.id, 'unlock', it.row_version, HANDLE_ALL)
     item.value = res
     emit('changed', res)
     toast.success('已解锁，现在可以解除封存')

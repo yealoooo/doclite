@@ -27,25 +27,25 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from '@lucide/vue'
+import { useDocumentVisibility } from '@vueuse/core'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import { probeArchiveItem } from '@/api/catalog'
 import { createExportTask, MAX_SCOPE_IDS, precheckExport } from '@/api/export'
-import { ApiError, errorMessage, isApiError } from '@/api/http'
+import { ApiError, errorMessage, HANDLE_ALL, isApiError } from '@/api/http'
 import type { ExportFormat, ExportNotReadyItem, ExportPrecheck, ExportPrecheckBody, ExportTask } from '@/api/types'
 import CategoryPicker, { type PickedCategory } from '@/components/catalog/CategoryPicker.vue'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useCategoryTree } from '@/composables/useCategoryTree'
-import { usePageVisible } from '@/composables/usePageVisible'
 import {
   FORMAT_OPTIONS,
   itemName,
   NOT_READY_LABEL,
   NOT_READY_ORDER,
-  REVIEW_LABEL,
   type NewExportDraft,
 } from '@/lib/export'
+import { reviewStatusOf } from '@/lib/files'
 
 import ExportItemPicker, { type PickedItem } from './ExportItemPicker.vue'
 
@@ -144,7 +144,7 @@ async function resolveLabels() {
       let label = '（不存在或已删除）'
       let sub: string | undefined
       try {
-        const it = await probeArchiveItem(e.id, true)
+        const it = await probeArchiveItem(e.id, HANDLE_ALL)
         if (it.project_id === props.projectId) {
           label = itemName(it.archive_no, it.item_no)
           sub = `${it.title || '（未填题名）'} · ${it.category_path.split('/').slice(1).join(' / ')}`
@@ -254,7 +254,7 @@ async function runPrecheck(opts: { quiet?: boolean } = {}) {
   }
   refreshError.value = ''
   try {
-    const res = await precheckExport(props.projectId, b, true)
+    const res = await precheckExport(props.projectId, b, HANDLE_ALL)
     if (my !== precheckSeq || !alive) return
     precheck.value = res
     precheckKey.value = key
@@ -303,7 +303,8 @@ const EVENT_PRECHECK_MIN_INTERVAL_MS = 20_000
 let eventTimer: ReturnType<typeof setTimeout> | null = null
 /** 上次预检之后项目里有了变化。 */
 let eventDirty = false
-const pageVisible = usePageVisible()
+const visibility = useDocumentVisibility()
+const pageVisible = computed(() => visibility.value !== 'hidden')
 
 function scheduleEventPrecheck() {
   if (eventTimer || !eventDirty || !pageVisible.value) return
@@ -343,7 +344,7 @@ const reasonSummary = computed(() => {
 function shortIssue(it: ExportNotReadyItem): string {
   const parts = it.reasons.map((r) => {
     if (r.code === 'pages_not_approved' && r.pages?.length) {
-      const shown = r.pages.slice(0, 5).map((p) => `第 ${p.page_no} 页：${REVIEW_LABEL[p.review_status] ?? p.review_status}`)
+      const shown = r.pages.slice(0, 5).map((p) => `第 ${p.page_no} 页：${reviewStatusOf(p.review_status).label}`)
       const more = (r.count ?? 0) > shown.length ? ` 等 ${r.count} 页` : ''
       return shown.join(' · ') + more
     }
@@ -380,7 +381,7 @@ async function create() {
   createError.value = ''
   const key = bodyKey.value
   try {
-    const task = await createExportTask(props.projectId, { ...b, only_ready: submit.value.onlyReady }, true)
+    const task = await createExportTask(props.projectId, { ...b, only_ready: submit.value.onlyReady }, HANDLE_ALL)
     if (!alive) return
     emit('created', task)
   } catch (e) {

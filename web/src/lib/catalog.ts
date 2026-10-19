@@ -322,8 +322,6 @@ export const ITEM_STATUS: Record<ItemStatus, { label: string; badge: string; dot
   locked: { label: '已锁定', badge: 'bg-violet-100 text-violet-700', dot: 'bg-violet-700' },
 }
 
-export const ITEM_STATUS_ORDER: ItemStatus[] = ['draft', 'locked']
-
 export function itemStatusOf(status: string) {
   return ITEM_STATUS[status as ItemStatus] ?? { label: status, badge: 'bg-muted text-muted-foreground', dot: 'bg-muted-foreground/45' }
 }

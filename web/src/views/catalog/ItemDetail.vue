@@ -22,9 +22,7 @@
 //   item-move、item-no-edit、item-unseal、item-reseal、item-open-folder、item-revoke、item-export；页 item-pages（data-count）。
 import {
   ArrowRightLeftIcon,
-  ChevronDownIcon,
   ChevronLeftIcon,
-  ChevronUpIcon,
   CircleAlertIcon,
   ExternalLinkIcon,
   FileOutputIcon,
@@ -42,13 +40,12 @@ import { computed, reactive, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 
 import { deleteArchiveItem, getArchiveItem, type ItemAction, itemAction, updateArchiveItem } from '@/api/catalog'
-import { ApiError, errorMessage, isApiError } from '@/api/http'
+import { ApiError, errorMessage, HANDLE_ALL, handledGlobally, isApiError } from '@/api/http'
 import type { ArchiveItem, CatalogSettings, FieldIssue, FileEntry, ItemFieldDef, UpdateArchiveItemBody } from '@/api/types'
 import CategoryPicker, { type PickedCategory } from '@/components/catalog/CategoryPicker.vue'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import GuardedButton from '@/components/app/GuardedButton.vue'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
 import { useSelection } from '@/composables/useSelection'
 import {
   archiveNoReasonShort,
@@ -62,11 +59,11 @@ import {
   TITLE_KEY,
 } from '@/lib/catalog'
 import { formatDateTime } from '@/lib/format'
-import { handledGlobally } from '@/views/review-assign/review-errors'
-import { type Entry, fileKey } from '@/views/files/entries'
-import FileGrid from '@/views/files/FileGrid.vue'
+import { type Entry, fileKey } from '@/components/files/entries'
+import FileGrid from '@/components/files/FileGrid.vue'
 
 import { itemOpErrorText } from './catalog-errors'
+import ItemFieldsForm from './ItemFieldsForm.vue'
 
 const props = defineProps<{
   itemId: string
@@ -375,7 +372,7 @@ async function save(): Promise<ArchiveItem | null> {
   try {
     let saved: ArchiveItem
     try {
-      saved = await updateArchiveItem(it.id, body, true)
+      saved = await updateArchiveItem(it.id, body, HANDLE_ALL)
     } catch (e) {
       if (!isApiError(e, 'conflict')) throw e
       // row_version 过期：读最新的。著录还是开始编辑时的样子（别人只动了页、状态这些，没有锁定）就用新的
@@ -389,7 +386,7 @@ async function save(): Promise<ArchiveItem | null> {
         await mergeAfterConflict(latest)
         return null
       }
-      saved = await updateArchiveItem(it.id, { ...body, row_version: latest.row_version }, true)
+      saved = await updateArchiveItem(it.id, { ...body, row_version: latest.row_version }, HANDLE_ALL)
     }
     applyFresh(saved, { force: true })
     emit('changed', saved)
@@ -472,7 +469,7 @@ async function act(action: ItemAction) {
   if (!current) return
   busy.value = action
   try {
-    const res = await itemAction(current.id, action, current.row_version, true)
+    const res = await itemAction(current.id, action, current.row_version, HANDLE_ALL)
     applyFresh(res, { force: true })
     emit('changed', res)
     toast.success(action === 'lock' ? `已锁定：${res.archive_no ?? ''}` : '已解锁，可以著录、解除封存了')
@@ -526,7 +523,7 @@ async function submitItemNo() {
   busy.value = 'item-no'
   const sent = current.row_version
   try {
-    const res = await updateArchiveItem(current.id, { row_version: sent, item_no: n }, true)
+    const res = await updateArchiveItem(current.id, { row_version: sent, item_no: n }, HANDLE_ALL)
     applyFresh(res, { force: true })
     emit('changed', res)
     itemNoEditing.value = false
@@ -535,7 +532,7 @@ async function submitItemNo() {
     if (handledGlobally(e)) return
     if (isApiError(e, 'conflict')) {
       // 两种 409 conflict：件号被占用 / 档号撞号（换一个号），或者 row_version 过期（别人刚改过）。重新取一次来区分。
-      const latest = await getArchiveItem(current.id, true).catch(() => null)
+      const latest = await getArchiveItem(current.id, HANDLE_ALL).catch(() => null)
       if (latest && latest.row_version === sent) {
         itemNoError.value = (e as ApiError).message
         return
@@ -565,13 +562,13 @@ async function moveTo(target: PickedCategory) {
   busy.value = 'move'
   const from = current.category_id
   try {
-    const res = await updateArchiveItem(current.id, { row_version: current.row_version, category_id: target.id }, true)
+    const res = await updateArchiveItem(current.id, { row_version: current.row_version, category_id: target.id }, HANDLE_ALL)
     applyFresh(res, { force: true })
     emit('moved', res, from)
   } catch (e) {
     if (isApiError(e, 'not_found')) {
       // 404 可能是条目没了，也可能是目标节点刚被删掉：再取一次条目来区分（M3-5 审查）。
-      const still = await getArchiveItem(current.id, true).catch(() => null)
+      const still = await getArchiveItem(current.id, HANDLE_ALL).catch(() => null)
       if (still) {
         applyFresh(still)
         toast.error('目标节点已不存在（可能刚被别人删除），条目没有移动', { description: '请重新选择目标节点' })
@@ -606,7 +603,7 @@ async function doDelete() {
   if (!it || busy.value || locked.value) return
   busy.value = 'delete'
   try {
-    await deleteArchiveItem(it.id, deleteAsk.rowVersion, true)
+    await deleteArchiveItem(it.id, deleteAsk.rowVersion, HANDLE_ALL)
     deleteAsk.open = false
     resetForm(it)
     emit('deleted', it)
@@ -649,52 +646,8 @@ async function doDelete() {
 
 // ---------- 显示 ----------
 
-// 著录项收起（给下面的页腾地方）：只留题名；记在 localStorage（个人习惯，读写失败就展开）。
-const FORM_COLLAPSED_KEY = 'doclite.catalog.form-collapsed'
-function readCollapsed(): boolean {
-  try {
-    return window.localStorage.getItem(FORM_COLLAPSED_KEY) === '1'
-  } catch {
-    return false
-  }
-}
-const formCollapsed = ref(readCollapsed())
-watch(formCollapsed, (v) => {
-  try {
-    window.localStorage.setItem(FORM_COLLAPSED_KEY, v ? '1' : '0')
-  } catch {
-    // 记不住就算了。
-  }
-})
-// 收起着的项有错误（本地校验、server 的 400）：展开，让用户看得到。
-watch(errors, (e) => {
-  if (formCollapsed.value && Object.keys(e).some((k) => k !== TITLE_KEY)) formCollapsed.value = false
-})
-/** 收起时的一行摘要：各项的值（空的不写）。 */
-const collapsedSummary = computed(() =>
-  defs.value
-    .map((d) => [d.label, (values[d.key] ?? '').trim()] as const)
-    .filter(([, v]) => v)
-    .map(([l, v]) => `${l}：${v}`)
-    .join(' · '),
-)
-
 const reason = computed(() => item.value?.archive_no_reason ?? null)
 const statusInfo = computed(() => itemStatusOf(status.value))
-
-function fieldError(key: string): string | undefined {
-  return errors.value[key]
-}
-
-/** 库里存的 enum 值不在现在的选项里（旧值）：一直留在下拉里，改走以后还能改回来。 */
-function oldEnumValue(d: ItemFieldDef): string | null {
-  const v = initial.value[d.key] ?? ''
-  return v && !d.options.includes(v) ? v : null
-}
-
-function isLong(d: ItemFieldDef): boolean {
-  return d.type === 'text' && (d.max_length ?? 500) > 200
-}
 
 function clearOrphan(key: string) {
   cleared.value = new Set([...cleared.value, key])
@@ -705,6 +658,12 @@ function keepOrphan(key: string) {
   cleared.value = next
 }
 
+/** 著录表单里一项改了：写进表单值，清掉它的错误。 */
+function onField(key: string, value: string) {
+  values[key] = value
+  onInput(key)
+}
+
 function onInput(key: string) {
   if (errors.value[key]) {
     const next = { ...errors.value }
@@ -712,9 +671,6 @@ function onInput(key: string) {
     errors.value = next
   }
 }
-
-const inputCls =
-  'h-8 w-full min-w-0 rounded-md border border-input bg-background px-2 text-[13px] text-foreground shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-foreground aria-invalid:border-destructive'
 
 /** 页（只读，来自来源文件夹）：给 FileGrid 的小格子用，"#n"就是页号。 */
 const pageEntries = computed<Entry[]>(() =>
@@ -967,139 +923,23 @@ defineExpose({
       </div>
 
       <!-- 著录表单 -->
-      <form
-        class="relative max-h-[45%] shrink-0 overflow-y-auto border-b px-4 py-2.5"
-        data-testid="item-form"
-        :data-collapsed="formCollapsed ? 'true' : undefined"
-        @submit.prevent="save"
-      >
-        <button
-          v-if="defs.length || orphanKeys.length"
-          type="button"
-          class="absolute top-2 right-4 z-10 flex items-center gap-0.5 rounded px-1.5 text-[11px] leading-5 text-muted-foreground hover:bg-muted hover:text-foreground"
-          :title="formCollapsed ? '展开全部著录项' : '只留题名，给下面的页腾地方'"
-          data-testid="item-form-toggle"
-          @click="formCollapsed = !formCollapsed"
-        >
-          <template v-if="formCollapsed">
-            展开著录项（{{ defs.length + orphanKeys.length }}）<ChevronDownIcon class="size-3" />
-          </template>
-          <template v-else>收起著录项<ChevronUpIcon class="size-3" /></template>
-        </button>
-        <div class="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-x-3 gap-y-2">
-          <!-- 题名（固定列） -->
-          <label
-            class="col-span-full grid gap-1"
-            data-testid="item-field"
-            :data-key="TITLE_KEY"
-            :data-error="fieldError(TITLE_KEY) ?? undefined"
-          >
-            <span class="text-xs font-medium text-muted-foreground">题名 <span class="text-destructive">*</span></span>
-            <input
-              v-model="title"
-              :class="inputCls"
-              :disabled="locked"
-              :aria-invalid="!!fieldError(TITLE_KEY) || undefined"
-              placeholder="（未填题名）"
-              data-testid="item-title"
-              @input="onInput(TITLE_KEY)"
-            >
-            <span v-if="fieldError(TITLE_KEY)" class="text-[11px] text-destructive" data-testid="field-error">{{ fieldError(TITLE_KEY) }}</span>
-            <span v-if="theirs[TITLE_KEY] !== undefined" class="text-[11px] text-warn">别人改成了：{{ theirs[TITLE_KEY] || '（空）' }}</span>
-          </label>
-
-          <!-- 设置里的著录项 -->
-          <label
-            v-for="d in defs"
-            v-show="!formCollapsed"
-            :key="d.key"
-            class="grid content-start gap-1"
-            :class="isLong(d) && 'col-span-2'"
-            data-testid="item-field"
-            :data-key="d.key"
-            :data-type="d.type"
-            :data-error="fieldError(d.key) ?? undefined"
-            :data-issue="issues.get(d.key) ?? undefined"
-          >
-            <span class="truncate text-xs font-medium text-muted-foreground" :title="d.key">
-              {{ d.label }}<span v-if="d.required" class="text-destructive"> *</span>
-            </span>
-            <select
-              v-if="d.type === 'enum'"
-              v-model="values[d.key]"
-              :class="inputCls"
-              :disabled="locked"
-              :aria-invalid="!!fieldError(d.key) || undefined"
-              data-testid="item-field-input"
-              @change="onInput(d.key)"
-            >
-              <option value="">（不填）</option>
-              <option v-if="oldEnumValue(d)" :value="oldEnumValue(d)!">{{ oldEnumValue(d) }}（旧值，不在选项里）</option>
-              <option v-for="o in d.options" :key="o" :value="o">{{ o }}</option>
-            </select>
-            <Textarea
-              v-else-if="isLong(d)"
-              v-model="values[d.key]"
-              class="min-h-14 px-2 py-1 text-[13px] md:text-[13px]"
-              rows="2"
-              :disabled="locked"
-              :aria-invalid="!!fieldError(d.key) || undefined"
-              data-testid="item-field-input"
-              @input="onInput(d.key)"
-            />
-            <input
-              v-else
-              v-model="values[d.key]"
-              :class="[inputCls, d.type === 'date' && 'font-mono']"
-              :disabled="locked"
-              :aria-invalid="!!fieldError(d.key) || undefined"
-              :placeholder="d.type === 'date' ? 'YYYY、YYYY-MM 或 YYYY-MM-DD' : ''"
-              data-testid="item-field-input"
-              @input="onInput(d.key)"
-            >
-            <span v-if="fieldError(d.key)" class="text-[11px] text-destructive" data-testid="field-error">{{ fieldError(d.key) }}</span>
-            <span
-              v-else-if="issues.get(d.key) && (values[d.key] ?? '').trim() === (initial[d.key] ?? '').trim()"
-              class="text-[11px] text-warn"
-              data-testid="field-issue"
-            >旧值：{{ issues.get(d.key) }}。不改它照样能保存，锁定前要改掉。</span>
-            <span v-if="theirs[d.key] !== undefined" class="text-[11px] text-warn">别人改成了：{{ theirs[d.key] || '（空）' }}</span>
-          </label>
-        </div>
-
-        <!-- 设置里已经没有的著录项（旧值） -->
-        <div
-          v-if="orphanKeys.length"
-          v-show="!formCollapsed"
-          class="mt-3 rounded-md border border-dashed px-3 py-2"
-          data-testid="item-orphan-fields"
-        >
-          <div class="text-xs font-medium text-muted-foreground">项目设置里已经删掉的著录项（原值保留，保存时不会丢；也可以清空）</div>
-          <div
-            v-for="k in orphanKeys"
-            :key="k"
-            class="mt-1.5 flex items-center gap-2 text-[13px]"
-            data-testid="item-orphan-field"
-            :data-key="k"
-            :data-cleared="cleared.has(k) ? 'true' : undefined"
-          >
-            <span class="w-28 shrink-0 truncate font-mono text-xs text-muted-foreground" :title="k">{{ k }}</span>
-            <span class="min-w-0 flex-1 truncate" :class="cleared.has(k) ? 'text-muted-foreground line-through' : 'text-foreground'">
-              {{ initial[k] || '（空）' }}
-            </span>
-            <template v-if="!locked">
-              <Button v-if="!cleared.has(k)" type="button" size="xs" variant="ghost" @click="clearOrphan(k)">清空</Button>
-              <Button v-else type="button" size="xs" variant="ghost" @click="keepOrphan(k)">保留</Button>
-            </template>
-          </div>
-        </div>
-        <p v-if="!defs.length" class="mt-2 text-xs text-muted-foreground">
-          项目还没有设置其他著录项（在「系统管理 › 项目」的"著录项和档号"里设置）。
-        </p>
-        <p v-else-if="formCollapsed && collapsedSummary" class="mt-1.5 truncate text-xs text-muted-foreground" data-testid="item-form-summary">
-          {{ collapsedSummary }}
-        </p>
-      </form>
+      <ItemFieldsForm
+        v-model:title="title"
+        :defs="defs"
+        :values="values"
+        :initial="initial"
+        :cleared="cleared"
+        :errors="errors"
+        :theirs="theirs"
+        :issues="issues"
+        :orphan-keys="orphanKeys"
+        :locked="locked"
+        @submit="save"
+        @input="onInput"
+        @field="onField"
+        @clear="clearOrphan"
+        @keep="keepOrphan"
+      />
 
       <!-- 页（只读，来自来源文件夹） -->
       <div class="flex min-h-0 flex-1 flex-col" data-testid="item-pages" :data-count="item.pages.length">

@@ -5,28 +5,27 @@
 // - 多选：只能批量移动、删除文件（`POST /api/folder-files:move`、`:delete`，每次最多 500 个，超过分几次）；
 //   文件夹一次只操作一个；文件夹和文件混在一起时不提供移动、删除（提示分开选）。
 // - 复制：Ctrl/⌘+C 把选中的文件复制到当前文件夹（逐个 `POST /api/folder-files/{id}/copy`，名字自动加 (1)）。
-// - 下载原图：浏览器里在新窗口打开 original_url；壳里用系统浏览器打开（`open_external`，只接受 http、https）。
-// - 上传：浏览器里交给 stores/uploads.ts；壳里调 `pick_and_enqueue_upload`（系统对话框选文件，交给上传队列）。
+// - 下载原图：lib/original.ts（客户端里用系统浏览器打开）。
+// - 上传：只在客户端里，调 `pick_and_enqueue_upload`（系统对话框选文件，交给上传队列）；浏览器里提示"请在客户端中使用"。
 
 import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 
-import { batchFiles } from '@/api/files'
 import { copyFolderFile, deleteFolderFile, deleteFolderFiles, MAX_BULK_IDS, moveFolderFiles } from '@/api/folder-files'
 import { deleteFolder, updateFolder } from '@/api/folders'
-import { ApiError, isApiError } from '@/api/http'
-import type { FileEntry, FileImageItem, FolderArchivedDetails, FolderItem, MyProject, SubfolderEntry } from '@/api/types'
+import { ApiError, HANDLE_ALL, isApiError } from '@/api/http'
+import type { FileEntry, FolderArchivedDetails, FolderItem, SubfolderEntry } from '@/api/types'
 import type { PickedFolder } from '@/components/files/FolderPicker.vue'
 import type { Selection } from '@/composables/useSelection'
-import { CLIENT_TOO_OLD, isShell, shellHas } from '@/lib/client'
-import { openExternal, shellErrorMessage } from '@/lib/shell'
+import { CLIENT_TOO_OLD, isShell, SHELL_ONLY, shellHas } from '@/lib/client'
+import { currentOriginalUrl, openOriginal } from '@/lib/original'
+import { shellErrorMessage } from '@/lib/shell'
 import { pickAndEnqueueUpload, type PickMode } from '@/lib/shell-upload'
-import { useImageInfoStore } from '@/stores/image-info'
 import { useSessionStore } from '@/stores/session'
-import { useUploadsStore } from '@/stores/uploads'
 
-import { type Entry, fileKey } from './entries'
+import { type Entry, fileKey } from '@/components/files/entries'
+import { chunk } from '@/lib/utils'
 import type { EditableFolder } from './FolderFormDialog.vue'
 import { opError, type OpContext } from './op-errors'
 
@@ -34,7 +33,6 @@ import { opError, type OpContext } from './op-errors'
 export type SelectionKind = 'none' | 'file' | 'files' | 'folder' | 'folders' | 'mixed'
 
 interface Options {
-  project: () => MyProject | null
   folder: () => FolderItem | null
   selected: () => Entry[]
   selection: Selection
@@ -45,20 +43,8 @@ interface Options {
   navigate: (folderId: string) => void
 }
 
-/** URL 剩不到这么久就重新取再打开。 */
-const URL_MARGIN_MS = 10 * 60 * 1000
-
-
-function chunks<T>(list: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size))
-  return out
-}
-
 export function useFileActions(opts: Options) {
   const router = useRouter()
-  const images = useImageInfoStore()
-  const uploads = useUploadsStore()
   const session = useSessionStore()
 
   /**
@@ -230,7 +216,7 @@ export function useFileActions(opts: Options) {
     if (move.what === 'folder' && move.folder) {
       const f = move.folder
       try {
-        await updateFolder(f.id, { parent_id: target.id }, true)
+        await updateFolder(f.id, { parent_id: target.id }, HANDLE_ALL)
         toast.success(`已把文件夹「${f.folder_name}」移动到 ${target.path}`)
         opts.selection.clear()
         opts.afterChange([cur.id, target.id, f.id])
@@ -244,11 +230,11 @@ export function useFileActions(opts: Options) {
     let moved = 0
     let renamed = 0
     try {
-      for (const part of chunks(list, MAX_BULK_IDS)) {
+      for (const part of chunk(list, MAX_BULK_IDS)) {
         const res = await moveFolderFiles(
           part.map((f) => f.folder_file_id),
           target.id,
-          true,
+          HANDLE_ALL,
         )
         moved += res.items.filter((i) => i.moved).length
         renamed += res.items.filter((i) => i.renamed).length
@@ -283,7 +269,7 @@ export function useFileActions(opts: Options) {
     const names: string[] = []
     try {
       for (const f of list) {
-        const res = await copyFolderFile(f.folder_file_id, undefined, true)
+        const res = await copyFolderFile(f.folder_file_id, undefined, HANDLE_ALL)
         names.push(res.file_name)
         done++
       }
@@ -342,18 +328,18 @@ export function useFileActions(opts: Options) {
     let deleted = 0
     try {
       if (remove.folder) {
-        await deleteFolder(remove.folder.id, true)
+        await deleteFolder(remove.folder.id, HANDLE_ALL)
         toast.success(`已删除文件夹「${remove.folder.folder_name}」`)
       } else if (remove.files.length === 1) {
-        await deleteFolderFile(remove.files[0]!.folder_file_id, true)
+        await deleteFolderFile(remove.files[0]!.folder_file_id, HANDLE_ALL)
         toast.success(`已删除「${remove.files[0]!.file_name}」`)
       } else {
         // 每批最多 500 个，一批是一个事务（有已归类的整批不删）。
         const total = remove.files.length
-        for (const part of chunks(remove.files.slice(), MAX_BULK_IDS)) {
+        for (const part of chunk(remove.files, MAX_BULK_IDS)) {
           await deleteFolderFiles(
             part.map((f) => f.folder_file_id),
-            true,
+            HANDLE_ALL,
           )
           deleted += part.length
         }
@@ -391,83 +377,19 @@ export function useFileActions(opts: Options) {
     if (kind.value === 'file') opts.openSnapshots(files.value[0]!)
   }
 
-  /** 取这个文件当前版本的原图地址（缓存里的快过期了就重新取）。 */
-  async function originalUrl(fileId: string): Promise<FileImageItem | null> {
-    const cached = images.get(fileId)
-    const fresh =
-      cached?.original_url &&
-      cached.url_expires_at &&
-      Date.parse(cached.url_expires_at) - Date.now() > URL_MARGIN_MS
-    if (fresh) return cached
-    const res = await batchFiles([fileId], true)
-    return res.items[0] ?? null
-  }
-
   async function downloadOriginal() {
     if (kind.value !== 'file') return
-    const f = files.value[0]!
-    let info: FileImageItem | null
-    try {
-      info = await originalUrl(f.file_id)
-    } catch (e) {
-      showError(e, { kind: 'file' })
-      return
-    }
-    if (!info) {
-      toast.error('文件已不存在（可能刚被删除）')
-      return
-    }
-    const url = info.original_url
-    if (!url) {
-      toast.error('取不到原图地址', { description: info.url_error?.message })
-      return
-    }
-    // 只打开 http、https（预签名 URL）；不让页面借此打开别的协议。
-    let parsed: URL
-    try {
-      parsed = new URL(url)
-    } catch {
-      toast.error('原图地址格式不对')
-      return
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      toast.error('原图地址不是 http 或 https，不能打开')
-      return
-    }
-    if (isShell()) {
-      // 壳里只能交给系统浏览器（能力 external）；客户端没有这项能力时提示升级。
-      if (!shellHas('external')) {
-        toast.error(CLIENT_TOO_OLD)
-        return
-      }
-      try {
-        await openExternal(parsed.href)
-        toast.success('已在系统浏览器里打开原图', { description: '另存时的文件名是 v1.jpg 这样的形式。' })
-      } catch (e) {
-        toast.error(shellErrorMessage(e))
-      }
-    } else {
-      window.open(parsed.href, '_blank', 'noopener,noreferrer')
-    }
+    await openOriginal(await currentOriginalUrl(files.value[0]!.file_id))
   }
 
   // ---------- 上传 ----------
 
-  /** 浏览器：交给上传 store。壳：用系统对话框选，加入壳的上传队列。 */
-  function startUpload(mode: PickMode, pickedFiles?: File[]) {
-    const p = opts.project()
+  /** 用系统对话框选，加入壳的上传队列（能力 upload）。浏览器里、客户端没有这项能力时只提示。 */
+  function startUpload(mode: PickMode) {
     const cur = opts.folder()
-    if (!p || !cur) return
-    if (isShell()) {
-      // 壳里只能用壳的上传队列（能力 upload；页面在壳里传不了二进制）；客户端没有这项能力时提示升级。
-      if (shellHas('upload')) void shellUpload(cur, mode)
-      else toast.error(CLIENT_TOO_OLD)
-      return
-    }
-    if (!pickedFiles?.length) return
-    const target = { id: cur.id, name: cur.folder_name, projectId: p.id }
-    if (mode === 'folder') uploads.uploadFolder(target, pickedFiles)
-    else uploads.uploadFiles(target, pickedFiles)
+    if (!cur) return
+    if (shellHas('upload')) void shellUpload(cur, mode)
+    else toast.info(isShell() ? CLIENT_TOO_OLD : SHELL_ONLY)
   }
 
   async function shellUpload(cur: FolderItem, mode: PickMode) {

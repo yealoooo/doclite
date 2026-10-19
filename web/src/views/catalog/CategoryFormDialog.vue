@@ -22,6 +22,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { CATEGORY_TYPES, categoryTypeLabel, checkCategoryCode, checkCategoryName } from '@/lib/catalog'
+import { HANDLE_ALL } from '@/api/http'
 
 import { categoryOpErrorText } from './catalog-errors'
 
@@ -103,7 +104,7 @@ async function submit() {
         open.value = false
         return
       }
-      const saved = await updateArchiveCategory(props.projectId, n.id, body, true)
+      const saved = await updateArchiveCategory(props.projectId, n.id, body, HANDLE_ALL)
       emit('updated', saved, n)
     } else {
       const saved = await createArchiveCategory(
@@ -114,7 +115,7 @@ async function submit() {
           category_code: code.value,
           category_name: name.value.trim(),
         },
-        true,
+        HANDLE_ALL,
       )
       emit('created', saved)
     }

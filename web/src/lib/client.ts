@@ -10,9 +10,6 @@ export function isShell(): boolean {
   return protocol === 'wails:' || hostname === 'wails.localhost'
 }
 
-/** 旧名字（上一版的壳是 Tauri），等同于 `isShell()`。各页面还在用它，新代码用 `isShell()`。 */
-export const isTauri = isShell
-
 /**
  * 客户端的能力（shell_info 的 capabilities）。客户端可能比网页旧：页面按能力决定显示哪些本机功能，没有的隐藏或
  * 提示升级客户端，不报错。每一项对应哪些命令、事件、地址见 client/BRIDGE.md。
@@ -61,13 +58,11 @@ export function commandCapability(cmd: string): ShellCapability | null {
   return null
 }
 
-/** 在壳里、但客户端没有这项能力（比界面旧）：相应功能提示升级客户端。 */
-export function shellLacks(cap: ShellCapability): boolean {
-  return isShell() && !shellHas(cap)
-}
-
 /** 客户端没有某项能力时给人看的话。 */
 export const CLIENT_TOO_OLD = '这个版本的客户端没有这项功能，请升级客户端'
+
+/** 浏览器里（只是开发工具，交付只有客户端）用到要壳的功能（上传、重扫、看原图……）时给人看的话。 */
+export const SHELL_ONLY = '请在客户端中使用'
 
 /** 看图要不要走壳（取图地址、本机缓存、切块）。壳里的 CSP 不许页面直连存储，所以壳里总是走它。 */
 export function shellImages(): boolean {

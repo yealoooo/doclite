@@ -6,7 +6,7 @@
 import { LoaderCircleIcon, RefreshCwIcon } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import { getStorageMigration } from '@/api/storage'
 import type { StorageMigration, StorageProfileItem } from '@/api/types'
 import { Button } from '@/components/ui/button'
@@ -28,7 +28,7 @@ async function load() {
   const my = ++seq
   state.value = 'loading'
   try {
-    const m = await getStorageMigration(id, true)
+    const m = await getStorageMigration(id, HANDLE_ALL)
     if (my !== seq) return
     data.value = m
     state.value = 'ready'

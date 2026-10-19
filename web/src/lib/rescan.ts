@@ -1,29 +1,23 @@
-// 上传重扫件（M2-7，design §1.5、§4.3；roadmap M2 的 Q6）：浏览器和壳两条路，结果统一成 RescanOutcome。
+// 上传重扫件（M2-7，design §1.5、§4.3；roadmap M2 的 Q6）：只在客户端里（能力 rescan），结果统一成 RescanOutcome。
 //
-// - 浏览器：选一个文件 → `lib/cover.ts` 生成封面 → `upload()` 发到 `POST /api/files/{fid}/rescan`（不算 sha）。
-// - 壳：`pick_and_rescan {fileId}`（Go，client/internal/shell/rescan.go、internal/upload/rescan.go）：系统对话框选一个文件 → 算 sha → 生成封面 →
+// - `pick_and_rescan {fileId}`（Go，client/internal/shell/rescan.go、internal/upload/rescan.go）：系统对话框选一个文件 → 算 sha → 生成封面 →
 //   multipart 发到重扫接口，同步返回，不进上传队列。页面不能指定本机路径。
-// 两边一样的规则：
+// 壳里的规则：
 // - 400 `invalid_cover`：去掉封面重传一次；
 // - 409 `conflict`（版本号刚被改了）：再发一次，第二次的结果照实给出（例如别人刚重扫成功，就是 `invalid_state`）；
 // - 其余错误不重试，交给 `describeRescanError()` 写成提示：`invalid_state` 是"上一次已经成功"（不是失败），
 //   `duplicate_content` 是"可能选错了文件"，写出 details 里的位置；
 // - 401、403 `forbidden`、426 走请求封装的全局处理（跳登录页、无权提示、整页升级提示），和 `request()` 一样。
-// - 选的文件先核对，不合格的不发请求（重扫会把"已驳回"消耗掉，不能撤回）：扩展名只收 jpg、jpeg、tif、tiff、png；
-//   文件尾要完整（JPEG 有 EOI、PNG 有 IEND，TIFF 不查，规则同壳的热文件夹 `upload.TailComplete`（client/internal/upload/settle.go）），
-//   不完整的多半是扫描软件还在写入。
-// - 进度：壳发 `rescan:progress {file_id, phase: hashing|cover|uploading, sent, size}` 事件；浏览器的 fetch 没有上传
-//   进度，只报阶段。
+// - 选的文件先由壳核对，不合格的不发请求（重扫会把"已驳回"消耗掉，不能撤回）：扩展名、文件尾是否完整。
+// - 进度：壳发 `rescan:progress {file_id, phase: hashing|cover|uploading, sent, size}` 事件。
 //
 // 重扫件不要扫进热文件夹：热文件夹会把它当成新的一页，传成另一个文件（另一个 file_id），原来的文件仍是已驳回。
 
 
-import { ApiError, failResponse, isApiError } from '@/api/http'
-import { listRescans, rescanUpload } from '@/api/rescans'
+import { ApiError, failResponse, HANDLE_ALL, isApiError } from '@/api/http'
+import { listRescans } from '@/api/rescans'
 import type { DuplicateContentDetails, LastReject, RescanItem, RescanResponse } from '@/api/types'
-import { makeCover } from '@/lib/cover'
 import { isShellError } from '@/lib/shell'
-import { isSupportedUploadName } from '@/lib/upload-plan'
 import { invoke, listen } from '@/lib/wails'
 
 /** 要重扫的文件（对话框显示用）：待重扫列表的一项，或 /files 里的一个已驳回文件。 */
@@ -75,7 +69,7 @@ export async function findRescan(projectId: string, folderId: string, fileId: st
   let cursor: string | null = null
   try {
     for (;;) {
-      const res = await listRescans(projectId, { folder_id: folderId, limit: LOOKUP_PAGE, cursor }, true)
+      const res = await listRescans(projectId, { folder_id: folderId, limit: LOOKUP_PAGE, cursor }, HANDLE_ALL)
       for (const it of res.items) {
         if (it.folder_id !== folderId) return { status: 'missing' }
         if (it.file_id === fileId) return { status: 'found', item: it }
@@ -122,7 +116,7 @@ export type RescanOutcome =
 /** 进行到哪一步（对话框里显示）。 */
 export type RescanPhase = 'picking' | 'hashing' | 'cover' | 'uploading' | 'retry_without_cover' | 'retry_conflict'
 
-/** 上传的进度（只有壳里有）：已经发出的原图字节数。 */
+/** 上传的进度：已经发出的原图字节数。 */
 export interface RescanBytes {
   sent: number
   size: number
@@ -134,115 +128,6 @@ const PATH = (fileId: string) => `/api/files/${fileId}/rescan`
 
 /** 不完整、还在写入的文件（和壳的提示一样）。 */
 export const MSG_INCOMPLETE = '选的文件不完整或还在写入，请等扫描软件写完再选'
-/** 扩展名不对（和壳的提示一样）。 */
-export const MSG_EXTENSION = '只能选 jpg、jpeg、tif、tiff、png 的图片'
-
-/** 文件尾检查的余量（和壳的 `upload.tailSlack` 一样）。 */
-const TAIL_SLACK = 4096
-const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
-const PNG_IEND = [0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]
-const JPEG_MAGIC = [0xff, 0xd8, 0xff]
-const JPEG_EOI = [0xff, 0xd9]
-
-function startsWith(bytes: Uint8Array, prefix: readonly number[]): boolean {
-  return prefix.every((b, i) => bytes[i] === b)
-}
-
-function contains(hay: Uint8Array, needle: readonly number[]): boolean {
-  outer: for (let i = 0; i + needle.length <= hay.length; i++) {
-    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer
-    return true
-  }
-  return false
-}
-
-/**
- * 文件尾是否完整（规则同壳的 `upload.TailComplete`（client/internal/upload/settle.go））：JPEG（魔数 `FF D8 FF`）要在最后 4 KiB + 2 字节里有 EOI
- * `FF D9`；PNG 要在最后 4 KiB + 12 字节里有 IEND 块（含 CRC）；TIFF 和别的格式不查。空文件、只写了魔数开头几个字节的
- * 算不完整。只读开头 8 字节和末尾几 KiB。
- */
-export async function tailComplete(file: Blob): Promise<boolean> {
-  const head = new Uint8Array(await file.slice(0, 8).arrayBuffer())
-  let marker: readonly number[]
-  let window: number
-  if (head.length >= 3 && startsWith(head, JPEG_MAGIC)) {
-    marker = JPEG_EOI
-    window = TAIL_SLACK + 2
-  } else if (head.length === 8 && startsWith(head, PNG_MAGIC)) {
-    marker = PNG_IEND
-    window = TAIL_SLACK + 12
-  } else if (head.length < 8 && (startsWith(head, PNG_MAGIC.slice(0, head.length)) || startsWith(head, JPEG_MAGIC.slice(0, Math.min(3, head.length))))) {
-    // 只写了开头几个字节（含空文件）。
-    return false
-  } else {
-    return true
-  }
-  const tail = new Uint8Array(await file.slice(Math.max(0, file.size - window)).arrayBuffer())
-  return contains(tail, marker)
-}
-
-/** 本地文件不合格（不发请求）：code 是 `local_file`，message 写原因。 */
-function localError(message: string): ApiError {
-  return new ApiError(0, 'local_file', message)
-}
-
-// ---------- 浏览器 ----------
-
-/**
- * 浏览器里把 `file` 作为 `fileId` 的重扫件上传。不会抛出（错误放在 outcome 里）。
- * 401、403 `forbidden`、426 照常触发全局处理。
- */
-export async function rescanInBrowser(fileId: string, file: File, onPhase: RescanPhaseFn = () => {}): Promise<RescanOutcome> {
-  const started = performance.now()
-  if (!isSupportedUploadName(file.name)) {
-    return { kind: 'failed', error: localError(MSG_EXTENSION), localName: file.name, cover: null, attempts: 0 }
-  }
-  onPhase('hashing')
-  let complete: boolean
-  try {
-    complete = await tailComplete(file)
-  } catch (e) {
-    return {
-      kind: 'failed',
-      error: localError(`读不了选的文件：${e instanceof Error ? e.message : String(e)}`),
-      localName: file.name,
-      cover: null,
-      attempts: 0,
-    }
-  }
-  if (!complete) return { kind: 'failed', error: localError(MSG_INCOMPLETE), localName: file.name, cover: null, attempts: 0 }
-  onPhase('cover')
-  const made = await makeCover(file)
-  let blob = made.blob
-  let cover: RescanCover = blob
-    ? { status: 'included', reason: null, ms: made.ms }
-    : { status: 'not_generated', reason: made.reason ? `${made.reason}：${made.message ?? ''}` : null, ms: null }
-  let attempts = 0
-  let conflictRetried = false
-  onPhase('uploading')
-  for (;;) {
-    attempts++
-    try {
-      const { data } = await rescanUpload(fileId, { file_name: file.name, cover: blob, file }, { handle: true })
-      return { kind: 'done', result: data, localName: file.name, cover, attempts, ms: Math.round(performance.now() - started) }
-    } catch (e) {
-      const err = e instanceof ApiError ? e : new ApiError(0, 'internal', e instanceof Error ? e.message : String(e))
-      if (blob && err.code === 'invalid_cover') {
-        // 封面可以缺，不能因为封面丢页：去掉封面重传一次。
-        blob = null
-        cover = { status: 'rejected', reason: err.message, ms: cover.ms }
-        onPhase('retry_without_cover')
-        continue
-      }
-      if (err.code === 'conflict' && !conflictRetried) {
-        conflictRetried = true
-        onPhase('retry_conflict')
-        continue
-      }
-      return { kind: 'failed', error: err, localName: file.name, cover, attempts }
-    }
-  }
-}
 
 // ---------- 壳 ----------
 
@@ -305,7 +190,7 @@ export async function rescanInShell(fileId: string, onPhase: RescanPhaseFn = () 
   // 和 request() 一样走全局处理（401 跳登录页、403 forbidden、426 整页升级提示）；其余不弹 toast，由对话框显示。
   const error =
     e.status > 0
-      ? failResponse(PATH(fileId), e.status, JSON.stringify({ code: e.code, message: e.message, details: e.details }), { handle: true })
+      ? failResponse(PATH(fileId), e.status, JSON.stringify({ code: e.code, message: e.message, details: e.details }), { handle: HANDLE_ALL })
       : new ApiError(0, e.code, e.message || '无法连接服务器，请检查网络后重试')
   return { kind: 'failed', error, localName: out.local_name, cover, attempts: out.attempts }
 }
@@ -391,8 +276,6 @@ export function describeRescanError(err: unknown, fileId: string, versionNo?: nu
       }
     case 'not_found':
       return { tone: 'error', title: '文件不存在或已被删除', detail: '列表已刷新。', location: null, canRetry: false, refresh: true }
-    case 'local_file':
-      return { tone: 'error', title: '没有上传', detail: err.message, location: null, canRetry: true, refresh: false }
     case 'checksum_mismatch':
       return { tone: 'error', title: '图片在上传过程中被改动了', detail: '请等扫描软件写完，再重新选择。', location: null, canRetry: true, refresh: false }
     case 'network':

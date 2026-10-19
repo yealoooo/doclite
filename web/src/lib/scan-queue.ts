@@ -10,8 +10,6 @@ import { invoke, listen } from './wails'
 /** 队列项的状态。`queued` 且 `attempts > 0`、有 `next_attempt_at` 表示临时失败后等重试。 */
 export type ItemStatus = 'waiting' | 'queued' | 'uploading' | 'done' | 'duplicate' | 'failed'
 
-export const ITEM_STATUSES: readonly ItemStatus[] = ['waiting', 'queued', 'uploading', 'done', 'duplicate', 'failed']
-
 /** 封面情况：已带上；没生成（原因在 cover_reason）；被 server 拒绝后去掉了；null 表示还没到这一步。 */
 export type CoverStatus = 'included' | 'not_generated' | 'rejected'
 

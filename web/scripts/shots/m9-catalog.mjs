@@ -31,7 +31,6 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 
 import { apiLogin, requiredFieldValues, stamp, uploadPage } from '../lib/api.mjs'
-import { injectFiles, scanPng, waitUploadDone } from '../lib/upload-samples.mjs'
 
 const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
 const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
@@ -354,11 +353,8 @@ export default {
         const b = await bannerState(page, '[data-testid=files-page]')
         assert(b?.state === 'modifying' && b.text.includes('去归类页重新归档'), `横条不对：${JSON.stringify(b)}`)
         const before = await folderFiles(ctx, ctx.subs[0].id)
-        // 页面里上传一页（漏扫的），接口删掉第 2 页。
-        const p = scanPng(`m9-${RUN}-new`, 9)
-        await injectFiles(page, 'files', [{ name: '0004.png', data: p.png, type: 'image/png' }])
-        const done = await waitUploadDone(page)
-        assert(done.every((x) => x.state === 'done'), `上传没成功：${JSON.stringify(done)}`)
+        // 接口上传一页（漏扫的，浏览器里不能上传），删掉第 2 页。
+        await uploadPage(ctx.api, ctx.subs[0].id, '0004.png', `m9-${RUN}-new`, 9)
         await ctx.api('DELETE', `/api/folder-files/${before[1].folder_file_id}`)
         const after = await folderFiles(ctx, ctx.subs[0].id)
         assert(after.length === before.length, `应还是 ${before.length} 个文件：${after.length}`)

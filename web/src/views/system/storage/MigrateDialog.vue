@@ -6,7 +6,7 @@
 import { CheckIcon, StarIcon } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import { startStorageMigration } from '@/api/storage'
 import type { StorageMigration, StorageProfileItem } from '@/api/types'
 import { Button } from '@/components/ui/button'
@@ -46,7 +46,7 @@ async function start() {
   starting.value = true
   error.value = ''
   try {
-    const m = await startStorageMigration(src.id, target.value.id, true)
+    const m = await startStorageMigration(src.id, target.value.id, HANDLE_ALL)
     open.value = false
     emit('started', m)
   } catch (err) {

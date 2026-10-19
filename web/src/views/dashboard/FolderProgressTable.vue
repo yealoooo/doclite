@@ -13,7 +13,9 @@ import { ChevronRightIcon, FileIcon, FolderIcon, FolderOpenIcon, LoaderCircleIco
 import type { CatalogCounts, FolderArchive } from '@/api/types'
 import { placementNo } from '@/lib/catalog'
 
-import { barWidth, num } from './dashboard'
+import { formatCount } from '@/lib/format'
+
+import { barWidth } from './dashboard'
 
 export interface ProgressRow {
   /** 行的唯一键：文件夹 id，或 `direct:<文件夹 id>`。 */
@@ -106,12 +108,12 @@ const COLS = 'grid-cols-[minmax(220px,2.2fr)_64px_minmax(150px,1.4fr)_minmax(120
           <span class="min-w-0 truncate text-muted-foreground">直接放在这里的文件</span>
         </template>
       </div>
-      <span class="text-right tabular-nums text-foreground">{{ num(r.counts.total) }}</span>
+      <span class="text-right tabular-nums text-foreground">{{ formatCount(r.counts.total) }}</span>
       <div class="flex min-w-0 items-center gap-2">
         <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
           <div class="h-full rounded-full bg-ok" :style="{ width: barWidth(r.counts.review.approved, r.counts.total) }" />
         </div>
-        <span class="shrink-0 text-xs text-muted-foreground tabular-nums">{{ num(r.counts.review.approved) }}/{{ num(r.counts.total) }}</span>
+        <span class="shrink-0 text-xs text-muted-foreground tabular-nums">{{ formatCount(r.counts.review.approved) }}/{{ formatCount(r.counts.total) }}</span>
       </div>
       <!-- 已归档 -->
       <span v-if="r.archive" class="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" :title="archiveTitle(r.archive)">
@@ -123,14 +125,14 @@ const COLS = 'grid-cols-[minmax(220px,2.2fr)_64px_minmax(150px,1.4fr)_minmax(120
         ><PencilIcon class="size-3" />修改中</span>
       </span>
       <span v-else-if="showTotals(r)" class="truncate text-xs text-muted-foreground tabular-nums">
-        {{ num(r.counts.items.total) }} 件 · {{ num(r.counts.catalog.cataloged) }} 页
+        {{ formatCount(r.counts.items.total) }} 件 · {{ formatCount(r.counts.catalog.cataloged) }} 页
       </span>
       <span v-else class="text-xs text-muted-foreground/50">—</span>
       <!-- 已锁定 -->
       <span v-if="r.archive?.locked" class="flex items-center gap-1 text-xs text-muted-foreground">
         <LockIcon class="size-3.5 text-violet-900" />已锁定
       </span>
-      <span v-else-if="showTotals(r)" class="truncate text-xs text-muted-foreground tabular-nums">{{ num(r.counts.items.locked) }} 件</span>
+      <span v-else-if="showTotals(r)" class="truncate text-xs text-muted-foreground tabular-nums">{{ formatCount(r.counts.items.locked) }} 件</span>
       <span v-else class="text-xs text-muted-foreground/50">—</span>
     </div>
     <div v-if="props.rows.length === 0" class="px-3 py-8 text-center text-sm text-muted-foreground">项目里还没有文件夹</div>

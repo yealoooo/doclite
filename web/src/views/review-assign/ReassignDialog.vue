@@ -11,12 +11,12 @@
 // - 对话框跟着当前文件夹：页面的文件夹一变（点树、后退、当前文件夹被删回到上一级）就关闭（审查第 1 轮）。
 // - 不做取消分配（用改派代替，Q5）。`refreshToken` 变了（SSE）按已加载的行数重新取（超过 2000 行时分几页取），
 //   勾选保留仍在的；勾选的行不在了（刚被审完、改派、删除）时提示。
-// - 错误只提示一次：请求都声明自己处理错误（handle: true），全局已经处理过的（401、403 forbidden、426）不再提示。
+// - 错误只提示一次：请求都声明自己处理错误（handle: HANDLE_ALL），全局已经处理过的（401、403 forbidden、426）不再提示。
 import { AlertTriangleIcon, LoaderCircleIcon, RotateCcwIcon } from '@lucide/vue'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { toast } from 'vue-sonner'
 
-import { errorMessage, isApiError } from '@/api/http'
+import { errorMessage, HANDLE_ALL, handledGlobally, isApiError, isClientError, toastOpError } from '@/api/http'
 import {
   listOpenAssignments,
   MAX_REVIEW_FILE_IDS,
@@ -31,8 +31,9 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { formatDateTime } from '@/lib/format'
 import { reviewerProblemsText } from '@/lib/reviews'
+import { chunk } from '@/lib/utils'
 
-import { handledGlobally, isClientError, reviewOpErrorText, toastOpError } from './review-errors'
+import { reviewOpErrorText } from './review-errors'
 
 const open = defineModel<boolean>('open', { required: true })
 /** 改派目标（和右栏共用）。 */
@@ -105,7 +106,7 @@ async function load({ keep = false, notify = false } = {}) {
       last = await listOpenAssignments(
         props.projectId,
         { folder_id: folder.id, reviewer_id: filter.value, limit: Math.min(MAX_LIMIT, want - rows.length), cursor },
-        true,
+        HANDLE_ALL,
       )
       if (my !== seq) return
       for (const r of last.items) {
@@ -145,7 +146,7 @@ async function loadMore() {
     const res = await listOpenAssignments(
       props.projectId,
       { folder_id: folder.id, reviewer_id: filter.value, limit: PAGE, cursor },
-      true,
+      HANDLE_ALL,
     )
     if (my !== seq) return
     // 翻页期间移动了文件可能重复（design §2.2），按 file_id 去重。
@@ -214,7 +215,7 @@ async function reassignRow(row: OpenAssignment) {
   if (!to || busy.value) return
   busy.value = true
   try {
-    const res = await reassignOne(row.assignment_id, to.id, true)
+    const res = await reassignOne(row.assignment_id, to.id, HANDLE_ALL)
     uncheck([row.assignment_id])
     if (res.changed) {
       toast.success(`已把「${row.file_name}」改派给 ${to.display_name}`)
@@ -241,15 +242,14 @@ async function reassignChecked() {
   let done = 0
   const folders = new Set<string>()
   try {
-    for (let i = 0; i < rows.length; i += MAX_REVIEW_FILE_IDS) {
-      const chunk = rows.slice(i, i + MAX_REVIEW_FILE_IDS)
-      const res = await reassignMany(props.projectId, { to_reviewer_id: to.id, file_ids: chunk.map((r) => r.file_id) }, true)
+    for (const part of chunk(rows, MAX_REVIEW_FILE_IDS)) {
+      const res = await reassignMany(props.projectId, { to_reviewer_id: to.id, file_ids: part.map((r) => r.file_id) }, HANDLE_ALL)
       reassigned += res.reassigned
       skipped += res.skipped
-      done += chunk.length
-      chunk.forEach((r) => folders.add(r.folder_id))
+      done += part.length
+      part.forEach((r) => folders.add(r.folder_id))
       // 这一批已经处理了：取消它们的勾选（失败时剩下的保持勾选，可以重试）。
-      uncheck(chunk.map((r) => r.assignment_id))
+      uncheck(part.map((r) => r.assignment_id))
     }
     toast.success(
       `已改派 ${reassigned} 个给 ${to.display_name}${skipped ? `，跳过了 ${skipped} 个` : ''}`,
@@ -313,7 +313,7 @@ async function reassignAllOfFilter() {
     const res = await reassignMany(
       props.projectId,
       { to_reviewer_id: scope.toId, from_reviewer_id: scope.fromId, folder_id: scope.folderId },
-      true,
+      HANDLE_ALL,
     )
     toast.success(
       `已把 ${scope.fromName} 的 ${res.reassigned} 个待审改派给 ${scope.toName}${res.skipped ? `，跳过了 ${res.skipped} 个` : ''}`,
@@ -321,7 +321,7 @@ async function reassignAllOfFilter() {
     confirmAll.value = false
     if (res.reassigned) emit('changed', [scope.folderId], true)
   } catch (e) {
-    toastOpError(e)
+    toastOpError(e, reviewOpErrorText(e))
     // 4xx（文件夹没了、超过上限、目标不合格）：前提不成立，关掉确认框；网络错误、5xx 留着可以重试。
     if (isClientError(e)) confirmAll.value = false
   } finally {

@@ -11,7 +11,7 @@
 import { KeyRoundIcon, PlugZapIcon, TriangleAlertIcon } from '@lucide/vue'
 import { computed, nextTick, reactive, ref, useTemplateRef, watch } from 'vue'
 
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import {
   createStorageProfile,
   testNewStorage,
@@ -220,8 +220,8 @@ async function runTest() {
   try {
     const fields = connectionFields()
     const result = props.profile
-      ? await testStorageProfile(props.profile.id, fields, true)
-      : await testNewStorage(fields as StorageConnectionBody, true)
+      ? await testStorageProfile(props.profile.id, fields, HANDLE_ALL)
+      : await testNewStorage(fields as StorageConnectionBody, HANDLE_ALL)
     if (seq !== testSeq) return
     testResult.value = result
   } catch (err) {
@@ -263,7 +263,7 @@ async function submit() {
     if (props.profile) {
       const body = changedFields()
       const saved = Object.keys(body).length
-        ? await updateStorageProfile(props.profile.id, body, true)
+        ? await updateStorageProfile(props.profile.id, body, HANDLE_ALL)
         : props.profile
       // 保存期间换了编辑对象时不动现在的表单。
       if (loadedId.value === startedFor) loadFrom(saved)
@@ -277,7 +277,7 @@ async function submit() {
           url_expire_hours: Number(form.urlExpireHours),
           remark: form.remark.trim() || undefined,
         },
-        true,
+        HANDLE_ALL,
       )
       if (loadedId.value === startedFor) loadFrom(null)
       emit('saved', saved, true)

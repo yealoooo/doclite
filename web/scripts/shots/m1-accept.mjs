@@ -1,4 +1,5 @@
-// M1-14 验收（Mac）：浏览器上传、目录整理、项目权限。
+// M1-14 验收（Mac）：演示数据、项目权限（浏览器上传和在上传的数据上整理的两张 M10-2 删掉了：上传只在客户端里，
+// 整理见 m1-organize.mjs）。
 //
 //   npm run screenshots -- --spec scripts/shots/m1-accept.mjs --base http://127.0.0.1:<web 端口>
 //
@@ -7,13 +8,6 @@
 // DEMO-B）、demo_noproject（归类员角色、没有授权；M3-5 起 demo_cataloger 授权进了 DEMO-A，改用它）。accept-perm-scanner、
 // accept-perm-reviewer 要用 admin 读各项目和授权（INIT_ADMIN_PASSWORD，默认 change-me-now）。
 //
-// - accept-upload：在 DEMO-A 根下建临时文件夹"M1-14 浏览器上传和整理 <时间>"，用"上传文件夹"（注入合成的
-//   File 列表，和选择框同一段代码）传 scripts/samples 里的样本：JPEG（彩色、灰度）、PNG（带 alpha、1 位）、
-//   TIFF（无压缩、LZW、CCITT G4），各 3 页（同一个样本加不同的注释，字节不同），分在 JPEG、PNG、TIFF 三个子文件夹里。断言全部入库、都带上了封面，
-//   batch 的封面是 JPEG、长边 ≤ 400、方向和原图一致。
-// - accept-organize：把 PNG 移到 JPEG 下面，删除 TIFF 里的一个文件，再删除 JPEG（连同 PNG）。断言：路径编码换了
-//   前缀；目录树和计数正确；batch 把删掉的文件都放进 missing；被删文件的日志接口返回 404，剩下的文件日志只有 upload。
-//   最后一行 `ACCEPT_IDS {...}` 给外面的 SQL 核对（file_logs、audit_logs、path_code）。after 里软删除临时文件夹。
 // - accept-demo-folder / accept-demo-box：seed 的「2025 文书档案」（原来是热文件夹演示的「M1 验收演示」5 盒 × 100 页，
 //   M9-3 起不再造）：核对两个盒和盒 WS-2025-001 的 5 个子文件夹的页数（3、4、2、5、3）同 seed，再打开其中页数最多的
 //   子文件夹看封面（图标视图，封面全部显示）。
@@ -22,12 +16,8 @@
 //   授权算；seed 之后是 DEMO-A 个人授权 + DEMO-B 角色授权，库里另有没授权给他的项目时再核对读它 403），demo_noproject
 //   用 batch 取 DEMO-A 的文件全部落在 missing（batch 登录即可，只返回能进的项目里的文件）。截图名
 //   accept-perm-cataloger 不变。
-//
-// 样本原来每次现场调上一版的 gen-samples（Rust）生成；M5-3 起读提交的样本（M7-5 起是 web 自己的 scripts/samples，见
-// scripts/lib/upload-samples.mjs），不再依赖 Rust 工具链。
 
 import { apiLogin } from '../lib/api.mjs'
-import { checkCovers, injectFiles, sampleVariant, waitUploadDone } from '../lib/upload-samples.mjs'
 
 const demo = 'demo123456'
 const adminUser = process.env.INIT_ADMIN_USERNAME ?? 'admin'
@@ -39,10 +29,6 @@ const state = {}
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg)
-}
-
-function stamp() {
-  return new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
 }
 
 /** 在页面里用这个账号的会话调接口，返回 {status, data}；不在 allow 里的非 2xx 抛错。 */
@@ -100,158 +86,16 @@ async function openSwitcher(page) {
   await page.waitForSelector('[data-testid=project-option]')
 }
 
-const EXT = { jpeg: 'jpg', png: 'png', tiff: 'tif' }
-
-/** 每种样本 3 页（文件名同 gen-samples --pages 3：`<样本>-p<n>.<扩展名>`），返回 Map<文件名, Buffer>。 */
-async function samples3() {
-  const map = new Map()
-  for (const stem of Object.values(KINDS).flat()) {
-    const ext = EXT[stem.split('-')[0]]
-    for (let n = 1; n <= 3; n++) map.set(`${stem}-p${n}.${ext}`, await sampleVariant(`${stem}.${ext}`, n))
-  }
-  return map
-}
-
 /** npm run seed 造的「2025 文书档案」（scripts/seed.mjs 的 BOX1、BOX2）。 */
 const SEED_YEAR = '2025 文书档案'
 const SEED_BOXES = ['盒 WS-2025-001', '盒 WS-2025-002']
 const SEED_BOX1_PAGES = [3, 4, 2, 5, 3]
-
-const KINDS = {
-  JPEG: ['jpeg-rgb', 'jpeg-gray'],
-  PNG: ['png-alpha', 'png-1bit'],
-  TIFF: ['tiff-none-gray8', 'tiff-lzw-rgb', 'tiff-g4-1bit'],
-}
 
 export default {
   out: '../docs/screenshots/m1',
   accounts: { demo_scanner: demo, demo_reviewer: demo, demo_noproject: demo },
   waitUntil: IDLE,
   shots: [
-    {
-      name: 'accept-upload',
-      user: 'demo_scanner',
-      path: '/files',
-      waitFor: '[data-testid=files-page]',
-      delay: 600,
-      async prepare(page) {
-        const a = await project(page, 'DEMO-A')
-        assert(a, 'demo_scanner 进不了 DEMO-A')
-        state.a = a
-        const temp = (
-          await call(page, 'POST', '/api/folders', {
-            parent_id: a.root_folder_id,
-            folder_name: `M1-14 浏览器上传和整理 ${stamp()}`,
-            remark: 'M1-14 验收脚本建的临时文件夹，做完软删除',
-          })
-        ).data
-        state.temp = temp
-        const samples = await samples3()
-        const top = '浏览器样本'
-        const files = []
-        for (const [sub, stems] of Object.entries(KINDS)) {
-          for (const stem of stems) {
-            for (const name of [...samples.keys()].filter((n) => n.startsWith(`${stem}-p`)).sort()) {
-              files.push({ path: `${top}/${sub}/${name}`, name, data: samples.get(name) })
-            }
-          }
-        }
-        assert(files.length === 21, `样本数不对：${files.length}（应为 7 种 × 3 页）`)
-        await openFolder(page, temp.id)
-        await injectFiles(page, 'folder', files)
-        const items = await waitUploadDone(page, 300000)
-        for (const it of items) assert(it.state === 'done' && it.fileId, `${it.path} 没有入库：${it.state} ${it.text}`)
-        for (const it of items) assert(it.hasCover === true, `${it.path} 没带上封面：${it.text}`)
-        const ms = (stem) =>
-          items
-            .filter((i) => i.name.startsWith(stem))
-            .map((i) => i.coverMs)
-            .join('/')
-        console.log(
-          `  上传 ${items.length} 个文件，全部入库、带封面；浏览器生成封面耗时（ms）：` +
-            Object.values(KINDS)
-              .flat()
-              .map((s) => `${s} ${ms(s)}`)
-              .join('，'),
-        )
-        const api = async (method, url, body) => (await call(page, method, url, body)).data
-        const covers = await checkCovers(
-          api,
-          items.map((i) => i.fileId),
-        )
-        console.log(
-          `  batch 封面：${covers.length} 张都是 JPEG，尺寸 ${[...new Set(covers.map((c) => `${c.width}×${c.height}`))].join('、')}，` +
-            `${Math.min(...covers.map((c) => c.bytes))}–${Math.max(...covers.map((c) => c.bytes))} 字节`,
-        )
-        state.items = items
-        state.top = await childByName(page, temp.id, top)
-        // 截图：停在临时文件夹，右下角的上传结果列表展开着。
-      },
-    },
-    {
-      name: 'accept-organize',
-      user: 'demo_scanner',
-      path: '/files',
-      waitFor: '[data-testid=files-page]',
-      delay: 600,
-      async prepare(page) {
-        assert(state.top, '上一张（accept-upload）没成功')
-        const sub = {}
-        for (const n of Object.keys(KINDS)) sub[n] = await childByName(page, state.top.id, n)
-        const tiffFiles = (await get(page, `/api/folders/${sub.TIFF.id}/children`)).files
-        assert(tiffFiles.length === 9, `TIFF 里应有 9 个文件：${tiffFiles.length}`)
-        // 1. 移动子文件夹：PNG → JPEG 下面。
-        const moved = (await call(page, 'PATCH', `/api/folders/${sub.PNG.id}`, { parent_id: sub.JPEG.id })).data
-        assert(moved.path_code.startsWith(sub.JPEG.path_code) && moved.path_code !== sub.PNG.path_code, `移动后路径编码不对：${moved.path_code}`)
-        console.log(`  1. 移动文件夹 PNG：${sub.PNG.path_code} → ${moved.path_code}（JPEG 是 ${sub.JPEG.path_code}）`)
-        // 2. 软删除一个文件（TIFF 里第一个）。
-        const victim = tiffFiles[0]
-        assert((await call(page, 'DELETE', `/api/folder-files/${victim.folder_file_id}`)).status === 204, '删除文件应返回 204')
-        console.log(`  2. 删除文件 TIFF/${victim.file_name}`)
-        // 3. 软删除一个子文件夹（JPEG，连同移进去的 PNG）。
-        assert((await call(page, 'DELETE', `/api/folders/${sub.JPEG.id}`)).status === 204, '删除文件夹应返回 204')
-        console.log('  3. 删除文件夹 JPEG（连同里面的 PNG）')
-        // 目录树和计数。
-        const top = await get(page, `/api/folders/${state.top.id}/children`)
-        assert(top.folders.length === 1 && top.folders[0].folder_name === 'TIFF', `剩下的子文件夹不对：${top.folders.map((f) => f.folder_name)}`)
-        assert(top.folders[0].file_count === 8 && top.folders[0].folder_count === 0, `TIFF 的计数不对：${JSON.stringify(top.folders[0])}`)
-        const tiffNow = (await get(page, `/api/folders/${sub.TIFF.id}/children`)).files
-        assert(tiffNow.length === 8 && !tiffNow.some((f) => f.file_id === victim.file_id), 'TIFF 里应剩 8 个文件')
-        for (const id of [sub.JPEG.id, sub.PNG.id]) assert((await call(page, 'GET', `/api/folders/${id}`, undefined, [404])).status === 404, '删掉的文件夹应返回 404')
-        // batch 的 missing。
-        const all = state.items.map((i) => i.fileId)
-        const batch = (await call(page, 'POST', '/api/files/batch', { file_ids: all })).data
-        const deleted = state.items.filter((i) => !i.path.includes('/TIFF/')).map((i) => i.fileId).concat(victim.file_id)
-        assert(batch.missing.length === 13 && deleted.every((id) => batch.missing.includes(id)), `missing 不对：${batch.missing.length}`)
-        assert(batch.items.length === 8, `batch 的 items 应为 8：${batch.items.length}`)
-        console.log(`  batch：21 个 id → items ${batch.items.length}、missing ${batch.missing.length}（删掉的 12 个 JPEG/PNG + 1 个 TIFF）`)
-        // 文件日志：删掉的文件 404，剩下的只有 upload。
-        assert((await call(page, 'GET', `/api/files/${victim.file_id}/logs`, undefined, [404])).status === 404, '删掉的文件日志接口应 404')
-        const logs = (await get(page, `/api/files/${tiffNow[0].file_id}/logs`)).logs
-        assert(logs.length === 1 && logs[0].action === 'upload', `剩下的文件日志应只有 upload：${logs.map((l) => l.action)}`)
-        console.log(
-          'ACCEPT_IDS ' +
-            JSON.stringify({
-              temp: state.temp.id,
-              top: state.top.id,
-              jpeg: sub.JPEG.id,
-              png: sub.PNG.id,
-              tiff: sub.TIFF.id,
-              jpeg_path_before: sub.JPEG.path_code,
-              png_path_before: sub.PNG.path_code,
-              png_path_after: moved.path_code,
-              deleted_file: victim.file_id,
-            }),
-        )
-        await openFolder(page, state.top.id)
-        await page.click('[data-testid=view-list]')
-      },
-      async after(page) {
-        if (!state.temp) return
-        const r = await call(page, 'DELETE', `/api/folders/${state.temp.id}`, undefined, [404])
-        console.log(`  已软删除临时文件夹「${state.temp.folder_name}」（${r.status}）`)
-      },
-    },
     {
       name: 'accept-demo-folder',
       user: 'demo_scanner',

@@ -25,7 +25,7 @@
 
 import { computed, ref, shallowRef } from 'vue'
 
-import { isApiError } from '@/api/http'
+import { HANDLE_ALL, isApiError } from '@/api/http'
 import { getFileReviews, listMyReviews } from '@/api/reviews'
 import type {
   FileReviews,
@@ -213,14 +213,14 @@ export function useMyReviews(scope: () => ReviewScope | null, meId: () => string
     fetching = true
     try {
       const q = { project_id: s.projectId, folder_id: s.folderId, state: s.state, low_dpi: s.lowDpi }
-      let res = await listMyReviews({ ...q, limit }, true)
+      let res = await listMyReviews({ ...q, limit }, HANDLE_ALL)
       if (my !== seq || disposed) return
       const list = [...res.items]
       const seen = new Set(list.map((i) => i.file_id))
       let pages = 0
       while (keepId && !seen.has(keepId) && res.next_cursor && pages < 5) {
         pages++
-        res = await listMyReviews({ ...q, limit: PAGE_SIZE, cursor: res.next_cursor }, true)
+        res = await listMyReviews({ ...q, limit: PAGE_SIZE, cursor: res.next_cursor }, HANDLE_ALL)
         if (my !== seq || disposed) return
         for (const it of res.items) {
           if (seen.has(it.file_id)) continue
@@ -308,7 +308,7 @@ export function useMyReviews(scope: () => ReviewScope | null, meId: () => string
       try {
         const res = await listMyReviews(
           { project_id: s.projectId, folder_id: s.folderId, state: s.state, low_dpi: s.lowDpi, limit: PAGE_SIZE, cursor },
-          true,
+          HANDLE_ALL,
         )
         // 期间整体重拉过、或者 cursor 已经变了：这一页接不上现在的列表，丢掉。
         if (my !== seq || disposed || nextCursor.value !== cursor) return false
@@ -437,7 +437,7 @@ export function useMyReviews(scope: () => ReviewScope | null, meId: () => string
         let gone = false
         const startedAt = Date.now()
         try {
-          res = await getFileReviews(fid, true)
+          res = await getFileReviews(fid, HANDLE_ALL)
         } catch (e) {
           if (isApiError(e) && (e.status === 404 || e.status === 403)) gone = true
           else need ??= 'failed'
@@ -494,7 +494,7 @@ export function useMyReviews(scope: () => ReviewScope | null, meId: () => string
     const my = seq
     let res: MyReviews
     try {
-      res = await listMyReviews({ project_id: s.projectId, folder_id: s.folderId, state: s.state, low_dpi: s.lowDpi, limit: 1 }, true)
+      res = await listMyReviews({ project_id: s.projectId, folder_id: s.folderId, state: s.state, low_dpi: s.lowDpi, limit: 1 }, HANDLE_ALL)
     } catch {
       return
     }
@@ -545,5 +545,3 @@ export function useMyReviews(scope: () => ReviewScope | null, meId: () => string
     emptyCounts,
   }
 }
-
-export type MyReviewsList = ReturnType<typeof useMyReviews>

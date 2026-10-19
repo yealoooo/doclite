@@ -12,7 +12,7 @@ import { LoaderCircleIcon } from '@lucide/vue'
 import { computed, nextTick, ref, watch } from 'vue'
 
 import { listExportTaskFiles, MAX_FILES_PAGE } from '@/api/export'
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import type { ExportTask, ExportTaskFile } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -43,7 +43,7 @@ async function loadFrom(taskId: string, my: number, limitPages: number) {
   try {
     let loadedThisRound = 0
     do {
-      const res = await listExportTaskFiles(taskId, { limit: MAX_FILES_PAGE, cursor: cursor.value }, true)
+      const res = await listExportTaskFiles(taskId, { limit: MAX_FILES_PAGE, cursor: cursor.value }, HANDLE_ALL)
       if (my !== seq) return
       files.value = files.value.concat(res.items)
       total.value = res.page_count

@@ -26,7 +26,7 @@
 // - scan-shell-new-folder：没设置热文件夹时选目标文件夹，在选择框里新建文件夹（带备注）；之后确认，卡片显示
 //   选的时候所在的项目、路径和备注；在项目切换器里换到 DEMO-A，还没保存的目标被清掉；换回来重新选、开始监听，
 //   进入运行状态；再换到 DEMO-A，已保存的目标仍显示它自己的项目名（不是当前项目）；
-// - scan-browser：浏览器里打开 /scan，说明热文件夹只能在客户端里用，引导到文件目录。
+// - scan-browser：浏览器里打开 /scan，只提示"请在客户端中使用"（M10-2）。
 
 import { installWailsMock, useShellSession } from '../lib/wails-mock.mjs'
 
@@ -769,7 +769,8 @@ export default {
       waitFor: '[data-testid=scan-browser-notice]',
       async prepare(page) {
         expect(!(await page.$('[data-testid=hotfolder-card]')), '浏览器里不应该有热文件夹')
-        expect(await page.$('[data-testid=scan-goto-files]'), '要有"前往文件目录上传"')
+        const text = await page.$eval('[data-testid=scan-browser-notice]', (el) => el.textContent ?? '')
+        expect(text.includes('请在客户端中使用'), `浏览器里只提示"请在客户端中使用"：${text}`)
       },
     },
   ],

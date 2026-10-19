@@ -17,24 +17,35 @@ export type DownloadVia = 'shell' | 'iframe'
 /** iframe 留多久（下载开始后就交给浏览器的下载管理了，移除 iframe 不影响下载）。 */
 const IFRAME_TTL_MS = 60_000
 
-/**
- * 打开下载地址。只接受 http、https（不让页面借此打开别的协议），否则抛错。
- * 壳里 `openExternal` 失败时抛出（壳的错误，用 `shellErrorMessage` 转成文字）。
- */
-export async function openDownload(url: string, onFailed: () => void): Promise<DownloadVia> {
+/** 核对地址只是 http、https（不让页面借此打开别的协议），返回规整后的地址；不对时抛错（`what` 是错误里的说法）。 */
+export function httpHref(url: string, what = '下载地址'): string {
   let parsed: URL
   try {
     parsed = new URL(url)
   } catch {
-    throw new Error('下载地址格式不对')
+    throw new Error(`${what}格式不对`)
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('下载地址不是 http 或 https，不能打开')
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error(`${what}不是 http 或 https，不能打开`)
+  return parsed.href
+}
+
+/** 壳里交给系统浏览器打开（能力 external）；客户端没有这项能力时抛错。 */
+export async function openInSystemBrowser(href: string) {
+  if (!shellHas('external')) throw new Error(CLIENT_TOO_OLD)
+  await openExternal(href)
+}
+
+/**
+ * 打开下载地址。只接受 http、https，否则抛错。
+ * 壳里 `openExternal` 失败时抛出（壳的错误，用 `shellErrorMessage` 转成文字）。
+ */
+export async function openDownload(url: string, onFailed: () => void): Promise<DownloadVia> {
+  const href = httpHref(url)
   if (isShell()) {
-    if (!shellHas('external')) throw new Error(CLIENT_TOO_OLD)
-    await openExternal(parsed.href)
+    await openInSystemBrowser(href)
     return 'shell'
   }
-  downloadInIframe(parsed.href, onFailed)
+  downloadInIframe(href, onFailed)
   return 'iframe'
 }
 

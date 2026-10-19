@@ -17,6 +17,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { checkEntryName, MAX_ENTRY_NAME_CHARS } from '@/lib/validate'
+import { HANDLE_ALL } from '@/api/http'
 
 import { opErrorText } from './op-errors'
 
@@ -57,7 +58,7 @@ async function submit() {
   }
   saving.value = true
   try {
-    const saved = await updateFolderFile(f.folder_file_id, { file_name: name.value }, true)
+    const saved = await updateFolderFile(f.folder_file_id, { file_name: name.value }, HANDLE_ALL)
     emit('saved', saved)
     open.value = false
   } catch (e) {

@@ -182,12 +182,11 @@ cd web && INIT_ADMIN_PASSWORD=<管理员密码> npm run screenshots -- --spec sc
 npm run seed:files -- --base http://127.0.0.1:9080 --user demo_scanner:demo123456 --project DEMO-A --folder "M2-5 分配演示" --count 12
 ```
 
-`seed:files` 往一个文件夹里传 N 张合成的扫描页（PNG + 客户端规格的封面，路径不存在就逐层建，按页码顺序上传，可以重跑；`--remark` 写原件位置）。m2-viewer、m2-viewer-lan 用「格式样本」，缺的样本第一次运行时自己建在「M2-4 查看器样本」下（对比样本、17 MB 的超出预算样本；m2-viewer 里 200 MB 的那几张另建约 210 MB 的「200 MB 切换」，建议在临时库上跑，或用 `--only` 跳过）。M9-3 删掉了依赖旧演示数据的 m1-files（2000 页的文件夹）和 m4-export（M4-5 的导出演示数据）。
+`seed:files` 往一个文件夹里传 N 张合成的扫描页（PNG + 客户端规格的封面，路径不存在就逐层建，按页码顺序上传，可以重跑；`--remark` 写原件位置）。m2-viewer 用「格式样本」，缺的样本第一次运行时自己建在「M2-4 查看器样本」下（对比样本、17 MB 的超出预算样本；m2-viewer 里 200 MB 的那几张另建约 210 MB 的「200 MB 切换」，建议在临时库上跑，或用 `--only` 跳过）。M9-3 删掉了依赖旧演示数据的 m1-files（2000 页的文件夹）和 m4-export（M4-5 的导出演示数据）。
 
 **几个特别的脚本**：
 
-- `m1-upload-lan`、`m2-viewer-lan`：要用局域网地址打开（非安全上下文）。只在跑这一步时开 `DOCLITE_SERVER=http://127.0.0.1:9080 npm run preview -- --host --port 24173 --strictPort`，`--base http://$(ipconfig getifaddr en0):24173`。
-- `m1-accept`：上传、整理在 DEMO-A 根下的临时文件夹里做（做完软删除）；看封面、权限几张核对 seed 的「2025 文书档案」和 seed 的授权。
+- `m1-accept`：看封面、权限几张核对 seed 的「2025 文书档案」和 seed 的授权。M10-2 起浏览器里不能上传、不看原图（只显示封面），只测浏览器上传、浏览器看原图的脚本和截图（m1-upload-lan、m2-viewer-lan 等）删掉了，要上传的脚本改用接口传。
 - `m2-accept`：每跑一次在 DEMO-A 根下建一个新的「M2 验收演示 <时间>」（4 个盒 26 页）走一遍审核循环，可以重跑；大图两步用「M2-8 大图样本」（第一次运行时上传 G4 样本、生成 200 MB 的无压缩 TIFF，之后复用）；最后核对 seed 的文件夹计数没变。
 - `m9-catalog`（M9-2，归类页的主流程）：每跑一次在 DEMO-A 建一套新的「M9 归档演示 <时间>」文件夹和全宗 Z<时间>，走一遍归档（拖放、预览）→ 文件目录的封存提示 → 解除封存 → 在文件目录里改 → 重新归档（对比）→ 锁定、批量锁定；要 `npm run seed` 的 DEMO-A 和 demo_scanner（必填的著录项脚本自己填）。M3 的归类脚本（m3-catalog、m3-workbench、m3-accept）随待归类池、按页挂接一起删了。
 - `m7-storage-migrate`：server 要在执行后台任务（迁移在它里面执行）；要有第二个桶 `doclite-migrate-test`（本机 S3 里已经建好）。脚本自己起一个转发到 SeaweedFS 的慢速代理当"源"存储的 server 地址（让迁移持续几秒），每跑一次在 DEMO-A 的「M7-2 迁移演示」下传一批文件，迁到「M7-2 迁移演示·目标」，跑完"源"迁空并停用。

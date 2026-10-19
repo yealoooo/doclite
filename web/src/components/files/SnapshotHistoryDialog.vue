@@ -5,7 +5,7 @@ import { LoaderCircleIcon } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 
 import { getFileSnapshots } from '@/api/files'
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import type { SnapshotItem } from '@/api/types'
 import FileCover from '@/components/files/FileCover.vue'
 import {
@@ -38,7 +38,7 @@ async function load(fileId: string) {
   loading.value = true
   error.value = null
   try {
-    const res = await getFileSnapshots(fileId, true)
+    const res = await getFileSnapshots(fileId, HANDLE_ALL)
     if (my === seq) snapshots.value = res.snapshots
   } catch (e) {
     if (my === seq) error.value = errorMessage(e)

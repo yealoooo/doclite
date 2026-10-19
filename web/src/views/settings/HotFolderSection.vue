@@ -6,8 +6,9 @@ import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { getFolder } from '@/api/folders'
-import { isApiError } from '@/api/http'
+import { HANDLE_ALL, isApiError } from '@/api/http'
 import { Button } from '@/components/ui/button'
+import { formatDateTime } from '@/lib/format'
 import type { HotFolderStatus } from '@/lib/scan-queue'
 import { shellErrorMessage } from '@/lib/shell'
 import { useSessionStore } from '@/stores/session'
@@ -54,7 +55,7 @@ watch(
       return
     }
     try {
-      const f = await getFolder(id, true)
+      const f = await getFolder(id, HANDLE_ALL)
       if (mine !== seq) return
       const names = [...f.ancestors.slice(1).map((a) => a.folder_name), ...(f.parent_id ? [f.folder_name] : [])]
       target.value = { project: f.ancestors[0]?.folder_name ?? f.folder_name, path: `/${names.join('/')}` }
@@ -70,12 +71,6 @@ watch(
   },
   { immediate: true },
 )
-
-function timeOf(ms: number): string {
-  const d = new Date(ms)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
-}
 </script>
 
 <template>
@@ -87,7 +82,7 @@ function timeOf(ms: number): string {
         <span class="rounded-md px-2 py-0.5 text-xs" :class="state.cls" data-testid="settings-hotfolder-state">{{ state.text }}</span>
         <span v-if="props.hotfolder?.running" class="text-xs text-muted-foreground">
           {{ props.hotfolder.watching ? '实时监控目录' : `目录事件不可用，每 ${config?.scan_interval_secs ?? 15} 秒扫描一次` }}
-          <template v-if="props.hotfolder.last_scan_at"> · 上次全量扫描 {{ timeOf(props.hotfolder.last_scan_at) }}</template>
+          <template v-if="props.hotfolder.last_scan_at"> · 上次全量扫描 {{ formatDateTime(props.hotfolder.last_scan_at, { seconds: true }) }}</template>
         </span>
       </dd>
       <dt class="text-muted-foreground">监控目录</dt>

@@ -11,7 +11,7 @@
 import { AlertTriangleIcon, LoaderCircleIcon, RotateCcwIcon, UserRoundCheckIcon, UsersRoundIcon } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import { getFileReviews } from '@/api/reviews'
 import type { AssignmentReviewer, FileEntry, FileReviews, ProjectReviewer } from '@/api/types'
 import FileCover from '@/components/files/FileCover.vue'
@@ -98,7 +98,7 @@ async function loadReviews(fileId: string) {
   reviewsLoading.value = true
   reviewsError.value = null
   try {
-    const res = await getFileReviews(fileId, true)
+    const res = await getFileReviews(fileId, HANDLE_ALL)
     if (my !== seq || single.value?.file_id !== fileId) return
     reviews.value = res
     reviewsFor.value = fileId

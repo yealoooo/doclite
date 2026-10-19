@@ -9,7 +9,7 @@ import { LoaderCircleIcon } from '@lucide/vue'
 import { onBeforeUnmount, ref, watch } from 'vue'
 
 import { getFileLogs } from '@/api/files'
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import type { FileLog } from '@/api/types'
 import { logActionLabel, logSummary } from '@/lib/files'
 import { formatDateTime } from '@/lib/format'
@@ -36,7 +36,7 @@ async function load(fileId: string) {
   loading.value = true
   loadError.value = null
   try {
-    const res = await getFileLogs(fileId, true)
+    const res = await getFileLogs(fileId, HANDLE_ALL)
     if (my !== seq || props.fileId !== fileId) return
     logs.value = res.logs
     loadedFor.value = fileId

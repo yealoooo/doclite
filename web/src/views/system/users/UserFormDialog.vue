@@ -3,7 +3,7 @@
 // 接口错误（重名、校验失败、admin_required……）显示在对话框里。
 import { computed, ref, watch } from 'vue'
 
-import { errorMessage } from '@/api/http'
+import { errorMessage, HANDLE_ALL } from '@/api/http'
 import { createUser, updateUser, type UpdateUserBody } from '@/api/system'
 import type { RoleItem, UserItem } from '@/api/types'
 import { Button } from '@/components/ui/button'
@@ -68,7 +68,7 @@ async function submit() {
       const body: UpdateUserBody = {}
       if (username.value.trim() !== props.user.username) body.username = username.value.trim()
       if (displayName.value.trim() !== props.user.display_name) body.display_name = displayName.value.trim()
-      saved = Object.keys(body).length ? await updateUser(props.user.id, body, true) : props.user
+      saved = Object.keys(body).length ? await updateUser(props.user.id, body, HANDLE_ALL) : props.user
     } else {
       saved = await createUser(
         {
@@ -77,7 +77,7 @@ async function submit() {
           password: password.value,
           role_ids: roleIds.value,
         },
-        true,
+        HANDLE_ALL,
       )
     }
     emit('saved', saved)

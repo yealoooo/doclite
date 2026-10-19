@@ -3,27 +3,24 @@
 //
 // 显示要重扫的文件：现在的封面、位置、文件夹备注（原件位置）、第几轮、驳回原因和说明、审核人；提示"重扫件不要扫进
 // 热文件夹"。"选择重扫件…"：
-// - 浏览器：隐藏的 <input type=file>（只选一个）→ lib/rescan.ts 的 rescanInBrowser（生成封面 → upload()）；
-// - 壳：rescanInShell → 壳的 `pick_and_rescan`（系统对话框、sha、封面、上传都在壳的 Go 代码里，同步返回）。
+// rescanInShell → 壳的 `pick_and_rescan`（系统对话框、sha、封面、上传都在壳的 Go 代码里，同步返回）。浏览器里（只是开发
+// 工具）不能上传，提示"请在客户端中使用"。
 // 结果显示在对话框里：成功（新版本、第几轮、自动分给谁、有没有封面）；`invalid_state` 是"上一次已经成功"；
 // `duplicate_content` 是"可能选错了文件"，写出内容相同的那个文件的位置；其他错误照实写。上传期间不能关闭，
-// 显示进行到哪一步（核对文件、生成封面、上传；壳里另有上传的百分比）；浏览器里上传期间关闭或刷新页面先确认。
+// 显示进行到哪一步（核对文件、生成封面、上传的百分比）。
 // 选的文件不完整（扫描软件还在写）、扩展名不对时不发请求，直接提示。
 // 结束后发 `finished`，调用方刷新列表（SSE 的 files.changed 随后也会到）。
 //
 // 从 /files 打开时 target 里没有驳回记录：按所在文件夹翻待重扫列表找（lib/rescan.ts 的 findRescan）；查不到说明它
 // 已经不是已驳回了，查失败时只说"读不到驳回原因"，照样可以上传。
-//
-// 截图脚本可以在隐藏的选择框（data-testid=rescan-input）上派发 `doclite-inject-files` 事件（detail 是 File[]，取第一个），
-// 走和选择框相同的代码（同 M1-12 的上传按钮）。
 import { CheckCircle2Icon, FileWarningIcon, LoaderCircleIcon, ScanLineIcon, TriangleAlertIcon } from '@lucide/vue'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import type { LastReject } from '@/api/types'
 import FileCover from '@/components/files/FileCover.vue'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { CLIENT_TOO_OLD, isShell, shellHas } from '@/lib/client'
+import { CLIENT_TOO_OLD, isShell, SHELL_ONLY, shellHas } from '@/lib/client'
 import { formatDateTime } from '@/lib/format'
 import { formatBytes } from '@/lib/files'
 import {
@@ -36,12 +33,10 @@ import {
   type RescanOutcome,
   type RescanPhase,
   type RescanTarget,
-  rescanInBrowser,
   rescanInShell,
   withinProject,
 } from '@/lib/rescan'
 import { rejectReasonLabel } from '@/lib/reviews'
-import { UPLOAD_ACCEPT } from '@/lib/upload-plan'
 import { useImageInfoStore } from '@/stores/image-info'
 
 const open = defineModel<boolean>('open', { required: true })
@@ -55,20 +50,18 @@ const props = defineProps<{
 const emit = defineEmits<{ finished: [outcome: RescanOutcome, message: RescanMessage | null] }>()
 
 const images = useImageInfoStore()
-/** 在壳里：重扫件由壳选文件、上传（能力 rescan）；页面在壳里传不了二进制，客户端没有这项能力时不能重扫。 */
-const inShell = isShell()
+/** 重扫件由壳选文件、上传（能力 rescan）；浏览器里、客户端没有这项能力时不能重扫。 */
 const shellCanRescan = shellHas('rescan')
 
 type State = 'idle' | 'working' | 'done' | 'failed'
 const state = ref<State>('idle')
 const phase = ref<RescanPhase | null>(null)
-/** 上传的进度（只有壳里有）。 */
+/** 上传的进度。 */
 const bytes = ref<RescanBytes | null>(null)
 const outcome = ref<RescanOutcome | null>(null)
 const message = ref<RescanMessage | null>(null)
 /** 打开时补查的驳回记录（target 里没有时）：null 不用查；'loading' 正在查；否则是查的结果。 */
 const looked = ref<RescanLookup | 'loading' | null>(null)
-const input = ref<HTMLInputElement | null>(null)
 let seq = 0
 
 const busy = computed(() => state.value === 'working')
@@ -134,16 +127,6 @@ const progressText = computed(() => {
   return PHASE_TEXT[p]
 })
 
-// 浏览器里上传期间关闭或刷新页面：先确认（上传在页面里进行，刷新就中断了，写法同 stores/uploads.ts）。
-function onBeforeUnload(e: BeforeUnloadEvent) {
-  if (inShell || !busy.value) return
-  e.preventDefault()
-  // 老一些的浏览器要设 returnValue 才弹确认。
-  e.returnValue = ''
-}
-if (typeof window !== 'undefined') window.addEventListener('beforeunload', onBeforeUnload)
-onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload))
-
 function onOpenChange(v: boolean) {
   if (busy.value && !v) return
   open.value = v
@@ -151,32 +134,16 @@ function onOpenChange(v: boolean) {
 
 function pick() {
   if (busy.value || !props.target) return
-  if (!inShell) input.value?.click()
-  else if (shellCanRescan) void run(null)
-  else {
-    state.value = 'failed'
-    message.value = { tone: 'error', title: CLIENT_TOO_OLD, detail: null, location: null, canRetry: false, refresh: false }
+  if (shellCanRescan) {
+    void run()
+    return
   }
+  state.value = 'failed'
+  const title = isShell() ? CLIENT_TOO_OLD : SHELL_ONLY
+  message.value = { tone: 'error', title, detail: null, location: null, canRetry: false, refresh: false }
 }
 
-function onPicked(ev: Event) {
-  const el = ev.target as HTMLInputElement
-  const file = el.files?.[0]
-  el.value = ''
-  if (file) void run(file)
-}
-
-/** 截图脚本注入合成的文件（走和选择框相同的代码）。 */
-function onInjected(ev: Event) {
-  const list = (ev as CustomEvent<File[]>).detail
-  if (Array.isArray(list) && list[0]) void run(list[0])
-}
-watch(input, (el, old) => {
-  old?.removeEventListener('doclite-inject-files', onInjected)
-  el?.addEventListener('doclite-inject-files', onInjected)
-})
-
-async function run(file: File | null) {
+async function run() {
   const t = props.target
   if (!t || busy.value) return
   const my = seq
@@ -192,7 +159,7 @@ async function run(file: File | null) {
   }
   let out: RescanOutcome
   try {
-    out = file ? await rescanInBrowser(t.file_id, file, onPhase) : await rescanInShell(t.file_id, onPhase)
+    out = await rescanInShell(t.file_id, onPhase)
   } catch (e) {
     // 壳的命令本身失败（文件读不了、正在传另一张……）。
     const m = describeRescanError(e, t.file_id, t.version_no)
@@ -358,16 +325,6 @@ const coverNote = computed(() => {
           </Button>
         </template>
       </DialogFooter>
-
-      <input
-        v-if="!inShell"
-        ref="input"
-        type="file"
-        :accept="UPLOAD_ACCEPT"
-        class="hidden"
-        data-testid="rescan-input"
-        @change="onPicked"
-      >
     </DialogContent>
   </Dialog>
 </template>

@@ -3,7 +3,7 @@
 //   INIT_ADMIN_PASSWORD=admin123456 \
 //     npm run screenshots -- --spec scripts/shots/m2-rescan.mjs --base <devshell 的地址>
 //
-// 前端地址是 devshell（client/cmd/devshell：/api 转给 server，壳模式那张要它的取图地址），浏览器的几张也可以用
+// 前端地址是 devshell（client/cmd/devshell：/api 转给 server，壳模式那张要它的取图地址），列表那一张也可以用
 // vite preview 或 dev（/api 代理到 server）。要先有：
 // - DEMO-A 下的演示文件夹「M2-7 重扫演示」（盒 003 6 页、盒 001 4 页，seed:files 建的；分给 demo_reviewer，驳回了 5 页），
 //   见 roadmap M2-7 的须知。每张截图在它下面建一个「截图验证 M2-7 … <时间>」临时文件夹、用接口上传几页，分给
@@ -19,25 +19,8 @@
 //   页面调 `pick_and_rescan {fileId}`（模拟的命令像壳一样带 sha 和封面发 multipart 到真实 server，返回壳的结果），
 //   对话框写"已重扫：现在是 v2，待审核（第 2 轮）""自动分给 演示审核员"，列表里这一页消失；接口核对 v2 快照、封面、
 //   自动再分配和 rescan 日志。
-// - m2-rescan-files-done（另存 m2-rescan-files-menu.png、m2-rescan-dialog-done.png）：/files 打开临时文件夹，"已驳回 2"
-//   筛选后只剩 2 页；右键一页有"上传重扫件"；对话框补出驳回原因；注入一张新扫的 PNG（和选择框同一段代码）→ 成功；
-//   关掉对话框后筛选里只剩 1 页，详情面板写"待审 第 2 轮"，日志第一条是"重扫 … 新版本 v2，第 2 轮审核，自动分给 …"；
-//   接口核对 v2 快照（rescan、upload_name、带封面）、封面是长边 400 的 JPEG、file_reviews（驳回那一行 + 新的 open，
-//   assigned_by 沿用驳回那一行）、rescan 日志。
-// - m2-rescan-wrong-file（另存 m2-rescan-wrong-file-self.png、m2-rescan-already.png）：注入一张和同文件夹另一页相同的图 →
-//   "可能选错了文件"并写出那一页的位置；再选它自己现在的那张 →"一模一样"；接口核对没有新快照、仍是已驳回。另一页在
-//   页面之外先被重扫了，再在页面上传 →"已经不是已驳回了"（上一次已经成功），列表刷新。
-// - m2-rescan-retries：拦截请求造 409 conflict（第一次）→ 页面自动再发一次并成功（2 个请求）；造 400 invalid_cover →
-//   去掉封面重传一次并成功，对话框写"无封面（服务器没收封面…）"，batch 里 cover_url 为 null。
-// - m2-rescan-local-checks（M2-7 审查第 1 轮；另存 m2-rescan-lookup.png）：浏览器里注入写了一半的 PNG →"选的文件不完整或
-//   还在写入"，没有发重扫请求；扩展名是 .gif →"只能选 jpg…"，也没发；/files 打开对话框时驳回原因要翻页才找得到（拦截
-//   rescans 把每页改成 1 个）→ 跟着 next_cursor 找到；rescans 里没有它 →"已经不在待重扫列表里"；rescans 出错 →"读不到
-//   驳回原因"（中性说法，仍可上传）；上传期间（拦住响应 1.5 秒）派发 beforeunload 会被拦下，传完后不拦；成功后
-//   "已自动分给审核人"之类的说明在没拿到驳回记录时用中性的说法。
-//   壳模式那张（m2-rescan-shell-done）另断言 `rescan:progress` 事件：对话框依次显示核对文件、生成封面、"正在上传 n%"
-//   （1–99 之间，另存 m2-rescan-shell-progress.png）、100%。
-// - m2-rescan-e2e-browser（只在设置了 M27_E2E=1 时跑，不删数据）：浏览器里在 /scan 的列表上重扫演示文件夹
-//   「M2-7 重扫演示/盒 003/IMG_0002.png」，接口核对 v2 快照、封面、自动再分配和 rescan 日志（给端到端核对用）。
+// （浏览器里上传重扫件的几张——files-done、wrong-file、retries、local-checks、e2e-browser——M10-2 删掉了：重扫件只在客户端
+// 里传，壳模式见 m2-rescan-shell-done；出错时的提示文字由 describeRescanError 统一给出，客户端的重传规则在 client 的测试里。）
 
 import { createHash } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
@@ -285,22 +268,6 @@ async function waitTotal(page, n, timeout = 3000) {
   await page.waitForFunction((n) => document.querySelector('[data-testid=rescan-list]')?.dataset.total === String(n), { timeout }, n)
 }
 
-/** 把一张图当作在选择框里选中的文件注入对话框（和选择框同一段代码）。 */
-async function injectRescan(page, name, png) {
-  await page.waitForSelector('[data-testid=rescan-dialog] [data-testid=rescan-input]', { timeout: 5000 })
-  await page.evaluate(
-    (name, b64) => {
-      const bin = atob(b64)
-      const bytes = new Uint8Array(bin.length)
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-      const file = new File([bytes], name, { type: 'image/png' })
-      document.querySelector('[data-testid=rescan-input]').dispatchEvent(new CustomEvent('doclite-inject-files', { detail: [file] }))
-    },
-    name,
-    Buffer.from(png).toString('base64'),
-  )
-}
-
 /** 等对话框出结果，返回 {result, title, location, reassign}。 */
 async function dialogResult(page, timeout = 30000) {
   await page.waitForSelector('[data-testid=rescan-dialog] [data-testid=rescan-result]', { timeout })
@@ -314,55 +281,10 @@ async function dialogResult(page, timeout = 30000) {
   }))
 }
 
-async function closeDialog(page) {
-  await page.click('[data-testid=rescan-dialog] [data-testid=rescan-close]')
-  await dialogGone(page)
-}
-
-/** 对话框关掉了（动画结束、body 的 pointer-events 恢复）。 */
-async function dialogGone(page) {
-  await page.waitForFunction(() => !document.querySelector('[data-testid=rescan-dialog]') && document.body.style.pointerEvents !== 'none', {
-    timeout: 5000,
-  })
-  await new Promise((r) => setTimeout(r, 200))
-}
-
-/** 主区里名字为 name 的文件单元格。 */
-async function fileCell(page, name) {
-  const handle = await page.evaluateHandle(
-    (name) =>
-      [...document.querySelectorAll('[data-testid=file-cell],[data-testid=file-row]')].find((el) =>
-        [...el.querySelectorAll('[title]')].some((t) => t.getAttribute('title') === name),
-      ),
-    name,
-  )
-  const el = handle.asElement()
-  if (!el) throw new Error(`页面上找不到文件「${name}」`)
-  return el
-}
-
 async function menu(page, testid) {
   await page.waitForSelector(`[data-testid=context-menu] [data-testid=${testid}]`, { visible: true, timeout: 5000 })
   await new Promise((r) => setTimeout(r, 150))
   await page.click(`[data-testid=context-menu] [data-testid=${testid}]`)
-}
-
-async function openFiles(page, folderId) {
-  await page.goto(`${BASE}/files?folder=${folderId}`, { waitUntil: IDLE })
-  await page.waitForSelector('[data-testid=files-page][data-list=ready][data-stream=open]', { timeout: 15000 })
-  await waitCovers(page, '[data-testid=file-area]')
-}
-
-/** 打开某个文件的重扫对话框（/files 右键菜单），等驳回原因读出来。 */
-async function openRescanFromFiles(page, f) {
-  await (await fileCell(page, f.file_name)).click({ button: 'right' })
-  await menu(page, 'menu-rescan')
-  await page.waitForSelector(`[data-testid=rescan-dialog][data-file-id="${f.file_id}"] [data-testid=rescan-reasons]`, { timeout: 5000 })
-}
-
-/** 选择框挡不住对话框外的提示（toast），等它们消失再截图。 */
-async function waitNoToast(page) {
-  await page.waitForFunction(() => document.querySelectorAll('[data-sonner-toast]').length === 0, { timeout: 8000 }).catch(() => {})
 }
 
 // ---------- 壳模式：Wails 桥的模拟 ----------
@@ -443,9 +365,6 @@ function rescanShellMock(scenario) {
 
 let listTemp = null
 let shellTemp = null
-let filesTemp = null
-let wrongTemp = null
-let retryTemp = null
 
 const shots = [
   {
@@ -581,8 +500,6 @@ const shots = [
 
       await page.click(`[data-testid=rescan-item][data-file-id="${target.file_id}"] [data-testid=rescan-item-upload]`)
       await page.waitForSelector(`[data-testid=rescan-dialog][data-file-id="${target.file_id}"]`, { timeout: 5000 })
-      const inputs = await page.$$('[data-testid=rescan-dialog] [data-testid=rescan-input]')
-      assert(inputs.length === 0, '壳里不该有页面的文件选择框（文件由壳的系统对话框选）')
       // 记下对话框里显示过的进度文字（壳的 rescan:progress 事件）。
       await page.evaluate(() => {
         window.__progressSeen = []
@@ -622,360 +539,7 @@ const shots = [
       await dropTemp(shellTemp)
     },
   },
-  {
-    name: 'm2-rescan-files-done',
-    user: SCANNER,
-    path: '/files',
-    waitUntil: IDLE,
-    waitFor: '[data-testid=files-page]',
-    async prepare(page) {
-      const ctx = await context()
-      filesTemp = await makeTemp(ctx, '文件目录', 4, [2, 4])
-      await openFiles(page, filesTemp.id)
-      const [, p2, , p4] = filesTemp.files
-      const chip = await page.$eval('[data-testid=filter-rejected]', (el) => el.textContent.trim())
-      assert(chip === '已驳回 2', `筛选按钮：${chip}`)
-      await page.click('[data-testid=filter-rejected]')
-      await page.waitForFunction(() => document.querySelectorAll('[data-testid=file-cell]').length === 2, { timeout: 3000 })
-      await waitCovers(page, '[data-testid=file-area]')
-      await (await fileCell(page, p2.file_name)).click({ button: 'right' })
-      await page.waitForSelector('[data-testid=context-menu] [data-testid=menu-rescan]', { visible: true, timeout: 5000 })
-      await new Promise((r) => setTimeout(r, 200))
-      await page.screenshot({ path: `${OUT}/m2-rescan-files-menu.png` })
-      await menu(page, 'menu-rescan')
-      await page.waitForSelector(`[data-testid=rescan-dialog][data-file-id="${p2.file_id}"] [data-testid=rescan-reasons]`, { timeout: 5000 })
-      const reasons = await page.$eval('[data-testid=rescan-reasons]', (el) => el.textContent.replace(/\s+/g, ' ').trim())
-      assert(reasons.startsWith(`驳回：${p2.reject.text}`) && (!p2.reject.comment || reasons.includes(p2.reject.comment)), `对话框的驳回原因：${reasons}`)
-      const remark = await page.$eval('[data-testid=rescan-remark]', (el) => el.textContent.trim())
-      assert(remark.includes(TEMP_REMARK), `原件位置：${remark}`)
-      const newScan = pageBytes(filesTemp.seed, 102)
-      await injectRescan(page, 'P_02 重扫.png', newScan.png)
-      const r = await dialogResult(page)
-      assert(r.result === 'done' && r.title === '已重扫：现在是 v2，待审核（第 2 轮）', `结果：${JSON.stringify(r)}`)
-      assert(r.reassign === `自动分给 ${ctx.revName}`, `自动分配：${r.reassign}`)
-      assert(r.text.includes('带封面'), `应该带封面：${r.text}`)
-      await waitNoToast(page)
-      await page.screenshot({ path: `${OUT}/m2-rescan-dialog-done.png` })
-      await closeDialog(page)
-      // 筛选里只剩 P_04；关掉筛选，选中 P_02：详情写"待审 第 2 轮"，日志第一条是重扫。
-      await page.waitForFunction(() => document.querySelectorAll('[data-testid=file-cell]').length === 1, { timeout: 3000 })
-      const chip2 = await page.$eval('[data-testid=filter-rejected]', (el) => el.textContent.trim())
-      assert(chip2 === '已驳回 1', `重扫后筛选按钮：${chip2}`)
-      await page.click('[data-testid=filter-rejected]')
-      await page.waitForFunction(() => document.querySelectorAll('[data-testid=file-cell]').length === 4, { timeout: 3000 })
-      await (await fileCell(page, p2.file_name)).click()
-      await page.waitForSelector('[data-testid=detail-panel] [data-testid=file-logs]', { timeout: 5000 })
-      await page.waitForFunction(
-        () => document.querySelector('[data-testid=detail-panel]')?.textContent.includes('第 2 轮'),
-        { timeout: 5000 },
-      )
-      const detail = await page.$eval('[data-testid=detail-panel]', (el) => el.textContent.replace(/\s+/g, ' '))
-      assert(detail.includes('待审') && detail.includes('第 2 轮'), `详情：${detail.slice(0, 300)}`)
-      // 详情面板的日志（新的在前）：第一条是重扫。
-      await page.waitForFunction(() => document.querySelector('[data-testid=file-logs] li')?.textContent.includes('重扫'), { timeout: 5000 })
-      const firstLog = await page.$eval('[data-testid=file-logs] li', (el) => ({ text: el.textContent.replace(/\s+/g, ' ').trim() }))
-      assert(firstLog.text.startsWith('重扫') && firstLog.text.includes('新版本 v2，第 2 轮审核') && firstLog.text.includes(`自动分给 ${ctx.revName}`), `日志：${JSON.stringify(firstLog)}`)
-      const v = await verifyRescan(ctx, p2, { uploadName: 'P_02 重扫.png' })
-      // 另一页没动。
-      const r4 = await ctx.mgr('GET', `/api/files/${p4.file_id}/reviews`)
-      assert(r4.review_status === 'rejected' && r4.version_no === 1, 'P_04 应该仍是已驳回 v1')
-      console.log(`  ✓ /files：筛选"已驳回 2"→ 右键"上传重扫件"→ 成功；筛选剩 1 页；详情"待审 第 2 轮"；日志"${firstLog.text}"；接口：${JSON.stringify(v)}`)
-      await waitCovers(page, '[data-testid=file-area]')
-    },
-    async after() {
-      await dropTemp(filesTemp)
-    },
-  },
-  {
-    name: 'm2-rescan-wrong-file',
-    user: SCANNER,
-    path: '/files',
-    waitUntil: IDLE,
-    waitFor: '[data-testid=files-page]',
-    async prepare(page) {
-      const ctx = await context()
-      wrongTemp = await makeTemp(ctx, '选错文件', 3, [2, 3])
-      const [p1, p2, p3] = wrongTemp.files
-      await openFiles(page, wrongTemp.id)
-
-      // 1) 选成了另一页（P_01）的图：可能选错了文件，写出 P_01 的位置。
-      await openRescanFromFiles(page, p2)
-      await injectRescan(page, 'IMG_扫错了.png', p1.bytes.png)
-      let r = await dialogResult(page)
-      assert(r.result === 'duplicate_content', `结果：${JSON.stringify(r)}`)
-      assert(r.title === '选的图片和项目里另一个文件内容相同，可能选错了文件', `标题：${r.title}`)
-      assert(r.location === `内容相同的文件：${DEMO_FOLDER}/${wrongTemp.name}/${p1.file_name}`, `位置：${r.location}`)
-      await waitNoToast(page)
-      await page.screenshot({ path: `${OUT}/m2-rescan-wrong-file.png` })
-
-      // 2) 重新选择，选成了它自己现在的那张：一模一样。
-      await page.click('[data-testid=rescan-dialog] [data-testid=rescan-pick]').catch(() => {})
-      await injectRescan(page, 'P_02.png', p2.bytes.png)
-      await page.waitForFunction(
-        () => document.querySelector('[data-testid=rescan-result-title]')?.textContent.includes('一模一样'),
-        { timeout: 15000 },
-      )
-      r = await dialogResult(page)
-      assert(r.result === 'duplicate_content' && r.location === null, `结果：${JSON.stringify(r)}`)
-      assert(r.title === '选的图片和这个文件现在的版本一模一样，可能选错了文件', `标题：${r.title}`)
-      assert(r.text.includes('和现在的 v1 相同'), `说明：${r.text}`)
-      await page.screenshot({ path: `${OUT}/m2-rescan-wrong-file-self.png` })
-      const snaps = await ctx.scanner('GET', `/api/files/${p2.file_id}/snapshots`)
-      const st = await ctx.mgr('GET', `/api/files/${p2.file_id}/reviews`)
-      assert(snaps.snapshots.length === 1 && st.review_status === 'rejected', `选错文件后不该有新快照：${snaps.snapshots.length} 个，${st.review_status}`)
-      console.log(`  ✓ 选成别的页：提示"${r.title.replace('这个文件现在的版本一模一样', '…')}"并写出位置；选成它自己：一模一样；接口：仍是 v1、已驳回`)
-      await page.keyboard.press('Escape')
-      await dialogGone(page)
-
-      // 3) 对话框开着时，这一页在页面之外已经被重扫了（或者上一次其实已经成功）：invalid_state，按"已经成功"提示。
-      await openRescanFromFiles(page, p3)
-      await rescanPage(ctx.scanner, p3.file_id, 'P_03 别人重扫.png', pageBytes(wrongTemp.seed, 103))
-      await injectRescan(page, 'P_03 重扫.png', pageBytes(wrongTemp.seed, 203).png)
-      r = await dialogResult(page)
-      assert(r.result === 'invalid_state' && r.state === 'done', `结果：${JSON.stringify(r)}`)
-      assert(r.title === '这个文件已经不是"已驳回"了', `标题：${r.title}`)
-      const snaps3 = await ctx.scanner('GET', `/api/files/${p3.file_id}/snapshots`)
-      assert(snaps3.snapshots.length === 2, `P_03 只该有页面之外那一次重扫：${snaps3.snapshots.length} 个快照`)
-      // 列表刷新：P_03 已经是待审（第 2 轮）。
-      await page.waitForFunction(
-        (name) =>
-          [...document.querySelectorAll('[data-testid=file-cell]')].some(
-            (el) => [...el.querySelectorAll('[title]')].some((t) => t.getAttribute('title') === name) && el.textContent.includes('待审'),
-          ),
-        { timeout: 3000 },
-        p3.file_name,
-      )
-      await waitNoToast(page)
-      await page.screenshot({ path: `${OUT}/m2-rescan-already.png` })
-      console.log('  ✓ 已经被重扫过的页再传：409 invalid_state，提示"已经不是已驳回了"（不当作失败），列表刷新成待审')
-      await closeDialog(page)
-      // 截图回到"选错文件"的样子。
-      await openRescanFromFiles(page, p2)
-      await injectRescan(page, 'IMG_扫错了.png', p1.bytes.png)
-      await dialogResult(page)
-      await waitNoToast(page)
-    },
-    async after() {
-      await dropTemp(wrongTemp)
-    },
-  },
-  {
-    name: 'm2-rescan-retries',
-    user: SCANNER,
-    path: '/files',
-    waitUntil: IDLE,
-    waitFor: '[data-testid=files-page]',
-    async prepare(page) {
-      const ctx = await context()
-      retryTemp = await makeTemp(ctx, '重试', 2, [1, 2])
-      const [p1, p2] = retryTemp.files
-      await openFiles(page, retryTemp.id)
-      const plan = []
-      const seen = []
-      await page.setRequestInterception(true)
-      const onRequest = (req) => {
-        if (req.method() === 'POST' && /\/api\/files\/[^/]+\/rescan$/.test(new URL(req.url()).pathname)) {
-          seen.push(req.url())
-          const fault = plan.shift()
-          if (fault) {
-            void req.respond({ status: fault.status, contentType: 'application/json', body: JSON.stringify({ code: fault.code, message: fault.message }) })
-            return
-          }
-        }
-        void req.continue()
-      }
-      page.on('request', onRequest)
-      try {
-        // 1) 409 conflict：自动再发一次，第二次成功。
-        plan.push({ status: 409, code: 'conflict', message: '文件的版本刚被改了，请刷新后重试' })
-        await openRescanFromFiles(page, p1)
-        await injectRescan(page, 'P_01 重扫.png', pageBytes(retryTemp.seed, 101).png)
-        let r = await dialogResult(page)
-        assert(r.result === 'done' && seen.length === 2, `conflict 之后应该自动再发一次并成功：${JSON.stringify(r)}，请求 ${seen.length} 次`)
-        await verifyRescan(ctx, p1, { uploadName: 'P_01 重扫.png' })
-        console.log('  ✓ 409 conflict：页面自动再发一次，第二次成功（共 2 个请求）')
-        await closeDialog(page)
-
-        // 2) 400 invalid_cover：去掉封面重传一次，成功，没有封面。
-        seen.length = 0
-        plan.push({ status: 400, code: 'invalid_cover', message: '封面的长宽比和原图不一致' })
-        await openRescanFromFiles(page, p2)
-        await injectRescan(page, 'P_02 重扫.png', pageBytes(retryTemp.seed, 102).png)
-        r = await dialogResult(page)
-        assert(r.result === 'done' && seen.length === 2, `invalid_cover 之后应该去掉封面重传并成功：${JSON.stringify(r)}，请求 ${seen.length} 次`)
-        assert(r.text.includes('无封面（服务器没收封面：封面的长宽比和原图不一致）'), `对话框应该写无封面：${r.text}`)
-        const v = await verifyRescan(ctx, p2, { uploadName: 'P_02 重扫.png', hasCover: false })
-        const batch = await ctx.scanner('POST', '/api/files/batch', { file_ids: [p2.file_id] })
-        assert(batch.items[0].cover_url === null && batch.items[0].version_no === 2, 'batch 里 v2 应该没有封面')
-        console.log(`  ✓ 400 invalid_cover：去掉封面重传一次并成功，v2 没有封面（${JSON.stringify(v)}）`)
-      } finally {
-        page.off('request', onRequest)
-        await page.setRequestInterception(false)
-      }
-      await waitNoToast(page)
-    },
-    async after() {
-      await dropTemp(retryTemp)
-    },
-  },
 ]
-
-let localTemp = null
-shots.push({
-  name: 'm2-rescan-local-checks',
-  user: SCANNER,
-  path: '/files',
-  waitUntil: IDLE,
-  waitFor: '[data-testid=files-page]',
-  async prepare(page) {
-    const ctx = await context()
-    localTemp = await makeTemp(ctx, '本地核对', 4, [1, 2, 3])
-    const [p1, p2, p3] = localTemp.files
-    await openFiles(page, localTemp.id)
-    const rescanPosts = []
-    const rule = { rescansLimit: null, rescansRespond: null, holdRescanMs: 0 }
-    const rescansGets = []
-    await page.setRequestInterception(true)
-    const onRequest = (req) => {
-      const url = new URL(req.url())
-      if (req.method() === 'POST' && /\/api\/files\/[^/]+\/rescan$/.test(url.pathname)) {
-        rescanPosts.push(url.pathname)
-        if (rule.holdRescanMs) {
-          setTimeout(() => void req.continue(), rule.holdRescanMs)
-          return
-        }
-      }
-      if (req.method() === 'GET' && /\/api\/projects\/[^/]+\/rescans$/.test(url.pathname) && url.searchParams.get('folder_id') === localTemp.id) {
-        rescansGets.push(url.search)
-        if (rule.rescansRespond) {
-          void req.respond(rule.rescansRespond)
-          return
-        }
-        if (rule.rescansLimit) {
-          url.searchParams.set('limit', String(rule.rescansLimit))
-          void req.continue({ url: url.toString() })
-          return
-        }
-      }
-      void req.continue()
-    }
-    page.on('request', onRequest)
-    try {
-      // 1) 写了一半的 PNG：不发请求，提示不完整。
-      await openRescanFromFiles(page, p1)
-      const half = p1.bytes.png.subarray(0, Math.floor(p1.bytes.png.length / 2))
-      await injectRescan(page, 'P_01 扫了一半.png', pageBytes(localTemp.seed, 101).png.subarray(0, half.length))
-      let r = await dialogResult(page)
-      assert(r.result === 'local_file' && r.title === '没有上传', `结果：${JSON.stringify(r)}`)
-      assert(r.text.includes('选的文件不完整或还在写入，请等扫描软件写完再选'), `说明：${r.text}`)
-      assert(rescanPosts.length === 0, `写了一半的文件不该发重扫请求（发了 ${rescanPosts.length} 次）`)
-      await waitNoToast(page)
-      await page.screenshot({ path: `${OUT}/m2-rescan-local-checks.png` })
-      // 2) 扩展名不对：不发请求。
-      await injectRescan(page, 'P_01.gif', pageBytes(localTemp.seed, 102).png)
-      await page.waitForFunction(() => document.querySelector('[data-testid=rescan-dialog]')?.textContent.includes('只能选 jpg、jpeg、tif、tiff、png 的图片'), { timeout: 5000 })
-      assert(rescanPosts.length === 0, '扩展名不对也不该发请求')
-      const s1 = await ctx.scanner('GET', `/api/files/${p1.file_id}/snapshots`)
-      assert(s1.snapshots.length === 1, 'P_01 应该还是 1 个快照')
-      console.log('  ✓ 写了一半的 PNG、.gif：对话框直接提示，没有发重扫请求，P_01 仍是 v1')
-      await page.keyboard.press('Escape')
-      await dialogGone(page)
-
-      // 3) 驳回原因要翻页才找得到：每页 1 个，P_03 在第 3 页。
-      rule.rescansLimit = 1
-      rescansGets.length = 0
-      await openRescanFromFiles(page, p3)
-      const reasons = await page.$eval('[data-testid=rescan-reasons]', (el) => el.textContent.replace(/\s+/g, ' ').trim())
-      assert(reasons.startsWith(`驳回：${p3.reject.text}`), `第 3 页的驳回原因：${reasons}`)
-      assert(rescansGets.length === 3 && rescansGets.every((q) => q.includes('limit=500')), `应该跟着 next_cursor 翻 3 页：${JSON.stringify(rescansGets)}`)
-      await page.screenshot({ path: `${OUT}/m2-rescan-lookup.png` })
-      console.log(`  ✓ 驳回原因在第 3 页：跟着 next_cursor 翻了 ${rescansGets.length} 页找到「${reasons}」`)
-      await page.keyboard.press('Escape')
-      await dialogGone(page)
-      rule.rescansLimit = null
-
-      // 4) 待重扫列表里没有它：已经不在列表里；5) 查失败：读不到驳回原因（中性说法）。
-      rule.rescansRespond = { status: 200, contentType: 'application/json', body: JSON.stringify({ total: 0, items: [], next_cursor: null }) }
-      await (await fileCell(page, p2.file_name)).click({ button: 'right' })
-      await menu(page, 'menu-rescan')
-      await page.waitForSelector('[data-testid=rescan-dialog] [data-testid=rescan-not-rejected]', { timeout: 5000 })
-      await page.keyboard.press('Escape')
-      await dialogGone(page)
-      rule.rescansRespond = { status: 500, contentType: 'application/json', body: JSON.stringify({ code: 'internal', message: '服务器内部错误' }) }
-      await (await fileCell(page, p2.file_name)).click({ button: 'right' })
-      await menu(page, 'menu-rescan')
-      await page.waitForSelector('[data-testid=rescan-dialog] [data-testid=rescan-lookup-error]', { timeout: 5000 })
-      const errText = await page.$eval('[data-testid=rescan-lookup-error]', (el) => el.textContent.trim())
-      assert(errText.includes('读不到驳回原因') && errText.includes('仍然可以上传'), `查失败：${errText}`)
-      assert(!(await page.$('[data-testid=rescan-dialog] [data-testid=rescan-not-rejected]')), '查失败时不该说"已经不在待重扫列表里"')
-      console.log('  ✓ rescans 里没有它：已经不在待重扫列表里；rescans 出错：读不到驳回原因，仍然可以上传')
-
-      // 6) 查失败时照样上传；上传期间（响应拦 1.5 秒）关闭、刷新页面要确认，传完不拦；成功的说明用中性说法。
-      rule.holdRescanMs = 1500
-      await injectRescan(page, 'P_02 重扫.png', pageBytes(localTemp.seed, 202).png)
-      await page.waitForFunction(() => document.querySelector('[data-testid=rescan-dialog]')?.dataset.state === 'working', { timeout: 5000 })
-      await page.waitForFunction(() => document.querySelector('[data-testid=rescan-progress-text]')?.dataset.phase === 'uploading', { timeout: 10000 })
-      const blocked = await page.evaluate(() => {
-        const e = new Event('beforeunload', { cancelable: true })
-        window.dispatchEvent(e)
-        return e.defaultPrevented
-      })
-      assert(blocked, '上传期间 beforeunload 应该被拦下')
-      r = await dialogResult(page)
-      assert(r.result === 'done', `结果：${JSON.stringify(r)}`)
-      assert(r.reassign === '已自动分给审核人', `没拿到驳回记录时的说明：${r.reassign}`)
-      const after = await page.evaluate(() => {
-        const e = new Event('beforeunload', { cancelable: true })
-        window.dispatchEvent(e)
-        return e.defaultPrevented
-      })
-      assert(!after, '传完后 beforeunload 不该再拦')
-      await verifyRescan(ctx, p2, { uploadName: 'P_02 重扫.png' })
-      console.log('  ✓ 上传期间 beforeunload 被拦下、传完不拦；没拿到驳回记录时成功说明写"已自动分给审核人"')
-      rule.holdRescanMs = 0
-      rule.rescansRespond = null
-      await closeDialog(page)
-      // 截图回到"写了一半"的样子。
-      await openRescanFromFiles(page, p1)
-      await injectRescan(page, 'P_01 扫了一半.png', half)
-      await dialogResult(page)
-      await waitNoToast(page)
-    } finally {
-      page.off('request', onRequest)
-      await page.setRequestInterception(false)
-    }
-  },
-  async after() {
-    await dropTemp(localTemp)
-  },
-})
-
-// 端到端（不删数据）：浏览器里在 /scan 的列表上重扫演示文件夹的一页。
-if (process.env.M27_E2E === '1') {
-  shots.push({
-    name: 'm2-rescan-e2e-browser',
-    user: SCANNER,
-    path: '/scan',
-    waitUntil: IDLE,
-    waitFor: '[data-testid=rescan-list]',
-    async prepare(page) {
-      const ctx = await context()
-      const box = (await ctx.admin('GET', `/api/folders/${ctx.demoFolder.id}/children`)).folders.find((f) => f.folder_name === '盒 003')
-      const ch = await ctx.admin('GET', `/api/folders/${box.id}/children`)
-      const f = ch.files.find((x) => x.file_name === (process.env.M27_E2E_FILE ?? 'IMG_0002.png'))
-      assert(f && f.review_status === 'rejected', `演示文件夹的这一页应该是已驳回：${f?.review_status}`)
-      await waitList(page)
-      await page.click(`[data-testid=rescan-item][data-file-id="${f.file_id}"] [data-testid=rescan-item-upload]`)
-      await page.waitForSelector(`[data-testid=rescan-dialog][data-file-id="${f.file_id}"]`, { timeout: 5000 })
-      const name = `${f.file_name.replace('.png', '')} 重扫 浏览器.png`
-      await injectRescan(page, name, pageBytes(`M2-7 端到端 浏览器 ${stamp()} ${Math.random()}`, 2).png)
-      const r = await dialogResult(page)
-      assert(r.result === 'done', `结果：${JSON.stringify(r)}`)
-      const v = await verifyRescan(ctx, { file_id: f.file_id, file_name: f.file_name }, { uploadName: name })
-      console.log(`  ✓ 浏览器端到端：盒 003/${f.file_name} file_id=${f.file_id}；${r.title}；${r.reassign}；接口：${JSON.stringify(v)}`)
-    },
-  })
-}
 
 export default {
   out: OUT,

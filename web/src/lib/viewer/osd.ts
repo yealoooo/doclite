@@ -7,15 +7,22 @@
 //
 // 图源（坐标都按原图转正后的宽高）：
 // - CoverTileSource：封面（长边 400）当作原图大小的一块，原图就绪前先显示，缩放和位置与原图一致；
-// - ShellTileSource：壳的分块（M2-3，DZI），按块用 fetch 取，换图时一起取消；
-// - ImageModeTileSource：浏览器里 JPEG、PNG 的整图模式（OpenSeadragon 的 ImageTileSource），缩小的各级逐级减半；
-// - WorkerTileSource：浏览器里 TIFF，块由 Worker 从内存里的金字塔切出来（lib/viewer/tiff.worker.ts）。
+// - ShellTileSource：壳的分块（M2-3，DZI），按块用 fetch 取，换图时一起取消。
 
 import OpenSeadragon from 'openseadragon'
 
 import type { TileSourceDescriptor } from '../image-url'
-import { dziMaxLevel, TILE_OVERLAP, TILE_SIZE } from './pyramid'
-import type { TiffReady, TiffWorker } from './tiff-source'
+
+/** 壳的分块的块大小（DZI 描述里没写时用）。 */
+const TILE_SIZE = 512
+
+/** DZI 的最高一级：长边 ≤ 2^level 的最小 level。 */
+function dziMaxLevel(width: number, height: number): number {
+  const m = Math.max(width, height)
+  let level = 0
+  while (2 ** level < m) level++
+  return level
+}
 
 export { OpenSeadragon }
 export type OsdViewer = OpenSeadragon.Viewer
@@ -48,7 +55,7 @@ export function createOsdViewer(element: HTMLElement): OsdViewer {
     visibilityRatio: 0.2,
     zoomPerScroll: 1.2,
     zoomPerClick: 2,
-    // 每个查看器同时最多取几块（壳的 img 协议、Worker 都在本机）。
+    // 每个查看器同时最多取几块（壳的 img 协议在本机）。
     imageLoaderLimit: 6,
     // 每块 512×512 约 1 MB；对比视图有两个查看器。
     maxImageCacheCount: 150,
@@ -282,194 +289,5 @@ export class ShellTileSource extends OpenSeadragon.TileSource {
 
   override downloadTileAbort(job: OpenSeadragon.ImageJob): void {
     ;(job.userData.ac as AbortController | undefined)?.abort()
-  }
-}
-
-// ---------- 浏览器：JPEG、PNG 的整图模式 ----------
-
-/**
- * OpenSeadragon 的整图模式（ImageTileSource，每级一块）：原图整张解码，最高一级就是这张图；缩小的各级从原图
- * 逐级减半画出来（每步 2×2 平均），不像原版一次缩到位那样在适合窗口时出锯齿。`url` 是下载好的原图的 blob: 地址。
- * `loaded` 在图片解码完成（或失败）后落定。
- */
-export class ImageModeTileSource extends OpenSeadragon.ImageTileSource {
-  declare loaded: Promise<void>
-  declare private settle: { resolve: () => void; reject: (e: Error) => void } | undefined
-
-  constructor(url: string) {
-    super({ url, buildPyramid: true, crossOriginPolicy: false })
-  }
-
-  override getImageInfo(url: string): void {
-    // 父类的构造函数里用 setTimeout 调这里；loaded 在这之前已经建好（见下面的 ensureLoaded）。
-    this.ensureLoaded()
-    const image = new Image()
-    image.decoding = 'async'
-    image.onload = () => {
-      image.onload = image.onerror = null
-      image
-        .decode()
-        .catch(() => {})
-        .then(() => {
-          // 和父类的 getImageInfo 一样填好尺寸，再发 ready（父类的 ready 处理按这些字段初始化）。
-          const self = this as unknown as Record<string, unknown>
-          self.width = image.naturalWidth
-          self.height = image.naturalHeight
-          self.tileWidth = image.naturalWidth
-          self.tileHeight = image.naturalHeight
-          this.tileOverlap = 0
-          this.minLevel = 0
-          this.image = image
-          this.levels = imageLevels(image.naturalWidth, image.naturalHeight)
-          this.maxLevel = this.levels.length - 1
-          this.settle!.resolve()
-          this.raiseEvent('ready', { tileSource: this })
-        })
-    }
-    image.onerror = () => {
-      image.onload = image.onerror = null
-      this.image = null
-      this.settle!.reject(new Error('浏览器解不了这张图（文件可能已损坏）'))
-      this.raiseEvent('open-failed', { message: '浏览器解不了这张图', source: url })
-    }
-    image.src = url
-  }
-
-  /** 第一次调用时建 loaded（构造函数里父类先跑，字段初始化在它之后，所以不能用字段初始化器）。 */
-  ensureLoaded(): Promise<void> {
-    if (!this.settle) {
-      this.loaded = new Promise<void>((resolve, reject) => {
-        this.settle = { resolve, reject }
-      })
-      this.loaded.catch(() => {})
-    }
-    return this.loaded
-  }
-
-  override downloadTileStart(job: OpenSeadragon.ImageJob): void {
-    const { level } = job.postData as { level: number }
-    const image = this.image
-    if (!image) {
-      job.fail('原图还没解码', null)
-      return
-    }
-    if (level === this.maxLevel) {
-      job.finish(image, null, 'image')
-      return
-    }
-    const size = this.levels[level]
-    if (!size) {
-      job.fail(`没有第 ${level} 级`, null)
-      return
-    }
-    try {
-      job.finish(scaleImage(image, image.naturalWidth, image.naturalHeight, size.width, size.height), null, 'context2d')
-    } catch (e) {
-      job.fail(e instanceof Error ? e.message : String(e), null)
-    }
-  }
-
-  /** 不再用了：放掉解码出来的图。 */
-  release() {
-    if (this.image) {
-      this.image.src = ''
-      this.image = null
-    }
-  }
-}
-
-/** 整图模式的各级尺寸（和 OpenSeadragon 的 ImageTileSource 一样：每级宽高减半向下取整，直到不到 2 像素）。 */
-function imageLevels(width: number, height: number) {
-  const levels = [{ width, height }]
-  let w = width
-  let h = height
-  while (w >= 2 && h >= 2) {
-    w = Math.floor(w / 2)
-    h = Math.floor(h / 2)
-    levels.push({ width: w, height: h })
-  }
-  return levels.reverse()
-}
-
-/** 逐级减半缩到目标尺寸（每步 2×2 平均），返回新画布的 2D 上下文（交给 OpenSeadragon，它负责释放）。 */
-function scaleImage(src: CanvasImageSource, sw: number, sh: number, tw: number, th: number): CanvasRenderingContext2D {
-  let cur: CanvasImageSource = src
-  let cw = sw
-  let ch = sh
-  const temps: HTMLCanvasElement[] = []
-  const draw = (w: number, h: number) => {
-    const c = document.createElement('canvas')
-    c.width = w
-    c.height = h
-    const ctx = c.getContext('2d')
-    if (!ctx) throw new Error('浏览器建不了 2D 画布')
-    ctx.imageSmoothingEnabled = true
-    ctx.imageSmoothingQuality = 'high'
-    ctx.drawImage(cur, 0, 0, cw, ch, 0, 0, w, h)
-    return ctx
-  }
-  while (cw >= tw * 4 && ch >= th * 4) {
-    const nw = Math.max(tw, Math.round(cw / 2))
-    const nh = Math.max(th, Math.round(ch / 2))
-    const ctx = draw(nw, nh)
-    temps.push(ctx.canvas)
-    cur = ctx.canvas
-    cw = nw
-    ch = nh
-  }
-  const out = draw(tw, th)
-  for (const c of temps) {
-    c.width = 0
-    c.height = 0
-  }
-  return out
-}
-
-// ---------- 浏览器：TIFF（Worker） ----------
-
-/** 块由 Worker 从内存里的金字塔切出来（DZI 同样的级和块）。`key` 用来区分不同的图（块的缓存键）。 */
-export class WorkerTileSource extends OpenSeadragon.TileSource {
-  private readonly tiff: TiffWorker
-  private readonly key: string
-
-  constructor(tiff: TiffWorker, meta: TiffReady, key: string) {
-    super({
-      width: meta.width,
-      height: meta.height,
-      tileSize: TILE_SIZE,
-      tileOverlap: TILE_OVERLAP,
-      minLevel: 0,
-      maxLevel: meta.maxLevel,
-    })
-    this.tiff = tiff
-    this.key = key
-  }
-
-  override supports(): boolean {
-    return false
-  }
-
-  override getTileUrl(level: number, x: number, y: number): string {
-    return `doclite-tiff:${this.key}/${level}/${x}_${y}`
-  }
-
-  override getTilePostData(level: number, x: number, y: number) {
-    return { level, x, y }
-  }
-
-  override hasTransparency(): boolean {
-    return false
-  }
-
-  override downloadTileStart(job: OpenSeadragon.ImageJob): void {
-    const { level, x, y } = job.postData as { level: number; x: number; y: number }
-    this.tiff
-      .tile(level, x, y)
-      .then((img) => job.finish(img, null, img instanceof ImageBitmap ? 'imageBitmap' : 'context2d'))
-      .catch((e: unknown) => job.fail(e instanceof Error ? e.message : String(e), null))
-  }
-
-  override downloadTileAbort(): void {
-    // Worker 切一块很快，不单独取消；结果回来时 OpenSeadragon 已经不要了，会忽略。
   }
 }

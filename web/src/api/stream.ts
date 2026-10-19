@@ -12,6 +12,7 @@ import {
   ApiError,
   buildUrl,
   failResponse,
+  HANDLE_ALL,
   networkError,
   queryPairs,
   shellTransportError,
@@ -36,7 +37,7 @@ export interface OpenStreamOptions {
 }
 
 /** 错误响应不弹 toast（由调用方决定怎么重连或提示）；401、403、426 的全局处理照常执行。 */
-const STREAM_ERROR_OPTIONS = { handle: true } as const
+const STREAM_ERROR_OPTIONS = { handle: HANDLE_ALL } as const
 
 /**
  * 订阅 SSE。
