@@ -44,7 +44,7 @@ func TestRolesCRUD(t *testing.T) {
 	if strings.Join(codes, ",") != "admin,manager,scanner,reviewer,cataloger" {
 		t.Fatalf("角色顺序：%v", codes)
 	}
-	wantAdminMenus := "dashboard,files,scan,review,review_assign,catalog,export,system.users,system.roles,system.projects,system.storage,system.plugins,system.license,system.audit"
+	wantAdminMenus := "dashboard,files,scan,review,review_assign,catalog,export,system.users,system.roles,system.projects,system.storage,system.license,system.audit"
 	if a := roles[0]; !a.IsBuiltin || a.UserCount != 1 || strings.Join(a.MenuCodes, ",") != wantAdminMenus || a.RoleName != "系统管理员" {
 		t.Fatalf("admin 角色：%+v", a)
 	}
@@ -130,7 +130,7 @@ func TestRolesCRUD(t *testing.T) {
 	// 全部菜单（含分组）。
 	var menus []menuItem
 	admin.Get("/api/system/menus").Expect(200).JSON(&menus)
-	if len(menus) != 15 || menus[0].MenuCode != "dashboard" || menus[7].MenuCode != "system" || menus[7].MenuType != "group" ||
+	if len(menus) != 14 || menus[0].MenuCode != "dashboard" || menus[7].MenuCode != "system" || menus[7].MenuType != "group" ||
 		menus[8].ParentCode == nil || *menus[8].ParentCode != "system" {
 		t.Fatalf("全部菜单：%+v", menus)
 	}

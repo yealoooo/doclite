@@ -11,7 +11,6 @@ import {
   LibraryIcon,
   ListChecksIcon,
   PackageIcon,
-  PuzzleIcon,
   ScanLineIcon,
   ScrollTextIcon,
   ShieldCheckIcon,
@@ -31,7 +30,6 @@ const ICONS: Record<string, Component> = {
   'system.roles': ShieldCheckIcon,
   'system.projects': FolderKanbanIcon,
   'system.storage': DatabaseIcon,
-  'system.plugins': PuzzleIcon,
   'system.license': KeyRoundIcon,
   'system.audit': ScrollTextIcon,
 }

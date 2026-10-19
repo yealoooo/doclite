@@ -71,6 +71,7 @@
 - 同目录 `0002_review_indexes.sql`（我的审核的部分索引）、`0003_item_no_index.sql`（已删除条目的件号索引）。
 - **`0004`（2026-10-19，整个文件夹归档）**：archive_items 加 `source_folder_id`（引用 folders，未删除条目里唯一的部分索引）、`source_status`（sealed / modifying）、`unsealed_by`、`unsealed_at`、`unseal_reason`；status 的 done 改成 draft，CHECK 改为 draft / locked。**不处理旧数据**【用户 2026-10-19：旧数据不用管，开发库直接重建】：开发库 `doclite_dev` 删掉重建，再用精简的演示数据脚本造数据（只要够功能测试，见 roadmap M9-3）。
 - **`0005_perf_indexes.sql`（M10-1，只加索引）**：`archive_item_files (project_id, file_id) INCLUDE (archive_item_id)`（看板按项目取挂接）、`file_reviews (project_id, reviewer_id) INCLUDE (file_id) WHERE status = 'open'`（可以分配的人、改派列表按项目取进行中的分配）。
+- **`0006_drop_plugins_menu.sql`（M10-7）**：删掉菜单 `system.plugins`（只有占位页），角色授权随外键级联删除。
 - 参考 SQL：`/Users/yanlong/project/doclite-project/bak/doclite-v3/docs/sql/key-queries.sql`（查重、path_code 分配、移动、分配、通过、软删除、导出预检、任务领取等）。
 - 0001 中 `cover_key` 注释"WebP、server 生成"已过时。预留不写：快照类型 auto/edit/restore、案卷（volume）、page_label、pdf_ocr/ofd、ocr_results。
 
@@ -143,7 +144,7 @@
 
 ## 4. 权限和角色
 
-菜单码：dashboard 项目看板、files 文件目录、scan 扫描上传、review 我的审核、review_assign 审核分配、catalog 归类、export 导出；system 组下 system.users 用户、system.roles 角色与权限、system.projects 项目、system.storage 存储配置、system.plugins 插件能力、system.license 许可证、system.audit 审计日志（插件能力目前是占位页）。路由 `/dashboard`、`/files`、`/scan`、`/review`、`/review-assign`、`/catalog`、`/export`、`/system/*`。
+菜单码：dashboard 项目看板、files 文件目录、scan 扫描上传、review 我的审核、review_assign 审核分配、catalog 归类、export 导出；system 组下 system.users 用户、system.roles 角色与权限、system.projects 项目、system.storage 存储配置、system.license 许可证、system.audit 审计日志（原来的 system.plugins 插件能力占位页由迁移 0006 去掉，用户 2026-10-19）。路由 `/dashboard`、`/files`、`/scan`、`/review`、`/review-assign`、`/catalog`、`/export`、`/system/*`。
 
 | 内置角色 | 菜单 | 职责 |
 |---|---|---|

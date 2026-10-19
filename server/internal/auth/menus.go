@@ -18,7 +18,6 @@ const (
 	MenuSystemRoles    = "system.roles"
 	MenuSystemProjects = "system.projects"
 	MenuSystemStorage  = "system.storage"
-	MenuSystemPlugins  = "system.plugins"
 	MenuSystemLicense  = "system.license"
 	MenuSystemAudit    = "system.audit"
 )

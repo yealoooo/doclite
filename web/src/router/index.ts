@@ -28,11 +28,6 @@ declare module 'vue-router' {
   }
 }
 
-const PlaceholderView = () => import('@/views/PlaceholderView.vue')
-
-/** 系统管理下还没实现的页面。 */
-const SYSTEM_PLACEHOLDER_PATHS = ['plugins']
-
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
@@ -120,11 +115,6 @@ const router = createRouter({
           component: () => import('@/views/system/AuditView.vue'),
           meta: { requiresMenu: true },
         },
-        ...SYSTEM_PLACEHOLDER_PATHS.map((p) => ({
-          path: `system/${p}`,
-          component: PlaceholderView,
-          meta: { requiresMenu: true },
-        })),
         // M7-11：客户端的设置页（服务器、账号、本机存储、热文件夹、关于）。不是菜单，登录了就能进；只在客户端里有
         // 入口，浏览器里打开只显示一句说明。
         {

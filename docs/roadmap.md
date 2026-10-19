@@ -384,7 +384,7 @@
 
 ### [x] M10-2 web 清理和去重（commit f60c1af）
 - **结果：** 删掉只给浏览器用的上传、前端封面、浏览器 TIFF 解码（浏览器里提示"请在客户端中使用"，看图只显示封面），去掉 utif、pako；抽出 useFolderBrowser、useEventBatch、useSnapshotCompare、lib/original.ts、StreamStatus；`HANDLE_ALL` 代替位置参数 `true`；`isTauri` 改 `isShell`；修了许可证到期时非管理员弹两条提示。约 +1900 / −7300 行，dist 小约 17%。截图脚本删掉只测浏览器的几张，要上传的改用接口。
-- **遗留：** `useMyReviews.ts` 没简化；m2-review-unseen（只看了封面）现在没有截图覆盖；server 菜单数据里的 `system.plugins` 占位页还在（要迁移才能去）。
+- **遗留：** `useMyReviews.ts` 没简化；m2-review-unseen（只看了封面）现在没有截图覆盖；`system.plugins` 占位页已在 M10-7 去掉。
 
 ### [x] M10-3 client 性能、清理、壳页配色（commit aa46dfe）
 - **结果：** 上传队列库统计、取队首改走索引，启动时删 30 天前结束且本地文件已不在的行，KnownPaths 增量维护；热文件夹按目录增量扫描，60 秒全量兜底；封面先 2ⁿ 平均缩小再精缩（和切块共用代码）；图片缓存锁外做磁盘 I/O，删不掉的文件稍后再删、启动时清孤儿；批量入队一个事务；修了选文件夹上传会带上 Windows 隐藏和系统文件（共用 `upload.WalkImages`）；正式命令里不再有自检分支；壳页配色、字体、卡片宽度和 web 对齐。go test -race 通过，make build 通过。
@@ -403,3 +403,7 @@
 - **结果：** `npm run release`、客户端 `make build`；server 起在 29080 连 `doclite_verify`，客户端 `--smoke`（后台模式、隔离数据目录，PAGES + 主流程五步，admin）31/31 通过，两次。
 - **顺带修：** 执行器心跳和 Run 收尾之间的竞态（原来就有）：Run 刚在业务事务里把 job 改成 done、心跳正好更新不到 running 行，记了一条误报的 ERROR "job 已经不归这次执行了"；现在心跳更新不到时先看是不是这次执行自己已经 done。导出、存储迁移的 API 测试通过。
 - **须知：** 用户的 9080 还是旧程序（14:32 启动），重启后会执行迁移 0005；样式问题用户最后统一验收。
+
+### [x] M10-7 去掉"插件能力"占位菜单（用户 2026-10-19）
+- **结果：** 迁移 0006 删掉菜单 `system.plugins`（role_menus 级联）；删 `auth.MenuSystemPlugins`、web 的占位路由、PlaceholderView、菜单图标；验收清单 LOGIN-05 去掉这一步。
+- **其余 M10 遗留（用户 2026-10-19 定）：** 导出明细翻页、导出收尾失败整份重做，等有真实大数据再做；`cancelled`/`canceled` 不改。
