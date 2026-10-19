@@ -1,10 +1,13 @@
 // M2-4 查看原图的截图脚本用的助手（scripts/shots/m2-viewer.mjs、m2-viewer-lan.mjs）。
 //
 // - 接口：页面之外用 admin 调接口（登录、batch、建样本）；
-// - 样本：DEMO-A 下已有的 M1 验收 JPEG（"M1 验收演示 2026-10-05/盒 WS-2025-001"）、M2-3 的 TIFF（"M2-3 分块冒烟"的 LZW、G4，
-//   "M2-3 分块实测"的 200 MB TIFF），外加本任务的专用文件夹"M2-4 查看器样本"（第一次运行时建好，之后复用、不删）：
+// - 样本（M9-3 起）：DEMO-A 下 `npm run seed` 建的「格式样本」（JPEG 彩色、灰度，TIFF LZW、G4 等，没有封面），外加本任务的
+//   专用文件夹"M2-4 查看器样本"（第一次运行时建好，之后复用、不删）：
 //   - 对比样本.png：v1 是 150 DPI（被驳回：模糊，带说明），v2 是 300 DPI 的重扫；
-//   - 超出预算 A0 300dpi.tif：1 位黑白无压缩 TIFF，9933×14043（约 1.4 亿像素，超过浏览器 1 亿像素的预算）。
+//   - 超出预算 A0 300dpi.tif：1 位黑白无压缩 TIFF，9933×14043（约 1.4 亿像素，超过浏览器 1 亿像素的预算，17 MB）；
+//   - 子文件夹"200 MB 切换"（ensureBench，只在要它的几张截图第一次运行时建）：a3-600-none-rgb.tif（7016×9921 RGB 无压缩，
+//     约 209 MB）、a4-300-none-gray.tif（2480×3508 灰度无压缩，8.7 MB）、a4-300-deflate-rgb.tif（同尺寸 Deflate 彩色，几百 KB），
+//     按这个顺序上传（切换文件的场景按"下一个"依次打开）。演示数据不放大文件，要这几张的截图建议在临时库上跑。
 // - 页面：打开文件夹、右键"查看原图"、等查看器的状态；
 // - 壳的模拟（M6-4）：壳模式的地址 + Wails 桥的模拟（scripts/lib/wails-mock.mjs），--base 要指向 devshell
 //   （client/cmd/devshell）：封面、分块描述和块由 devshell 用客户端的 Go 代码（internal/imagecache、internal/tiles，
@@ -26,12 +29,15 @@ import { coverSize, makeScanPage } from './scan-pages.mjs'
 import { installWailsMock } from './wails-mock.mjs'
 
 export const PROJECT = 'DEMO-A'
-export const JPEG_FOLDER = 'M1 验收演示 2026-10-05/盒 WS-2025-001'
-export const SMOKE_FOLDER = 'M2-3 分块冒烟'
-export const BENCH_FOLDER = 'M2-3 分块实测'
+export const SAMPLES_FOLDER = '格式样本'
 export const OWN_FOLDER = 'M2-4 查看器样本'
+export const BENCH_FOLDER = '200 MB 切换'
 export const COMPARE_FILE = '对比样本.png'
 export const BIG_FILE = '超出预算 A0 300dpi.tif'
+/** "200 MB 切换"里的三个，按上传顺序（即文件夹里的顺序）。 */
+export const BIG200 = 'a3-600-none-rgb.tif'
+export const GRAY_FILE = 'a4-300-none-gray.tif'
+export const DEFLATE_FILE = 'a4-300-deflate-rgb.tif'
 
 export function assert(cond, msg) {
   if (!cond) throw new Error(msg)
@@ -78,8 +84,8 @@ async function resolvePath(call, fromId, p) {
 let ctxPromise = null
 
 /**
- * 登录 admin，找到 DEMO-A 和各个样本文件夹，缺的样本建好（只做一次）。返回
- * {origin, api, project, me, folders: {jpeg, smoke, bench, own}, files: {<文件名>: {file_id, folder_id, ...}}}。
+ * 登录 admin，找到 DEMO-A 和各个样本文件夹，缺的样本建好（只做一次；"200 MB 切换"另见 ensureBench）。返回
+ * {origin, api, project, me, folders: {samples, own}, files: {<文件名>: {file_id, folder_id, folder_key, ...}}}。
  */
 export function viewerContext(origin, { user, password }) {
   ctxPromise ??= (async () => {
@@ -91,10 +97,8 @@ export function viewerContext(origin, { user, password }) {
     assert(project, `找不到项目 ${PROJECT}，先跑 npm run seed`)
     const root = project.root_folder_id
     const folders = {
-      jpeg: await resolvePath(call, root, JPEG_FOLDER),
-      smoke: await resolvePath(call, root, SMOKE_FOLDER),
-      bench: await resolvePath(call, root, BENCH_FOLDER),
-      own: await ensureOwnFolder(call, root),
+      samples: await resolvePath(call, root, SAMPLES_FOLDER),
+      own: await ensureFolder(call, root, OWN_FOLDER, 'M2-4 截图脚本的样本（对比、超出预算），保留，脚本重跑时复用'),
     }
     await ensureSamples(call, project, me, folders.own)
     const files = {}
@@ -107,17 +111,43 @@ export function viewerContext(origin, { user, password }) {
   return ctxPromise
 }
 
-async function ensureOwnFolder(call, root) {
-  const ch = await call('GET', `/api/folders/${root}/children`)
-  const f = ch.folders.find((x) => x.folder_name === OWN_FOLDER)
+async function ensureFolder(call, parentId, name, remark) {
+  const ch = await call('GET', `/api/folders/${parentId}/children`)
+  const f = ch.folders.find((x) => x.folder_name === name)
   if (f) return f.id
-  const created = await call('POST', '/api/folders', {
-    parent_id: root,
-    folder_name: OWN_FOLDER,
-    remark: 'M2-4 截图脚本的样本（对比、超出预算），保留，脚本重跑时复用',
-  })
-  console.log(`  建了样本文件夹「${OWN_FOLDER}」`)
+  const created = await call('POST', '/api/folders', { parent_id: parentId, folder_name: name, remark })
+  console.log(`  建了样本文件夹「${name}」`)
   return created.id
+}
+
+let benchPromise = null
+
+/**
+ * "M2-4 查看器样本/200 MB 切换"：缺的按顺序现场生成、上传（第一次约 210 MB，之后复用），并补进 ctx.files（folder_key 是
+ * bench）。只有要它的几张截图调用，别的截图（和 m2-viewer-lan）不会造大文件。
+ */
+export function ensureBench(ctx) {
+  benchPromise ??= (async () => {
+    const { api: call } = ctx
+    const id = await ensureFolder(call, ctx.folders.own, BENCH_FOLDER, 'M2-4 截图脚本：限速下载 200 MB TIFF 时切换文件，保留，脚本重跑时复用')
+    let ch = await call('GET', `/api/folders/${id}/children`)
+    const makers = [
+      [BIG200, () => plainTiff(7016, 9921, 3, 600)],
+      [GRAY_FILE, () => plainTiff(2480, 3508, 1, 300)],
+      [DEFLATE_FILE, () => ({ tiff: syntheticTiff(2480, 3508, 7), cover: null })],
+    ]
+    for (const [name, make] of makers) {
+      if (ch.files.some((f) => f.file_name === name)) continue
+      const { tiff, cover } = make()
+      await call('POST', `/api/folders/${id}/files`, uploadForm(name, tiff, 'image/tiff', cover))
+      console.log(`  上传了 ${BENCH_FOLDER}/${name}（${(tiff.length / 1e6).toFixed(1)} MB）`)
+    }
+    ch = await call('GET', `/api/folders/${id}/children`)
+    for (const f of ch.files) ctx.files[f.file_name] ??= { ...f, folder_id: id, folder_key: 'bench' }
+    ctx.folders.bench = id
+    return ctx
+  })()
+  return benchPromise
 }
 
 function uploadForm(name, data, type, cover) {
@@ -166,70 +196,25 @@ async function ensureSamples(call, project, me, folderId) {
 }
 
 /**
- * 1 位黑白无压缩 TIFF，A0 300 DPI（9933×14043，约 1.4 亿像素）：边框、标题块、几十行"正文"。外加按同样版式画的封面
- * （JPEG，长边 400）。
+ * 版式（按 300 DPI 的像素写，scale 换算到别的 DPI）：边框、标题块、几十行"正文"。返回 [x, y, 宽, 高] 的列表。
  */
-export function bigBilevelTiff() {
-  const W = 9933
-  const H = 14043
-  const rowBytes = Math.ceil(W / 8)
-  const data = Buffer.alloc(rowBytes * H) // WhiteIsZero：0 是白
+function pageRects(W, H, scale = 1) {
+  const k = (v) => Math.round(v * scale)
   const rects = []
-  const m = 300
-  const t = 24
+  const m = k(300)
+  const t = Math.max(2, k(24))
   rects.push([m, m, W - 2 * m, t], [m, H - m - t, W - 2 * m, t], [m, m, t, H - 2 * m], [W - m - t, m, t, H - 2 * m])
-  rects.push([m + 400, m + 400, 3200, 360]) // 标题块
-  for (let i = 0, y = m + 1200; y < H - m - 600; i++, y += 260) {
-    const len = 5000 + ((i * 7919) % 3600)
-    for (let x = m + 400; x < m + 400 + len; x += 520 + ((i * 131 + x) % 260)) rects.push([x, y, 420, 90])
+  rects.push([m + k(400), m + k(400), k(3200), k(360)]) // 标题块
+  const right = W - m - k(400)
+  for (let i = 0, y = m + k(1200); y < H - m - k(600); i++, y += k(260)) {
+    const len = Math.min(right - m - k(400), k(5000 + ((i * 7919) % 3600)))
+    for (let x = m + k(400); x < m + k(400) + len; x += k(520 + ((i * 131 + x) % 260))) rects.push([x, y, k(420), k(90)])
   }
-  for (const [x0, y0, w, h] of rects) {
-    for (let y = y0; y < y0 + h; y++) {
-      const row = y * rowBytes
-      for (let x = x0; x < x0 + w; x++) data[row + (x >> 3)] |= 0x80 >> (x & 7)
-    }
-  }
-  // IFD：12 个标签。
-  const entries = [
-    [256, 4, 1, W],
-    [257, 4, 1, H],
-    [258, 3, 1, 1],
-    [259, 3, 1, 1],
-    [262, 3, 1, 0],
-    [273, 4, 1, 0], // 条带位置，下面填
-    [277, 3, 1, 1],
-    [278, 4, 1, H],
-    [279, 4, 1, data.length],
-    [282, 5, 1, 0], // XResolution（有理数，下面填偏移）
-    [283, 5, 1, 0],
-    [296, 3, 1, 2],
-  ]
-  const ifdSize = 2 + entries.length * 12 + 4
-  const ratOffset = 8 + ifdSize
-  const dataOffset = ratOffset + 16
-  const head = Buffer.alloc(dataOffset)
-  head.write('II', 0, 'latin1')
-  head.writeUInt16LE(42, 2)
-  head.writeUInt32LE(8, 4)
-  head.writeUInt16LE(entries.length, 8)
-  entries.forEach(([tag, type, count, value], i) => {
-    const at = 10 + i * 12
-    head.writeUInt16LE(tag, at)
-    head.writeUInt16LE(type, at + 2)
-    head.writeUInt32LE(count, at + 4)
-    if (tag === 273) value = dataOffset
-    if (tag === 282) value = ratOffset
-    if (tag === 283) value = ratOffset + 8
-    if (type === 3) head.writeUInt16LE(value, at + 8)
-    else head.writeUInt32LE(value, at + 8)
-  })
-  head.writeUInt32LE(0, 10 + entries.length * 12)
-  head.writeUInt32LE(300, ratOffset)
-  head.writeUInt32LE(1, ratOffset + 4)
-  head.writeUInt32LE(300, ratOffset + 8)
-  head.writeUInt32LE(1, ratOffset + 12)
-  const tiff = Buffer.concat([head, data])
+  return rects
+}
 
+/** 按同样版式画的封面（JPEG，长边 400）：rects 画成深灰。 */
+function rectsCover(W, H, rects) {
   const cs = coverSize(W, H)
   const rgba = Buffer.alloc(cs.width * cs.height * 4, 255)
   const sx = cs.width / W
@@ -246,8 +231,124 @@ export function bigBilevelTiff() {
       }
     }
   }
-  const cover = Buffer.from(jpeg.encode({ data: rgba, width: cs.width, height: cs.height }, 80).data)
-  return { tiff, cover }
+  return Buffer.from(jpeg.encode({ data: rgba, width: cs.width, height: cs.height }, 80).data)
+}
+
+/**
+ * 拼一个单 IFD 的 TIFF：entries 是 [tag, type, count, value]（type 3 是 SHORT、4 是 LONG、5 是 RATIONAL），
+ * 值放不下的（258 的 3 个 BitsPerSample、273/279 的多个条带、282/283 的有理数）由这里放到 IFD 后面；strips 是各条带的数据。
+ */
+function buildTiff(entries, strips, dpi) {
+  const all = [...entries, [273, 4, strips.length, 0], [279, 4, strips.length, 0], [282, 5, 1, 0], [283, 5, 1, 0]].sort((x, y) => x[0] - y[0])
+  const ifdSize = 2 + all.length * 12 + 4
+  let extraAt = 8 + ifdSize
+  const extra = new Map() // tag → 偏移
+  for (const [tag, type, count] of all) {
+    const size = count * (type === 3 ? 2 : type === 5 ? 8 : 4)
+    if (size <= 4) continue
+    extra.set(tag, extraAt)
+    extraAt += size + (size % 2)
+  }
+  let dataAt = extraAt
+  const head = Buffer.alloc(dataAt)
+  head.write('II', 0, 'latin1')
+  head.writeUInt16LE(42, 2)
+  head.writeUInt32LE(8, 4)
+  head.writeUInt16LE(all.length, 8)
+  const offsets = []
+  for (const st of strips) {
+    offsets.push(dataAt)
+    dataAt += st.length
+  }
+  all.forEach(([tag, type, count, value], i) => {
+    const at = 10 + i * 12
+    head.writeUInt16LE(tag, at)
+    head.writeUInt16LE(type, at + 2)
+    head.writeUInt32LE(count, at + 4)
+    const values = tag === 273 ? offsets : tag === 279 ? strips.map((st) => st.length) : null
+    const where = extra.get(tag)
+    if (tag === 282 || tag === 283) {
+      head.writeUInt32LE(dpi, where)
+      head.writeUInt32LE(1, where + 4)
+      head.writeUInt32LE(where, at + 8)
+    } else if (where !== undefined) {
+      const list = values ?? Array(count).fill(value)
+      list.forEach((v, j) => (type === 3 ? head.writeUInt16LE(v, where + j * 2) : head.writeUInt32LE(v, where + j * 4)))
+      head.writeUInt32LE(where, at + 8)
+    } else {
+      const v = values ? values[0] : value
+      if (type === 3) head.writeUInt16LE(v, at + 8)
+      else head.writeUInt32LE(v, at + 8)
+    }
+  })
+  head.writeUInt32LE(0, 10 + all.length * 12)
+  return Buffer.concat([head, ...strips])
+}
+
+/**
+ * 1 位黑白无压缩 TIFF，A0 300 DPI（9933×14043，约 1.4 亿像素）：边框、标题块、几十行"正文"。外加按同样版式画的封面
+ * （JPEG，长边 400）。
+ */
+export function bigBilevelTiff() {
+  const W = 9933
+  const H = 14043
+  const rowBytes = Math.ceil(W / 8)
+  const data = Buffer.alloc(rowBytes * H) // WhiteIsZero：0 是白
+  const rects = pageRects(W, H)
+  for (const [x0, y0, w, h] of rects) {
+    for (let y = y0; y < y0 + h; y++) {
+      const row = y * rowBytes
+      for (let x = x0; x < x0 + w; x++) data[row + (x >> 3)] |= 0x80 >> (x & 7)
+    }
+  }
+  const entries = [
+    [256, 4, 1, W],
+    [257, 4, 1, H],
+    [258, 3, 1, 1],
+    [259, 3, 1, 1],
+    [262, 3, 1, 0],
+    [277, 3, 1, 1],
+    [278, 4, 1, H],
+    [296, 3, 1, 2],
+  ]
+  return { tiff: buildTiff(entries, [data], 300), cover: rectsCover(W, H, rects) }
+}
+
+/**
+ * 8 位无压缩 TIFF（channels 是 1：灰度 BlackIsZero，或 3：RGB），每 64 行一个条带，白底、按 dpi 缩放的版式（深灰），
+ * 彩色的另有一块红色"印章"。外加封面。7016×9921 RGB（A3 600 DPI）约 209 MB。
+ */
+export function plainTiff(W, H, channels, dpi) {
+  const rowBytes = W * channels
+  const data = Buffer.alloc(rowBytes * H, 255)
+  const rects = pageRects(W, H, dpi / 300)
+  const paint = ([x0, y0, w, h], c) => {
+    for (let y = Math.max(0, y0); y < Math.min(H, y0 + h); y++) {
+      const row = y * rowBytes
+      for (let x = Math.max(0, x0); x < Math.min(W, x0 + w); x++) {
+        for (let k = 0; k < channels; k++) data[row + x * channels + k] = c[k]
+      }
+    }
+  }
+  for (const r of rects) paint(r, [50, 52, 58])
+  if (channels === 3) {
+    const s = Math.round(W / 8)
+    paint([W - Math.round(W / 4), H - Math.round(H / 5), s, s], [200, 40, 40])
+  }
+  const rps = 64
+  const strips = []
+  for (let y = 0; y < H; y += rps) strips.push(data.subarray(y * rowBytes, Math.min(H, y + rps) * rowBytes))
+  const entries = [
+    [256, 4, 1, W],
+    [257, 4, 1, H],
+    [258, 3, channels, 8],
+    [259, 3, 1, 1],
+    [262, 3, 1, channels === 3 ? 2 : 1],
+    [277, 3, 1, channels],
+    [278, 4, 1, rps],
+    [296, 3, 1, 2],
+  ]
+  return { tiff: buildTiff(entries, strips, dpi), cover: rectsCover(W, H, rects) }
 }
 
 // ---------- 页面 ----------

@@ -1,12 +1,16 @@
 // M2-4 查看原图（OpenSeadragon）的截图和断言：/files 右键"查看原图"。
 //
-//   cd client && go run ./cmd/devshell -server <server> -listen 127.0.0.1:<端口> -cache <临时目录>   # 壳模式要用
+//   cd web && npm run build && DOCLITE_SERVER=http://127.0.0.1:<server 端口> npm run preview -- --port <vite 端口> --strictPort
+//   cd client && go run ./cmd/devshell -web http://127.0.0.1:<vite 端口> -listen 127.0.0.1:<端口> -cache <临时目录>   # 壳模式要用
 //   INIT_ADMIN_PASSWORD=admin123456 [SHOTS_TMP=<临时目录>] \
-//     npm run screenshots -- --spec scripts/shots/m2-viewer.mjs --base http://127.0.0.1:<devshell 的端口>
+//     npm run screenshots -- --spec scripts/shots/m2-viewer.mjs --base http://127.0.0.1:<devshell 的端口> --out <临时目录>
 //
-// 前端地址是 devshell（/api 转给 server；壳模式的几张用它的取图地址，即客户端的缓存和切块代码）。浏览器的几张也可以
-// 用 vite preview。样本见 scripts/lib/viewer-shots.mjs（DEMO-A 下已有的 M1、M2-3 样本，
-// 外加第一次运行时建好的"M2-4 查看器样本"文件夹，之后复用、不删）。局域网地址（非安全上下文）另见 m2-viewer-lan.mjs。
+// 前端地址是 devshell（/api 经 vite 转给 server；壳模式的几张用它的取图地址，即客户端的缓存和切块代码）。浏览器的几张也可以
+// 直接用 vite preview。样本见 scripts/lib/viewer-shots.mjs：`npm run seed` 的「格式样本」（JPEG、TIFF LZW、G4），
+// 外加第一次运行时建好的"M2-4 查看器样本"文件夹（对比样本、超出预算的 17 MB TIFF），之后复用、不删。
+// 限速下载、200 MB 的几张（viewer-switch、viewer-tiff-200mb、shell-viewer-200mb、shell-viewer-switch）第一次运行时另在
+// 里面建"200 MB 切换"（约 210 MB）：演示数据不放大文件，跑这几张建议用临时库（另建一个库、起一个 server、npm run seed），
+// 只跑别的用 --only 跳过它们。局域网地址（非安全上下文）另见 m2-viewer-lan.mjs。
 //
 // 截图（docs/screenshots/m2/）：
 // - 浏览器（真实数据）：viewer-jpeg、viewer-tiff-lzw、viewer-tiff-g4、viewer-100（100% 的局部）、viewer-too-large（超出预算，
@@ -29,7 +33,8 @@
 // - 超出预算时不下载原图，只显示封面；对比时两侧的视口缩放和中心一致，同位切换后位置不变。
 // - 对比联动（M2-4 审查第 1 轮）：点"100%"后马上把鼠标移进左侧、移进右侧、留在工具栏，在右侧滚轮后移到左侧，
 //   右侧滚轮后马上在左侧滚轮（中途换为准的一侧）：动画结束后两侧视口一致，点 100% 的几种右侧都是 100%（浏览器、壳各跑一遍）；
-// - 壳里快速翻页：连按 10 次"下一个"（每次间隔不到 250 毫秒），只有最后停下的那张请求了分块描述；
+// - 壳里快速翻页：在「格式样本」里从第一个连按"下一个"到最后一个（最多 10 次，每次间隔不到 250 毫秒），只有最后停下的那张
+//   请求了分块描述；
 // - 壳里取块失败（503）：每块自动重试共 3 次，仍失败的计数、提示"有 n 块没取到"，点"重试"后重新加载，不再缺块；
 // - 浏览器里对比两张大 TIFF：两侧共用一份内存预算——放不下的一侧（over_budget）只显示封面、提示改用客户端、不下载原图；
 //   等另一侧解完就够的一侧先等（data-step=wait），之后照常显示。
@@ -41,10 +46,12 @@ import path from 'node:path'
 import {
   assert,
   BENCH_FOLDER,
+  BIG200,
   BIG_FILE,
   apiOrigin,
   browserOriginalKey,
   COMPARE_FILE,
+  ensureBench,
   installShellMock,
   login,
   openFolder,
@@ -70,11 +77,11 @@ const admin = process.env.INIT_ADMIN_USERNAME ?? 'admin'
 const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
 const IDLE = 'networkidle2'
 
-const JPEG = 'IMG_1.jpg'
-const JPEG2 = 'IMG_2.jpg'
+// 「格式样本」里的（npm run seed）；BIG200 在"M2-4 查看器样本/200 MB 切换"（ensureBench）。
+const JPEG = 'jpeg-rgb.jpg'
+const JPEG2 = 'jpeg-gray.jpg'
 const LZW = 'tiff-lzw-rgb.tif'
 const G4 = 'tiff-g4-1bit.tif'
-const BIG200 = 'a3-600-none-rgb.tif'
 /** 下载中的截图（viewer-switch 那一张的中途另存）：和截图同一个目录（命令行的 --out，默认 docs/screenshots/m2）。 */
 const outArg = process.argv.indexOf('--out')
 const OUT_DIR = path.resolve(outArg > 0 ? process.argv[outArg + 1] : '../docs/screenshots/m2')
@@ -85,6 +92,11 @@ let browserRef = null
 async function ctxOf(page) {
   browserRef = page.browser()
   return viewerContext(apiOrigin(page), { user: admin, password: adminPassword })
+}
+
+/** 要"200 MB 切换"的几张：第一次运行时建好。 */
+async function benchCtx(page) {
+  return ensureBench(await ctxOf(page))
 }
 
 /** 打开某个样本所在的文件夹，右键它 → 查看原图。 */
@@ -182,10 +194,10 @@ function tilesOf(stats, sid) {
 
 /**
  * 限速（12 MB/s）打开 200 MB 的 TIFF，下载中切到下一个（A4 300 DPI 灰度，8.7 MB），它开始下载后再切到下一个
- * （600 DPI G4）。`onLoading` 在 200 MB 那张下载中（已经显示封面、有进度）时调用。返回三张图的 S3 路径。
+ * （A4 300 DPI Deflate 彩色）。`onLoading` 在 200 MB 那张下载中（已经显示封面、有进度）时调用。返回三张图的 S3 路径。
  */
 async function switchScenario(page, origin, onLoading) {
-  const ctx = await viewerContext(origin, { user: admin, password: adminPassword })
+  const ctx = await ensureBench(await viewerContext(origin, { user: admin, password: adminPassword }))
   const f = ctx.files[BIG200]
   assert(f.folder_key === 'bench', `${BIG200} 应该在 ${BENCH_FOLDER}`)
   const cdp = await page.createCDPSession()
@@ -467,7 +479,7 @@ export default {
       init: async () => {},
       async prepare(page) {
         await login(page, new URL(page.url()).origin, admin, adminPassword)
-        const ctx = await ctxOf(page)
+        const ctx = await benchCtx(page)
         const f = ctx.files[BIG200]
         await openFolder(page, ctx.origin, f.folder_id)
         const mem = sampleMemory(page.browser(), 50)
@@ -580,6 +592,7 @@ export default {
       void ctx
     }),
     shellShot('shell-viewer-200mb', async (page, { stats }) => {
+      await benchCtx(page)
       const d0 = await shellOpen(page, BIG200)
       const desc = stats.descriptors.get(d0.snapshotId)
       const atFit = tilesOf(stats, d0.snapshotId)
@@ -635,7 +648,7 @@ export default {
       async (page, { stats }) => {
         // 每次取描述都晚 1.5 秒（模拟第一次打开要等壳下载、切块）：在等的时候切到下一个，上一张的 dzi 请求被取消，
         // 同一时间只有一张在加载。
-        const ctx = await ctxOf(page)
+        const ctx = await benchCtx(page)
         await openFolder(page, pageOrigin(page), ctx.files[BIG200].folder_id)
         await openViewer(page, BIG200)
         await page.waitForFunction(() => document.querySelector('[data-testid=image-viewer]')?.dataset.step === 'tiles', { timeout: 10000, polling: 20 })
@@ -654,14 +667,20 @@ export default {
       { dziDelayMs: 1500 },
     ),
     shellShot('shell-viewer-flip', async (page, { ctx, stats }) => {
-      // 快速翻页（M2-4 审查第 1 轮）：连按 10 次"下一个"，每次间隔不到 250 毫秒，只有最后停下的那张请求了分块描述。
-      await openFolder(page, pageOrigin(page), ctx.files[JPEG].folder_id)
-      await openViewer(page, JPEG)
+      // 快速翻页（M2-4 审查第 1 轮）：从「格式样本」的第一个连按"下一个"（按到最后一个，最多 10 次；M9-3 起这个文件夹只有
+      // 8 个），每次间隔不到 250 毫秒，只有最后停下的那张请求了分块描述。
+      const list = Object.values(ctx.files)
+        .filter((f) => f.folder_key === 'samples')
+        .sort((x, y) => x.sort_no - y.sort_no)
+      const flips = Math.min(10, list.length - 1)
+      assert(flips >= 5, `「格式样本」里的文件太少（${list.length} 个），翻不了页`)
+      await openFolder(page, pageOrigin(page), list[0].folder_id)
+      await openViewer(page, list[0].file_name)
       const first = await waitViewer(page, ['ready'])
       await settle(page)
       const before = new Map(stats.dzi)
       const t0 = Date.now()
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < flips; i++) {
         await click(page, 'viewer-next')
         await sleep(80)
       }
@@ -673,7 +692,8 @@ export default {
       assert(d.snapshotId !== first.snapshotId, '应该已经翻到后面的文件')
       assert(asked.length === 1 && asked[0] === d.snapshotId, `只有最后停下的那张应该请求分块描述，实际 ${asked.length} 张：${JSON.stringify(asked)}（停在 ${d.snapshotId}）`)
       const title = await page.$eval('[data-testid=viewer-title]', (e) => e.textContent.trim())
-      console.log(`  断言 壳 快速翻页：${flipMs} ms 内按了 10 次"下一个"，停在 ${title}，只有这一张请求了分块描述`)
+      assert(title === list[flips].file_name, `应该停在 ${list[flips].file_name}，实际 ${title}`)
+      console.log(`  断言 壳 快速翻页：${flipMs} ms 内按了 ${flips} 次"下一个"，停在 ${title}，只有这一张请求了分块描述`)
     }),
     shellShot('shell-viewer-tile-retry', async (page, { ctx, stats }) => {
       // 取块失败（M2-4 审查第 1 轮）：G4 第 10 级以上的块都回 503，每块自动重试，仍失败的计数、提示"重试"；

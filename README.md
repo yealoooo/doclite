@@ -182,11 +182,11 @@ cd web && INIT_ADMIN_PASSWORD=<管理员密码> npm run screenshots -- --spec sc
 npm run seed:files -- --base http://127.0.0.1:9080 --user demo_scanner:demo123456 --project DEMO-A --folder "M2-5 分配演示" --count 12
 ```
 
-`seed:files` 往一个文件夹里传 N 张合成的扫描页（PNG + 客户端规格的封面，路径不存在就逐层建，按页码顺序上传，可以重跑；`--remark` 写原件位置）。m2-viewer、m2-viewer-lan、m2-accept 还要「M1 验收演示」「M2-3 分块冒烟」「M2-3 分块实测」（200 MB 的 TIFF）这些不再造的数据，新库上跑不了。M9-3 删掉了依赖旧演示数据的 m1-files（2000 页的文件夹）和 m4-export（M4-5 的导出演示数据）。
+`seed:files` 往一个文件夹里传 N 张合成的扫描页（PNG + 客户端规格的封面，路径不存在就逐层建，按页码顺序上传，可以重跑；`--remark` 写原件位置）。m2-viewer、m2-viewer-lan 用「格式样本」，缺的样本第一次运行时自己建在「M2-4 查看器样本」下（对比样本、17 MB 的超出预算样本；m2-viewer 里 200 MB 的那几张另建约 210 MB 的「200 MB 切换」，建议在临时库上跑，或用 `--only` 跳过）。m2-accept 还要「M1 验收演示」「M2-3 分块实测」（200 MB 的 TIFF）这些不再造的数据，新库上跑不了。M9-3 删掉了依赖旧演示数据的 m1-files（2000 页的文件夹）和 m4-export（M4-5 的导出演示数据）。
 
 **几个特别的脚本**：
 
-- `m1-upload-lan`、`m2-viewer-lan`：要用局域网地址打开（非安全上下文）。只在跑这一步时开 `DOCLITE_SERVER=http://127.0.0.1:9080 npx vite preview --host --port 24173 --strictPort`，`--base http://$(ipconfig getifaddr en0):24173`。
+- `m1-upload-lan`、`m2-viewer-lan`：要用局域网地址打开（非安全上下文）。只在跑这一步时开 `DOCLITE_SERVER=http://127.0.0.1:9080 npm run preview -- --host --port 24173 --strictPort`，`--base http://$(ipconfig getifaddr en0):24173`。
 - `m1-accept`：`ACCEPT_DEMO` 指定热文件夹演示的文件夹（5 个盒 × 100 页，没有时用 `seed:files` 造）。
 - `m2-accept`：要先建「M2 验收演示 <日期>」（脚本开头有命令）；只能走一遍，再跑换一个文件夹（`M2_ACCEPT_FOLDER`）。
 - `m9-catalog`（M9-2，归类页的主流程）：每跑一次在 DEMO-A 建一套新的「M9 归档演示 <时间>」文件夹和全宗 Z<时间>，走一遍归档（拖放、预览）→ 文件目录的封存提示 → 解除封存 → 在文件目录里改 → 重新归档（对比）→ 锁定、批量锁定；要 `npm run seed` 的 DEMO-A 和 demo_scanner（必填的著录项脚本自己填）。M3 的归类脚本（m3-catalog、m3-workbench、m3-accept）随待归类池、按页挂接一起删了。

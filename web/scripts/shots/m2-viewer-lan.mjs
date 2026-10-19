@@ -1,15 +1,16 @@
 // M2-4：在局域网地址（非安全上下文）上看 TIFF 原图（浏览器里 Worker 解码，交给 OpenSeadragon）。
 //
-//   DOCLITE_SERVER=http://127.0.0.1:<server 端口> npx vite preview --host --port <端口> --strictPort   # 只在跑这一步时开
+//   DOCLITE_SERVER=http://127.0.0.1:<server 端口> npm run preview -- --host --port <端口> --strictPort   # 只在跑这一步时开
 //   INIT_ADMIN_PASSWORD=admin123456 npm run screenshots -- --spec scripts/shots/m2-viewer-lan.mjs \
-//     --base http://<本机局域网 IP>:<端口>
+//     --base http://$(ipconfig getifaddr en0):<端口> --out <临时目录>
 //
 // 用 http://<内网 IP> 打开时页面不是安全上下文：crypto.subtle、crypto.randomUUID 都没有（design §7）。
 // 断言：
 // - window.isSecureContext 为 false，crypto.subtle、crypto.randomUUID 都是 undefined；地址不是 localhost、127.0.0.1；
 // - /files 右键"查看原图"打开 LZW 的 TIFF，Worker 下载、解码，原图画完（data-state=ready、data-mode=worker）；
 //   再切到 G4 的 TIFF，同样画完（先后按文件夹里的顺序）；JPEG（整图模式）也能显示。
-// 样本同 m2-viewer.mjs（DEMO-A 的"M2-3 分块冒烟"、M1 验收的 JPEG），不改数据。
+// 样本是 `npm run seed` 的「格式样本」（jpeg-rgb.jpg、tiff-lzw-rgb.tif、tiff-g4-1bit.tif）；和 m2-viewer.mjs 共用
+// scripts/lib/viewer-shots.mjs，第一次运行时同样会建"M2-4 查看器样本"（对比样本、17 MB 的超出预算样本），不建 200 MB 的那几个。
 
 import { assert, openFolder, openViewer, settle, viewerContext, waitViewer } from '../lib/viewer-shots.mjs'
 
@@ -45,8 +46,8 @@ export default {
         const ctx = await viewerContext(origin, { user: admin, password: adminPassword })
 
         // JPEG（整图模式）。
-        await openFolder(page, origin, ctx.files['IMG_1.jpg'].folder_id)
-        await openViewer(page, 'IMG_1.jpg')
+        await openFolder(page, origin, ctx.files['jpeg-rgb.jpg'].folder_id)
+        await openViewer(page, 'jpeg-rgb.jpg')
         let d = await waitViewer(page, ['ready', 'failed', 'too_large', 'unsupported'])
         assert(d.state === 'ready' && d.mode === 'image', `局域网地址上 JPEG 应该能显示：${d.state} ${d.mode}`)
         console.log('  断言 局域网地址上 JPEG：整图模式画完')
