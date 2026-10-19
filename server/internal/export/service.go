@@ -20,7 +20,6 @@ package export
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -32,6 +31,7 @@ import (
 
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/jobs"
 	"doclite/server/internal/storage"
 )
 
@@ -79,14 +79,6 @@ func statusLabel(s string) string {
 
 var errTaskNotFound = httpx.NotFound("导出任务")
 
-// Jobs 是执行器给导出用的两个方法（internal/platform/jobs.Executor 实现）。
-type Jobs interface {
-	// Wake 让执行器马上看一次有没有可领的任务（建任务后）。
-	Wake()
-	// Interrupt 停下正在执行的 job（执行中的任务被取消后）。
-	Interrupt(jobID uuid.UUID)
-}
-
 // Options 是导出的配置。
 type Options struct {
 	// TmpDir 是临时目录（TMP_DIR）；导出在它下面的 exports/ 里建每次执行的临时目录。
@@ -101,7 +93,7 @@ type Service struct {
 	pool     *pgxpool.Pool
 	events   *events.Bus
 	storage  *storage.Service
-	jobs     Jobs
+	jobs     *jobs.Executor
 	tmpDir   string
 	partSize int64
 	log      *slog.Logger
@@ -112,11 +104,11 @@ type Service struct {
 }
 
 // NewService 建 Service。jobs 可以是还没启动的执行器（JOB_CONCURRENCY=0 时任务一直排队）。
-func NewService(pool *pgxpool.Pool, bus *events.Bus, storageSvc *storage.Service, jobs Jobs, opts Options, log *slog.Logger) *Service {
+func NewService(pool *pgxpool.Pool, bus *events.Bus, storageSvc *storage.Service, executor *jobs.Executor, opts Options, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{pool: pool, events: bus, storage: storageSvc, jobs: jobs, tmpDir: TmpDir(opts.TmpDir), partSize: opts.PartSize,
+	return &Service{pool: pool, events: bus, storage: storageSvc, jobs: executor, tmpDir: TmpDir(opts.TmpDir), partSize: opts.PartSize,
 		log: log, now: time.Now}
 }
 
@@ -207,11 +199,7 @@ type TaskList struct {
 }
 
 // List 是项目的任务：最新的在前，keyset 分页（cursor `<微秒>_<id>`，原样传回）。
-func (s *Service) List(ctx context.Context, projectID uuid.UUID, limitArg, cursor string) (*TaskList, error) {
-	limit, err := parseLimit(limitArg, defaultTaskLimit, maxTaskLimit)
-	if err != nil {
-		return nil, err
-	}
+func (s *Service) List(ctx context.Context, projectID uuid.UUID, limit int, cursor string) (*TaskList, error) {
 	var afterAt *time.Time
 	var afterID uuid.UUID
 	if cursor != "" {
@@ -249,11 +237,7 @@ type TaskFiles struct {
 }
 
 // Files 是任务的明细：按条目在导出里的序号、页号，keyset 分页（cursor `<序号>_<页号>`）。
-func (s *Service) Files(ctx context.Context, id uuid.UUID, limitArg, cursor string) (*TaskFiles, error) {
-	limit, err := parseLimit(limitArg, defaultFileLimit, maxFileLimit)
-	if err != nil {
-		return nil, err
-	}
+func (s *Service) Files(ctx context.Context, id uuid.UUID, limit int, cursor string) (*TaskFiles, error) {
 	afterSeq, afterPage := 0, 0
 	if cursor != "" {
 		a, b, ok := strings.Cut(cursor, "_")
@@ -291,18 +275,6 @@ func (s *Service) Files(ctx context.Context, id uuid.UUID, limitArg, cursor stri
 
 var errBadCursor = httpx.Invalid("cursor 不合法，请用上一页响应里的 next_cursor")
 
-func parseLimit(v string, def, max int) (int, error) {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return def, nil
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 1 || n > max {
-		return 0, httpx.Invalid("limit 要在 1 到 %d 之间", max)
-	}
-	return n, nil
-}
-
 func splitCursor(c string) (int64, uuid.UUID, bool) {
 	a, b, ok := strings.Cut(c, "_")
 	if !ok {
@@ -317,9 +289,4 @@ func splitCursor(c string) (int64, uuid.UUID, bool) {
 		return 0, uuid.Nil, false
 	}
 	return us, id, true
-}
-
-// conflictState 是 409 invalid_state。
-func conflictState(format string, args ...any) error {
-	return httpx.Conflict(httpx.CodeInvalidState, fmt.Sprintf(format, args...))
 }

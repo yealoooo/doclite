@@ -24,15 +24,13 @@
 //   - 提交后发 folders.changed、files.changed。
 //
 // 给上传（internal/file）用的 ClaimSlot、AddFile、PreviewName、Path、ProjectOf 实现 file.Folders。
-// 给审核（internal/review）用的 SetReviewStatus、SetReviewState 改 folder_files 的审核状态和轮次（review_state.go）。
+// 给审核（internal/review）用的 SetReviewStatus、SetReviewStatusAndRound 改 folder_files 的审核状态和轮次（review_state.go）。
 package folder
 
 import (
 	"context"
-	"strings"
+	"strconv"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -50,7 +48,7 @@ import (
 	"doclite/server/internal/storage"
 )
 
-const maxRemarkRunes = 500
+const maxRemarkChars = 500
 
 var (
 	errFolderNotFound = httpx.NotFound("文件夹")
@@ -89,9 +87,9 @@ func (s *Service) ProjectOf(ctx context.Context, folderID uuid.UUID) (uuid.UUID,
 	return pid, nil
 }
 
-// ProjectOfEntry 是文件（folder_files 的 id）所在的项目；不存在、已删除（含所在文件夹）404。
-func (s *Service) ProjectOfEntry(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
-	es, err := liveEntries(ctx, s.pool, []uuid.UUID{id})
+// ProjectOfFolderFile 是文件（folder_files 的 id）所在的项目；不存在、已删除（含所在文件夹）404。
+func (s *Service) ProjectOfFolderFile(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	es, err := liveFolderFiles(ctx, s.pool, []uuid.UUID{id})
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -100,20 +98,6 @@ func (s *Service) ProjectOfEntry(ctx context.Context, id uuid.UUID) (uuid.UUID, 
 		return uuid.Nil, errFileNotFound
 	}
 	return e.ProjectID, nil
-}
-
-// Path 是文件夹从根文件夹起用 / 连接的路径（日志 detail 的 folder_path、duplicate_content 的 details）。
-func (s *Service) Path(ctx context.Context, q db.Querier, folderID uuid.UUID) (string, error) {
-	paths, err := folderPaths(ctx, q, []uuid.UUID{folderID})
-	if err != nil {
-		return "", err
-	}
-	return paths[folderID], nil
-}
-
-// Paths 是一批文件夹的路径（按 id）。
-func (s *Service) Paths(ctx context.Context, q db.Querier, folderIDs []uuid.UUID) (map[uuid.UUID]string, error) {
-	return folderPaths(ctx, q, folderIDs)
 }
 
 // FolderItem 是 `GET /api/folders/{id}` 等的响应：文件夹本身和祖先链（面包屑）。
@@ -153,20 +137,10 @@ func readItem(ctx context.Context, q db.Querier, id uuid.UUID) (*FolderItem, err
 		PathCode: f.PathCode, CreatedAt: f.CreatedAt, UpdatedAt: f.UpdatedAt, Ancestors: as, Archive: arch[id]}, nil
 }
 
-// readOnly 在一个只读的可重复读事务里执行 fn（几条查询看到同一个快照）。
-func (s *Service) readOnly(ctx context.Context, fn func(tx pgx.Tx) error) error {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck
-	return fn(tx)
-}
-
 // Get 读文件夹和祖先链。
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (*FolderItem, error) {
 	var out *FolderItem
-	err := s.readOnly(ctx, func(tx pgx.Tx) error {
+	err := db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var err error
 		out, err = readItem(ctx, tx, id)
 		return err
@@ -183,7 +157,7 @@ type Children struct {
 // Children 列出未删除的直接子文件夹和文件（同一个快照）。
 func (s *Service) Children(ctx context.Context, id uuid.UUID) (*Children, error) {
 	out := &Children{}
-	err := s.readOnly(ctx, func(tx pgx.Tx) error {
+	err := db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		f, err := getFolder(ctx, tx, id)
 		if err != nil {
 			return err
@@ -214,26 +188,6 @@ func (s *Service) Children(ctx context.Context, id uuid.UUID) (*Children, error)
 	return out, nil
 }
 
-// normalizeRemark：去掉首尾空白，空串为 nil；最长 500 字；不能有控制字符（换行、回车、制表符可以）。
-func normalizeRemark(v *string) (*string, error) {
-	if v == nil {
-		return nil, nil
-	}
-	r := strings.TrimSpace(*v)
-	if r == "" {
-		return nil, nil
-	}
-	if utf8.RuneCountInString(r) > maxRemarkRunes {
-		return nil, httpx.Invalid("备注最长 %d 个字", maxRemarkRunes)
-	}
-	for _, c := range r {
-		if unicode.IsControl(c) && c != '\n' && c != '\r' && c != '\t' {
-			return nil, httpx.Invalid("备注不能包含控制字符")
-		}
-	}
-	return &r, nil
-}
-
 func validFolderName(name string) error {
 	if err := names.ValidateFolderName(name); err != nil {
 		return httpx.Invalid("%s", err.Error())
@@ -247,11 +201,11 @@ func nameConflict(name string) error {
 
 // CreateInput 是新建文件夹的输入。
 type CreateInput struct {
-	ParentID   uuid.UUID
-	FolderName string
-	Remark     *string
+	ParentID   uuid.UUID `json:"parent_id"`
+	FolderName string    `json:"folder_name"`
+	Remark     *string   `json:"remark"`
 	// IfExists 为 "return" 时遇到同名返回已有的文件夹（created 为 false），否则 409 conflict。
-	IfExists string
+	IfExists string `json:"if_exists"`
 }
 
 // Create 新建子文件夹。检查顺序：上级文件夹不存在 404 → 项目授权 403 → 名称、备注 400 → 同名 409 / 编号用完 409 tree_full。
@@ -272,9 +226,9 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 	if err := validFolderName(in.FolderName); err != nil {
 		return nil, false, err
 	}
-	remark, err := normalizeRemark(in.Remark)
+	remark, err := names.OptionalText(in.Remark, maxRemarkChars, "备注")
 	if err != nil {
-		return nil, false, err
+		return nil, false, httpx.Invalid("%s", err)
 	}
 	var out *FolderItem
 	created := false
@@ -319,7 +273,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 			}
 			return err
 		}
-		path, err := s.Path(ctx, tx, f.ID)
+		path, err := file.FolderPath(ctx, tx, f.ID)
 		if err != nil {
 			return err
 		}
@@ -346,9 +300,9 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 
 // UpdateInput 是修改文件夹的输入；nil 表示不改。Remark 传空串表示清空；ParentID 是移动（等于现在的父文件夹时不移动）。
 type UpdateInput struct {
-	FolderName *string
-	Remark     *string
-	ParentID   *uuid.UUID
+	FolderName *string    `json:"folder_name"`
+	Remark     *string    `json:"remark"`
+	ParentID   *uuid.UUID `json:"parent_id"`
 }
 
 // Update 改名、改备注、移动（项目 projectID 的授权已经查过）。没有变化时不写审计、不发事件。
@@ -361,8 +315,8 @@ func (s *Service) Update(ctx context.Context, userID, projectID, id uuid.UUID, i
 	var remark *string
 	if in.Remark != nil {
 		var err error
-		if remark, err = normalizeRemark(in.Remark); err != nil {
-			return nil, err
+		if remark, err = names.OptionalText(in.Remark, maxRemarkChars, "备注"); err != nil {
+			return nil, httpx.Invalid("%s", err)
 		}
 	}
 	var out *FolderItem
@@ -399,7 +353,7 @@ func (s *Service) Update(ctx context.Context, userID, projectID, id uuid.UUID, i
 			newName = *in.FolderName
 		}
 		rename := newName != f.FolderName
-		remarkChange := in.Remark != nil && !equalPtr(remark, f.Remark)
+		remarkChange := in.Remark != nil && !names.SameOptional(remark, f.Remark)
 		move := in.ParentID != nil && (isRoot || *in.ParentID != *f.ParentID)
 		if isRoot && (rename || move) {
 			return rootLocked()
@@ -411,7 +365,7 @@ func (s *Service) Update(ctx context.Context, userID, projectID, id uuid.UUID, i
 				return errTargetNotFound
 			}
 			if inSubtree(target.PathCode, f.PathCode) {
-				return httpx.Conflict("tree_cycle", "不能把文件夹移到它自己或它下面的子文件夹里")
+				return httpx.Conflict(httpx.CodeTreeCycle, "不能把文件夹移到它自己或它下面的子文件夹里")
 			}
 		}
 		if rename || move {
@@ -445,7 +399,7 @@ func (s *Service) Update(ctx context.Context, userID, projectID, id uuid.UUID, i
 				return nameConflict(newName)
 			}
 		}
-		oldPath, err := s.Path(ctx, tx, id)
+		oldPath, err := file.FolderPath(ctx, tx, id)
 		if err != nil {
 			return err
 		}
@@ -483,7 +437,7 @@ func (s *Service) Update(ctx context.Context, userID, projectID, id uuid.UUID, i
 			return err
 		}
 		if rename || move {
-			newPath, err := s.Path(ctx, tx, id)
+			newPath, err := file.FolderPath(ctx, tx, id)
 			if err != nil {
 				return err
 			}
@@ -513,13 +467,6 @@ func (s *Service) Update(ctx context.Context, userID, projectID, id uuid.UUID, i
 		return nil, err
 	}
 	return out, nil
-}
-
-func equalPtr(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return *a == *b
 }
 
 // MaxDeleteFiles 是删除文件夹时子树里最多的文件数（未删除的）：删子树要拿文件树排他锁，整个项目的上传、审核都要等它，
@@ -584,7 +531,7 @@ func (s *Service) Delete(ctx context.Context, userID, projectID, id uuid.UUID) e
 			if err != nil {
 				return err
 			}
-			return httpx.Conflict("file_cataloged", "文件夹里有 "+itoa(len(cataloged))+" 个已归类的文件（例如「"+example+
+			return httpx.Conflict(httpx.CodeFileCataloged, "文件夹里有 "+strconv.Itoa(len(cataloged))+" 个已归类的文件（例如「"+example+
 				"」），不能删除")
 		}
 		folderIDs, err := subtreeLiveFolderIDs(ctx, tx, projectID, f.PathCode)
@@ -595,7 +542,7 @@ func (s *Service) Delete(ctx context.Context, userID, projectID, id uuid.UUID) e
 		if err != nil {
 			return err
 		}
-		paths, err := folderPaths(ctx, tx, folderIDs)
+		paths, err := file.FolderPaths(ctx, tx, folderIDs)
 		if err != nil {
 			return err
 		}

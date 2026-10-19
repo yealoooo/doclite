@@ -9,15 +9,13 @@ import (
 
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/xslices"
 )
 
 // 归类信息（只读，requirements 5.9"归类信息"，用户决定 Q10）：一个文件挂在哪个条目。能进项目就能看。
 //   - "已归类" = archive_item_files 里有这个文件的行（和文件目录的 409 file_cataloged 同一个定义，不看条目的
 //     deleted_at；不变量：已删除的条目没有挂接行，删除条目时一并移出）；
 //   - 只含未删除的文件（所在文件夹也未删除）；不加锁，一个接口的查询在同一个只读快照里。
-
-// MaxPlacementFiles 是 catalog-placements 一次最多的文件数（按请求里的个数算，重复的也算）。
-const MaxPlacementFiles = 500
 
 // placementBase 是"挂在哪"的公共字段（placements、409 file_cataloged 的 details.items）。
 type placementBase struct {
@@ -85,7 +83,7 @@ func placements(ctx context.Context, q db.Querier, projectID uuid.UUID, ids []uu
 	for _, r := range rows {
 		list = append(list, r)
 	}
-	names, err := categoryNames(ctx, q, categoryIDsOf(list))
+	names, err := CategoryNames(ctx, q, categoryIDsOf(list))
 	if err != nil {
 		return nil, err
 	}
@@ -107,12 +105,12 @@ func placements(ctx context.Context, q db.Querier, projectID uuid.UUID, ids []uu
 
 // Placements 是一批文件（0–500 个）各挂在哪个条目。
 func (s *Service) Placements(ctx context.Context, projectID uuid.UUID, fileIDs []uuid.UUID) (*Placements, error) {
-	if len(fileIDs) > MaxPlacementFiles {
-		return nil, httpx.Invalid("一次最多查 %d 个文件，这次有 %d 个", MaxPlacementFiles, len(fileIDs))
+	if len(fileIDs) > httpx.MaxBatchIDs {
+		return nil, httpx.Invalid("一次最多查 %d 个文件，这次有 %d 个", httpx.MaxBatchIDs, len(fileIDs))
 	}
-	ids := dedupKeepOrder(fileIDs)
+	ids := xslices.Unique(fileIDs)
 	var out *Placements
-	err := readSnapshot(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var err error
 		out, err = placements(ctx, tx, projectID, ids)
 		return err
@@ -144,7 +142,7 @@ func (s *Service) ProjectOfFile(ctx context.Context, fileID uuid.UUID) (uuid.UUI
 // FileCatalog 是一个文件挂在哪个条目（没挂接时 placement 为 null）；文件已删除 404。
 func (s *Service) FileCatalog(ctx context.Context, projectID, fileID uuid.UUID) (*FileCatalog, error) {
 	var out *FileCatalog
-	err := readSnapshot(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		p, err := placements(ctx, tx, projectID, []uuid.UUID{fileID})
 		if err != nil {
 			return err
@@ -156,17 +154,4 @@ func (s *Service) FileCatalog(ctx context.Context, projectID, fileID uuid.UUID) 
 		return nil
 	})
 	return out, err
-}
-
-// dedupKeepOrder 去重，保持第一次出现的顺序。
-func dedupKeepOrder(ids []uuid.UUID) []uuid.UUID {
-	out := make([]uuid.UUID, 0, len(ids))
-	seen := make(map[uuid.UUID]bool, len(ids))
-	for _, id := range ids {
-		if !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
-	}
-	return out
 }

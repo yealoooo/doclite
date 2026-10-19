@@ -27,7 +27,7 @@ func (h *Handler) Routes(r *httpx.Router, g *auth.Gate) {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) error {
-	f, err := ParseFilter(r.URL.Query().Get)
+	f, err := ParseFilter(r)
 	if err != nil {
 		return err
 	}

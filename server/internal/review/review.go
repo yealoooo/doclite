@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +14,8 @@ import (
 	"doclite/server/internal/folder"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/names"
+	"doclite/server/internal/platform/xslices"
 	"doclite/server/internal/project"
 )
 
@@ -28,39 +31,14 @@ type Settings struct {
 	MaxFolderFiles  int      `json:"max_folder_files"`
 }
 
-// parseSettings 从库里存的 settings 读审核设置（补默认值）。
-func parseSettings(stored []byte) *Settings {
-	out := &Settings{RescanReassign: RescanReassign, CommentMaxChars: MaxCommentChars, MaxBatchFiles: MaxBatchFiles,
-		MaxFolderFiles: MaxFolderFiles}
-	eff := project.EffectiveSettings(stored)
-	if rv, ok := eff["review"].(map[string]any); ok {
-		if list, ok := rv["reject_reasons"].([]any); ok {
-			for _, x := range list {
-				if s, ok := x.(string); ok && s != "" && !slices.Contains(out.RejectReasons, s) {
-					out.RejectReasons = append(out.RejectReasons, s)
-				}
-			}
-		}
-		if m, ok := rv["rescan_reassign"].(string); ok && m != "" {
-			out.RescanReassign = m
-		}
-	}
-	if len(out.RejectReasons) == 0 {
-		out.RejectReasons = slices.Clone(project.DefaultRejectReasons)
-	}
-	return out
-}
-
 // Settings 读项目的审核设置（项目授权已经查过）。
 func (s *Service) Settings(ctx context.Context, projectID uuid.UUID) (*Settings, error) {
-	raw, err := projectSettings(ctx, s.pool, projectID)
+	p, err := project.ReadSettings(ctx, s.pool, projectID)
 	if err != nil {
 		return nil, err
 	}
-	if raw == nil {
-		return nil, httpx.NotFound("项目")
-	}
-	return parseSettings(raw), nil
+	return &Settings{RejectReasons: p.RejectReasons, RescanReassign: p.RescanReassign, CommentMaxChars: MaxCommentChars,
+		MaxBatchFiles: httpx.MaxBatchIDs, MaxFolderFiles: MaxFolderFiles}, nil
 }
 
 // ReviewInput 是 `POST /api/files/{fid}/review` 的请求。
@@ -88,9 +66,9 @@ type ReviewedFile struct {
 // checkInput 校验审核的请求（400）：驳回至少一个原因、只能从项目列表里选（区分大小写，重复的算一个），个数不超过列表
 // 长度和 64；选了 other 时说明必填；通过不能带原因。返回去重后的原因和规整后的说明。
 func checkInput(in *ReviewInput, settings *Settings) ([]string, *string, error) {
-	comment, err := normalizeComment(in.Comment)
+	comment, err := names.OptionalText(in.Comment, MaxCommentChars, "说明")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, httpx.Invalid("%s", err)
 	}
 	switch in.Result {
 	case resultApproved:
@@ -145,13 +123,13 @@ func (s *Service) Review(ctx context.Context, userID, projectID, fileID uuid.UUI
 			return errFileNotFound
 		}
 		if f.Status != folder.ReviewPending {
-			return invalidState("文件不是待审核的（可能已经审过、被撤回或改派），请刷新")
+			return httpx.InvalidState("文件不是待审核的（可能已经审过、被撤回或改派），请刷新")
 		}
 		if f.Open == nil || f.Open.ReviewerID != userID {
 			return notAssignee("这个文件没有分给你（可能刚被改派给别人），请刷新待办")
 		}
 		if in.SnapshotID != nil && *in.SnapshotID != f.SnapshotID {
-			return httpx.Conflict("", "你看到的不是这个文件现在的版本（已经有 v"+itoa(f.VersionNo)+"），请重新打开再审")
+			return httpx.Conflict("", "你看到的不是这个文件现在的版本（已经有 v"+strconv.Itoa(f.VersionNo)+"），请重新打开再审")
 		}
 		items, err := s.finish(ctx, tx, projectID, userID, []*fileState{f}, in.Result, reasons, comment, false)
 		if err != nil {
@@ -223,10 +201,10 @@ type ApproveManyResult struct {
 // ApproveMany 批量通过（1–500 个，一个事务）：依次查 不存在、已删除、不在这个项目里 404 → 不是待审核 409 invalid_state
 // → 不是分给自己的 403 not_assignee，有一类就整体不做（details.ids 是这一类的全部 file_id）。
 func (s *Service) ApproveMany(ctx context.Context, userID, projectID uuid.UUID, fileIDs []uuid.UUID) (*ApproveManyResult, error) {
-	if len(fileIDs) == 0 || len(fileIDs) > MaxBatchFiles {
-		return nil, httpx.Invalid("批量通过一次 1–%d 个", MaxBatchFiles)
+	if len(fileIDs) == 0 || len(fileIDs) > httpx.MaxBatchIDs {
+		return nil, httpx.Invalid("批量通过一次 1–%d 个", httpx.MaxBatchIDs)
 	}
-	ids := dedup(fileIDs)
+	ids := xslices.Unique(fileIDs)
 	var out *ApproveManyResult
 	err := s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
 		locked, err := s.lockFiles(ctx, tx, projectID, ids)
@@ -234,7 +212,7 @@ func (s *Service) ApproveMany(ctx context.Context, userID, projectID uuid.UUID, 
 			return err
 		}
 		if missing := locked.missing(ids); len(missing) > 0 {
-			return notFoundIDs(missing)
+			return notFoundFiles(missing)
 		}
 		var notPending, notMine []uuid.UUID
 		for _, f := range locked.list {
@@ -246,11 +224,11 @@ func (s *Service) ApproveMany(ctx context.Context, userID, projectID uuid.UUID, 
 			}
 		}
 		if len(notPending) > 0 {
-			return invalidState("有 " + itoa(len(notPending)) + " 个文件不是待审核的（可能已经审过或被改派），请刷新后重试").
+			return httpx.InvalidState("有 " + strconv.Itoa(len(notPending)) + " 个文件不是待审核的（可能已经审过或被改派），请刷新后重试").
 				WithDetails(map[string]any{"ids": notPending})
 		}
 		if len(notMine) > 0 {
-			return notAssignee("有 " + itoa(len(notMine)) + " 个文件没有分给你（可能刚被改派给别人），请刷新待办").
+			return notAssignee("有 " + strconv.Itoa(len(notMine)) + " 个文件没有分给你（可能刚被改派给别人），请刷新待办").
 				WithDetails(map[string]any{"ids": notMine})
 		}
 		items, err := s.finish(ctx, tx, projectID, userID, locked.list, resultApproved, nil, nil, true)
@@ -298,7 +276,7 @@ func (s *Service) Reopen(ctx context.Context, p *auth.Principal, projectID, file
 			return errFileNotFound
 		}
 		if f.Status != folder.ReviewApproved {
-			return invalidState("文件不是已通过的（可能刚被撤回），请刷新")
+			return httpx.InvalidState("文件不是已通过的（可能刚被撤回），请刷新")
 		}
 		last, err := latestResult(ctx, tx, fileID, resultApproved)
 		if err != nil {

@@ -61,19 +61,19 @@ func checkTitle(v string) string {
 }
 
 // checkValue：值是否合著录项现在的定义。合格时返回空串，否则返回原因（不带著录项名称）。
-func checkValue(def *FieldDef, v string) string {
+func checkValue(def *project.FieldDef, v string) string {
 	switch def.Type {
-	case fieldText:
+	case project.FieldText:
 		ml := project.DefaultTextMaxLength
 		if def.MaxLength != nil {
 			ml = *def.MaxLength
 		}
 		return project.CheckTextValue(v, ml)
-	case fieldDate:
+	case project.FieldDate:
 		if !project.IsValidDateValue(v) {
 			return fmt.Sprintf("不是合法的日期（只能是 %s，日期要真实存在）", strings.Join(project.DateFormats, "、"))
 		}
-	case fieldEnum:
+	case project.FieldEnum:
 		if !slices.Contains(def.Options, v) {
 			shown := def.Options
 			more := ""
@@ -125,7 +125,7 @@ func (s *settings) storedIssue(key string, v any) string {
 // orderedKeys 是 extra 的 key：设置里的顺序在前，设置里没有的按 key 排在后面。
 func (s *settings) orderedKeys(extra map[string]any) []string {
 	out := make([]string, 0, len(extra))
-	for _, d := range s.fields {
+	for _, d := range s.ItemFields {
 		if _, ok := extra[d.Key]; ok {
 			out = append(out, d.Key)
 		}
@@ -217,7 +217,7 @@ func (s *settings) completionIssues(title string, extra map[string]any) []FieldI
 	if title == "" {
 		out = append(out, FieldIssue{Key: project.TitleKey, Message: "题名不能为空"})
 	}
-	for _, d := range s.fields {
+	for _, d := range s.ItemFields {
 		v, ok := extra[d.Key]
 		if !hasValue(v, ok) {
 			if d.Required {

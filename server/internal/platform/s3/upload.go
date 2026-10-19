@@ -24,7 +24,6 @@ import (
 // 分片大小的范围（S3 的规定：除最后一片外每片至少 5 MiB，最多 10000 片）。
 const (
 	DefaultPartSize = 8 << 20
-	MinPartSize     = 5 << 20
 	MaxPartSize     = 512 << 20
 	MaxParts        = 10000
 )
@@ -67,7 +66,7 @@ type partResult struct {
 }
 
 // NewUpload 开始上传 key（还不访问存储）。partSize 不大于 0 时用 8 MiB，大于 512 MiB 时按 512 MiB。真实的 S3 要求
-// 除最后一片外每片至少 5 MiB（MinPartSize）：正式代码用 [PartSizeFor]，更小的只给测试用（SeaweedFS 不查）。
+// 除最后一片外每片至少 5 MiB：正式代码用 [PartSizeFor]，更小的只给测试用（SeaweedFS 不查）。
 func (c *Client) NewUpload(ctx context.Context, key string, partSize int64, opts PutOptions) *Upload {
 	if partSize <= 0 {
 		partSize = DefaultPartSize

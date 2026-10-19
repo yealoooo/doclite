@@ -154,7 +154,7 @@ func (h *Handler) reviewers(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) error {
-	folderID, err := ParseOptionalUUID("folder_id", query(r, "folder_id"))
+	folderID, err := httpx.QueryUUID(r, "folder_id")
 	if err != nil {
 		return err
 	}
@@ -170,13 +170,13 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) error {
 func listParams(r *http.Request) (ListParams, error) {
 	var p ListParams
 	var err error
-	if p.FolderID, err = ParseOptionalUUID("folder_id", query(r, "folder_id")); err != nil {
+	if p.FolderID, err = httpx.QueryUUID(r, "folder_id"); err != nil {
 		return p, err
 	}
-	if p.Limit, err = ParseLimit(query(r, "limit")); err != nil {
+	if p.Limit, err = httpx.QueryLimit(r, DefaultLimit, MaxLimit); err != nil {
 		return p, err
 	}
-	p.After, err = ParseCursor(query(r, "cursor"))
+	p.After, err = parseCursor(query(r, "cursor"))
 	return p, err
 }
 
@@ -188,7 +188,7 @@ func (h *Handler) openAssignments(w http.ResponseWriter, r *http.Request) error 
 	if err != nil {
 		return err
 	}
-	reviewer, err := ParseOptionalUUID("reviewer_id", query(r, "reviewer_id"))
+	reviewer, err := httpx.QueryUUID(r, "reviewer_id")
 	if err != nil {
 		return err
 	}
@@ -202,14 +202,14 @@ func (h *Handler) openAssignments(w http.ResponseWriter, r *http.Request) error 
 
 func (h *Handler) myReviews(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
-	raw := query(r, "project_id")
-	if raw == "" {
+	pidp, err := httpx.QueryUUID(r, "project_id")
+	if err != nil {
+		return err
+	}
+	if pidp == nil {
 		return httpx.Invalid("缺少 project_id（我的审核跟随当前项目）")
 	}
-	pid, err := uuid.Parse(raw)
-	if err != nil {
-		return httpx.Invalid("参数 project_id 不是合法的 UUID")
-	}
+	pid := *pidp
 	user := auth.Current(ctx).UserID
 	if err := h.svc.auth.CheckProjectAccess(ctx, user, pid); err != nil {
 		return err

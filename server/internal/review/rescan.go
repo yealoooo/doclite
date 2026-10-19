@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"strconv"
 	"sync"
 
 	"github.com/google/uuid"
@@ -9,11 +10,8 @@ import (
 
 	"doclite/server/internal/file"
 	"doclite/server/internal/folder"
-	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
-	"doclite/server/internal/platform/imagehdr"
-	"doclite/server/internal/storage"
 )
 
 // 重扫（requirements 5.6、5.8）：`POST /api/files/{fid}/rescan`，请求格式同上传（file.Service.Receive）。
@@ -59,23 +57,9 @@ func (s *Service) Rescan(ctx context.Context, userID, projectID, fileID uuid.UUI
 	}
 	version := pre[0].VersionNo + 1
 
-	target, err := s.storage.DefaultTarget(ctx)
+	st, err := s.files.Stage(ctx, projectID, fileID, version, u)
 	if err != nil {
 		return nil, err
-	}
-	code, err := file.ProjectCode(ctx, s.pool, projectID)
-	if err != nil {
-		return nil, err
-	}
-	keys := file.KeysFor(target.PathPrefix, code, fileID, version, u.Info.Format)
-	if err := s.files.PutObjects(ctx, target, keys, u); err != nil {
-		return nil, err
-	}
-	written := []string{keys.Original}
-	var coverKey *string
-	if u.Cover != nil {
-		coverKey = &keys.Cover
-		written = append(written, keys.Cover)
 	}
 
 	var out *RescanResponse
@@ -91,19 +75,13 @@ func (s *Service) Rescan(ctx context.Context, userID, projectID, fileID uuid.UUI
 		if err := checkRescannable(f, version-1); err != nil {
 			return err
 		}
-		if err := s.storage.LockForSnapshot(ctx, tx, target.ProfileID); err != nil {
-			return err
-		}
-		if err := file.LockContent(ctx, tx, projectID, u.SHA256); err != nil {
+		if err := s.files.Lock(ctx, tx, projectID, st); err != nil {
 			return err
 		}
 		if err := s.files.FindDuplicate(ctx, tx, projectID, u.SHA256, &fileID); err != nil {
 			return err
 		}
-		snap := &file.NewSnapshot{ID: db.NewID(), FileID: fileID, VersionNo: version, SnapshotType: file.SnapshotRescan,
-			StorageProfileID: target.ProfileID, StorageKey: keys.Original, CoverKey: coverKey, SHA256: u.SHA256,
-			FileSize: u.Size, MimeType: u.Info.Format.MIME(), UploadName: u.FileName, Width: u.Info.Width,
-			Height: u.Info.Height, DPI: dpiOf(u.Info), ColorMode: colorOf(u.Info), CreatedBy: userID}
+		snap := st.Snapshot(file.SnapshotRescan, userID)
 		if err := file.InsertSnapshot(ctx, tx, snap); err != nil {
 			return err
 		}
@@ -116,7 +94,7 @@ func (s *Service) Rescan(ctx context.Context, userID, projectID, fileID uuid.UUI
 			return err
 		}
 		round := f.Round + 1
-		if err := s.folders.SetReviewState(ctx, tx, fileID, next.status, round); err != nil {
+		if err := s.folders.SetReviewStatusAndRound(ctx, tx, fileID, next.status, round); err != nil {
 			return err
 		}
 		if err := s.withPaths(ctx, tx, []*fileState{f}); err != nil {
@@ -133,17 +111,15 @@ func (s *Service) Rescan(ctx context.Context, userID, projectID, fileID uuid.UUI
 			OperatorID: userID, Detail: d}); err != nil {
 			return err
 		}
-		w, h := u.Info.Width, u.Info.Height
-		out = &RescanResponse{
-			IngestResponse: file.IngestResponse{FileID: fileID, SnapshotID: snap.ID, FolderFileID: f.FolderFileID,
-				FileName: f.FileName, SortNo: f.SortNo, VersionNo: version, WidthPx: &w, HeightPx: &h, DPI: snap.DPI,
-				ColorMode: snap.ColorMode, FileSize: u.Size, HasCover: u.Cover != nil, Warnings: u.Warnings()},
-			FolderID: f.FolderID, ReviewStatus: next.status, ReviewRound: round, ReviewerID: next.reviewerID}
+		r := st.Response(snap)
+		r.FolderFileID, r.FileName, r.SortNo = f.FolderFileID, f.FileName, f.SortNo
+		out = &RescanResponse{IngestResponse: r, FolderID: f.FolderID, ReviewStatus: next.status, ReviewRound: round,
+			ReviewerID: next.reviewerID}
 		ev.Add(filesChanged(projectID, []*fileState{f}))
 		return nil
 	})
 	if err != nil {
-		orphans(ctx, target, written...)
+		st.Orphans(ctx)
 		return nil, err
 	}
 	return out, nil
@@ -152,33 +128,12 @@ func (s *Service) Rescan(ctx context.Context, userID, projectID, fileID uuid.UUI
 // checkRescannable：不是已驳回 409 invalid_state；当前版本号不是 version 409 conflict。
 func checkRescannable(f *fileState, version int) error {
 	if f.Status != folder.ReviewRejected {
-		return invalidState("文件不是已驳回的，不需要重扫（上一次重扫可能已经成功），请刷新")
+		return httpx.InvalidState("文件不是已驳回的，不需要重扫（上一次重扫可能已经成功），请刷新")
 	}
 	if f.VersionNo != version {
-		return httpx.Conflict("", "文件的版本刚刚变了（现在是 v"+itoa(f.VersionNo)+"），请刷新后重试")
+		return httpx.Conflict("", "文件的版本刚刚变了（现在是 v"+strconv.Itoa(f.VersionNo)+"），请刷新后重试")
 	}
 	return nil
-}
-
-// orphans 记下传上去但没有入库的对象（requirements 5.6：只记警告）。
-func orphans(ctx context.Context, target *storage.Target, keys ...string) {
-	httpx.LoggerFrom(ctx).Warn("上传的对象没有入库，成了孤儿对象", "storage_profile_id", target.ProfileID, "keys", keys)
-}
-
-func dpiOf(info imagehdr.Info) *int {
-	if info.DPI <= 0 {
-		return nil
-	}
-	d := info.DPI
-	return &d
-}
-
-func colorOf(info imagehdr.Info) *string {
-	if info.ColorMode == "" {
-		return nil
-	}
-	c := string(info.ColorMode)
-	return &c
 }
 
 // keyedMutex 是按 file_id 的进程内互斥：没人持有、也没人在等的 id 不占内存。零值可用。

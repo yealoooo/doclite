@@ -61,37 +61,12 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-type connectionRequest struct {
-	Endpoint       string  `json:"endpoint"`
-	PublicEndpoint *string `json:"public_endpoint"`
-	Bucket         string  `json:"bucket"`
-	Region         *string `json:"region"`
-	PathPrefix     *string `json:"path_prefix"`
-	AccessKey      string  `json:"access_key"`
-	SecretKey      string  `json:"secret_key"`
-	ForcePathStyle *bool   `json:"force_path_style"`
-}
-
-func (c connectionRequest) input() ConnectionInput {
-	return ConnectionInput{Endpoint: c.Endpoint, PublicEndpoint: c.PublicEndpoint, Bucket: c.Bucket, Region: c.Region,
-		PathPrefix: c.PathPrefix, AccessKey: c.AccessKey, SecretKey: c.SecretKey, ForcePathStyle: c.ForcePathStyle}
-}
-
-type createRequest struct {
-	connectionRequest
-	ProfileName    string  `json:"profile_name"`
-	URLExpireHours *int    `json:"url_expire_hours"`
-	Remark         *string `json:"remark"`
-}
-
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) error {
-	var req createRequest
-	if err := httpx.ReadJSON(r, &req); err != nil {
+	var in CreateInput
+	if err := httpx.ReadJSON(r, &in); err != nil {
 		return err
 	}
-	p, err := h.svc.Create(r.Context(), auth.Current(r.Context()).UserID, CreateInput{
-		ConnectionInput: req.input(), ProfileName: req.ProfileName, URLExpireHours: req.URLExpireHours, Remark: req.Remark,
-	})
+	p, err := h.svc.Create(r.Context(), auth.Current(r.Context()).UserID, in)
 	if err != nil {
 		return err
 	}
@@ -99,37 +74,16 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-type updateRequest struct {
-	ProfileName    *string `json:"profile_name"`
-	Endpoint       *string `json:"endpoint"`
-	PublicEndpoint *string `json:"public_endpoint"`
-	Bucket         *string `json:"bucket"`
-	Region         *string `json:"region"`
-	PathPrefix     *string `json:"path_prefix"`
-	AccessKey      *string `json:"access_key"`
-	SecretKey      *string `json:"secret_key"`
-	ForcePathStyle *bool   `json:"force_path_style"`
-	URLExpireHours *int    `json:"url_expire_hours"`
-	Status         *string `json:"status"`
-	Remark         *string `json:"remark"`
-}
-
-func (u updateRequest) input() UpdateInput {
-	return UpdateInput{ProfileName: u.ProfileName, Endpoint: u.Endpoint, PublicEndpoint: u.PublicEndpoint, Bucket: u.Bucket,
-		Region: u.Region, PathPrefix: u.PathPrefix, AccessKey: u.AccessKey, SecretKey: u.SecretKey,
-		ForcePathStyle: u.ForcePathStyle, URLExpireHours: u.URLExpireHours, Status: u.Status, Remark: u.Remark}
-}
-
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) error {
 	id, err := httpx.PathUUID(r, "id")
 	if err != nil {
 		return err
 	}
-	var req updateRequest
-	if err := httpx.ReadJSON(r, &req); err != nil {
+	var in UpdateInput
+	if err := httpx.ReadJSON(r, &in); err != nil {
 		return err
 	}
-	p, err := h.svc.Update(r.Context(), auth.Current(r.Context()).UserID, id, req.input())
+	p, err := h.svc.Update(r.Context(), auth.Current(r.Context()).UserID, id, in)
 	if err != nil {
 		return err
 	}
@@ -163,11 +117,11 @@ func (h *Handler) setDefault(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) testNew(w http.ResponseWriter, r *http.Request) error {
-	var req connectionRequest
-	if err := httpx.ReadJSON(r, &req); err != nil {
+	var in ConnectionInput
+	if err := httpx.ReadJSON(r, &in); err != nil {
 		return err
 	}
-	rep, err := h.svc.TestNew(r.Context(), req.input())
+	rep, err := h.svc.TestNew(r.Context(), in)
 	if err != nil {
 		return err
 	}
@@ -180,11 +134,11 @@ func (h *Handler) testSaved(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	var req updateRequest
-	if _, err := httpx.ReadOptionalJSON(r, &req); err != nil {
+	var in UpdateInput
+	if _, err := httpx.ReadOptionalJSON(r, &in); err != nil {
 		return err
 	}
-	rep, err := h.svc.TestSaved(r.Context(), id, req.input())
+	rep, err := h.svc.TestSaved(r.Context(), id, in)
 	if err != nil {
 		return err
 	}

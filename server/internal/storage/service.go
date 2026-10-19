@@ -31,6 +31,7 @@ import (
 	"doclite/server/internal/config"
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/names"
 	"doclite/server/internal/platform/s3"
 )
 
@@ -149,14 +150,14 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Profile, error) {
 
 // ConnectionInput 是连接参数（新建、测试未保存的配置）。nil 表示没传，用默认值。
 type ConnectionInput struct {
-	Endpoint       string
-	PublicEndpoint *string
-	Bucket         string
-	Region         *string
-	PathPrefix     *string
-	AccessKey      string
-	SecretKey      string
-	ForcePathStyle *bool
+	Endpoint       string  `json:"endpoint"`
+	PublicEndpoint *string `json:"public_endpoint"`
+	Bucket         string  `json:"bucket"`
+	Region         *string `json:"region"`
+	PathPrefix     *string `json:"path_prefix"`
+	AccessKey      string  `json:"access_key"`
+	SecretKey      string  `json:"secret_key"`
+	ForcePathStyle *bool   `json:"force_path_style"`
 }
 
 // connection 是校验过的连接参数。
@@ -222,9 +223,9 @@ func validateConnection(in ConnectionInput) (connection, error) {
 // CreateInput 是新建的输入。
 type CreateInput struct {
 	ConnectionInput
-	ProfileName    string
-	URLExpireHours *int
-	Remark         *string
+	ProfileName    string  `json:"profile_name"`
+	URLExpireHours *int    `json:"url_expire_hours"`
+	Remark         *string `json:"remark"`
 }
 
 // newRow 校验新建的输入，生成要写入的一行（secret_key 已加密）。
@@ -245,8 +246,8 @@ func (s *Service) newRow(in CreateInput) (*row, error) {
 	}
 	var remark *string
 	if in.Remark != nil {
-		if remark, err = normalizeRemark(*in.Remark); err != nil {
-			return nil, err
+		if remark, err = names.OptionalText(in.Remark, maxRemarkChars, "备注"); err != nil {
+			return nil, httpx.Invalid("%s", err)
 		}
 	}
 	r := &row{ID: db.NewID(), ProfileName: name, StorageType: "s3", Endpoint: c.endpoint, PublicEndpoint: c.publicEndpoint,
@@ -313,18 +314,18 @@ func deref(v any) any {
 // UpdateInput 是修改的输入：nil 表示不改。PublicEndpoint、Remark、PathPrefix 传空串表示清空；
 // SecretKey 传空串表示不改。
 type UpdateInput struct {
-	ProfileName    *string
-	Endpoint       *string
-	PublicEndpoint *string
-	Bucket         *string
-	Region         *string
-	PathPrefix     *string
-	AccessKey      *string
-	SecretKey      *string
-	ForcePathStyle *bool
-	URLExpireHours *int
-	Status         *string
-	Remark         *string
+	ProfileName    *string `json:"profile_name"`
+	Endpoint       *string `json:"endpoint"`
+	PublicEndpoint *string `json:"public_endpoint"`
+	Bucket         *string `json:"bucket"`
+	Region         *string `json:"region"`
+	PathPrefix     *string `json:"path_prefix"`
+	AccessKey      *string `json:"access_key"`
+	SecretKey      *string `json:"secret_key"`
+	ForcePathStyle *bool   `json:"force_path_style"`
+	URLExpireHours *int    `json:"url_expire_hours"`
+	Status         *string `json:"status"`
+	Remark         *string `json:"remark"`
 }
 
 // changes 是校验过的修改。
@@ -397,8 +398,8 @@ func validateUpdate(in UpdateInput) (*changes, error) {
 		}
 	}
 	if in.Remark != nil {
-		if c.remark, err = normalizeRemark(*in.Remark); err != nil {
-			return nil, err
+		if c.remark, err = names.OptionalText(in.Remark, maxRemarkChars, "备注"); err != nil {
+			return nil, httpx.Invalid("%s", err)
 		}
 	}
 	return c, nil
@@ -480,7 +481,7 @@ func (s *Service) Update(ctx context.Context, operatorID, id uuid.UUID, in Updat
 				if _, asTarget, err := migrationGuard(ctx, tx, id); err != nil {
 					return err
 				} else if asTarget {
-					return errMigrateState("正在往这个存储迁移文件，不能改为只读或停用；等迁移结束或先取消")
+					return httpx.InvalidState("正在往这个存储迁移文件，不能改为只读或停用；等迁移结束或先取消")
 				}
 			}
 		}
@@ -538,7 +539,7 @@ func (s *Service) Delete(ctx context.Context, operatorID, id uuid.UUID) error {
 		if asSource, asTarget, err := migrationGuard(ctx, tx, id); err != nil {
 			return err
 		} else if asSource || asTarget {
-			return errMigrateState("这个存储正在迁移中，不能删除；等迁移结束或先取消")
+			return httpx.InvalidState("这个存储正在迁移中，不能删除；等迁移结束或先取消")
 		}
 		u, err := usageOf(ctx, tx, id)
 		if err != nil {
@@ -576,7 +577,7 @@ func (s *Service) SetDefault(ctx context.Context, operatorID, id uuid.UUID) (*Pr
 		if asSource, _, err := migrationGuard(ctx, tx, id); err != nil {
 			return err
 		} else if asSource {
-			return errMigrateState("这个存储正在迁出，设为默认后新文件又会写回来；等迁移结束或先取消")
+			return httpx.InvalidState("这个存储正在迁出，设为默认后新文件又会写回来；等迁移结束或先取消")
 		}
 		old, err := getDefaultRow(ctx, tx)
 		if err != nil {

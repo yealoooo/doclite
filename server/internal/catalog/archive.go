@@ -14,6 +14,7 @@ import (
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/xslices"
 	"doclite/server/internal/project"
 )
 
@@ -52,14 +53,14 @@ const (
 	skipHasSubfolders = "has_subfolders"
 	skipEmpty         = "empty"
 	skipTooManyPages  = "too_many_pages"
-	skipFileCataloged = "file_cataloged"
+	skipFileCataloged = httpx.CodeFileCataloged
 )
 
 // ArchiveInput 是 `POST /api/archive-categories/{id}/items:from-folders` 的输入。
 type ArchiveInput struct {
-	FolderIDs []uuid.UUID
-	Titles    map[uuid.UUID]string
-	DryRun    bool
+	FolderIDs []uuid.UUID          `json:"folder_ids"`
+	Titles    map[uuid.UUID]string `json:"titles"`
+	DryRun    bool                 `json:"dry_run"`
 }
 
 // ArchivePlanItem 是将新建（预览）或已新建的一件。
@@ -117,7 +118,7 @@ func (s *Service) ArchiveFolders(ctx context.Context, operatorID, projectID, cat
 	if len(in.FolderIDs) > MaxArchiveFolders {
 		return nil, httpx.Invalid("一次最多选 %d 个文件夹，这次有 %d 个", MaxArchiveFolders, len(in.FolderIDs))
 	}
-	selected := dedupKeepOrder(in.FolderIDs)
+	selected := xslices.Unique(in.FolderIDs)
 	st, err := loadSettings(ctx, s.pool, projectID)
 	if err != nil {
 		return nil, err
@@ -152,7 +153,7 @@ func (s *Service) ArchiveFolders(ctx context.Context, operatorID, projectID, cat
 			return err
 		}
 		if cat.ParentID == nil {
-			return invalidState("不能归档到根节点下，请先选一个归类节点")
+			return httpx.InvalidState("不能归档到根节点下，请先选一个归类节点")
 		}
 		if st.tmpl == nil {
 			return st.templateInvalid("归档")
@@ -171,7 +172,7 @@ func (s *Service) ArchiveFolders(ctx context.Context, operatorID, projectID, cat
 		if err != nil {
 			return err
 		}
-		paths, err := folderPaths(ctx, tx, ids)
+		paths, err := file.FolderPaths(ctx, tx, ids)
 		if err != nil {
 			return err
 		}
@@ -224,7 +225,7 @@ func (s *Service) ArchiveFolders(ctx context.Context, operatorID, projectID, cat
 
 		// 题名、著录（没给的用 default）。
 		defaults := map[string]any{}
-		for _, d := range st.fields {
+		for _, d := range st.ItemFields {
 			if d.Default != nil {
 				defaults[d.Key] = *d.Default
 			}
@@ -254,7 +255,7 @@ func (s *Service) ArchiveFolders(ctx context.Context, operatorID, projectID, cat
 				return err
 			}
 			if last := first + len(cands) - 1; last > MaxItemNo {
-				return invalidState(fmt.Sprintf("这个节点里的件号已经用到 %d，不能再归档", MaxItemNo))
+				return httpx.InvalidState(fmt.Sprintf("这个节点里的件号已经用到 %d，不能再归档", MaxItemNo))
 			}
 			ch, err := categoryChain(ctx, tx, projectID, cat.PathCode)
 			if err != nil {
@@ -271,7 +272,7 @@ func (s *Service) ArchiveFolders(ctx context.Context, operatorID, projectID, cat
 			}
 		}
 		if !in.DryRun {
-			return httpx.Conflict(httpx.CodeInvalidState, fmt.Sprintf("选的文件夹里没有能归档成一件的（跳过了 %d 个）",
+			return httpx.InvalidState(fmt.Sprintf("选的文件夹里没有能归档成一件的（跳过了 %d 个）",
 				len(out.Skipped))).WithDetails(out)
 		}
 		return nil
@@ -343,7 +344,7 @@ func looseFiles(ctx context.Context, q db.Querier, parents []*folderNode) ([]Loo
 	if err != nil {
 		return nil, err
 	}
-	paths, err := folderPaths(ctx, q, ids)
+	paths, err := file.FolderPaths(ctx, q, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -414,7 +415,7 @@ func filesElsewhere(ctx context.Context, q db.Querier, files map[uuid.UUID][]fol
 			}
 		}
 	}
-	names, err := categoryNames(ctx, q, cats)
+	names, err := CategoryNames(ctx, q, cats)
 	if err != nil {
 		return nil, err
 	}
@@ -467,7 +468,7 @@ func (s *Service) createArchived(ctx context.Context, tx pgx.Tx, ev *events.Pend
 	var pItems, pFiles, folderIDs, fileIDs []uuid.UUID
 	var pNos []int32
 	var logs []file.Log
-	audits := make([]auditEntry, len(items))
+	audits := make([]audit.Entry, len(items))
 	for i, it := range items {
 		folderIDs = append(folderIDs, it.FolderID)
 		plan := out.Items[i]
@@ -486,7 +487,7 @@ func (s *Service) createArchived(ctx context.Context, tx pgx.Tx, ev *events.Pend
 		if conflicts[i] != nil {
 			after["archive_no_conflict"] = conflicts[i]
 		}
-		audits[i] = auditEntry{TargetType: audit.TargetArchiveItem, TargetID: it.ID, Action: "archive", Detail: map[string]any{"after": after}}
+		audits[i] = audit.Entry{ProjectID: &projectID, OperatorID: &operatorID, TargetType: audit.TargetArchiveItem, TargetID: it.ID, Action: "archive", Detail: map[string]any{"after": after}}
 	}
 	if err := insertItemPages(ctx, tx, projectID, operatorID, pItems, pFiles, pNos); err != nil {
 		if db.UniqueViolation(err, "archive_item_files_file_id_key") {
@@ -497,7 +498,7 @@ func (s *Service) createArchived(ctx context.Context, tx pgx.Tx, ev *events.Pend
 	if err := file.WriteLogs(ctx, tx, logs...); err != nil {
 		return err
 	}
-	if err := insertAudits(ctx, tx, projectID, operatorID, audits); err != nil {
+	if err := audit.Write(ctx, tx, audits...); err != nil {
 		return err
 	}
 	itemIDs := make([]uuid.UUID, len(items))

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"doclite/server/internal/catalog"
 	"doclite/server/internal/export/bundle"
 	"doclite/server/internal/platform/httpx"
 )
@@ -160,7 +161,7 @@ func (s *Service) resolveScope(ctx context.Context, tx pgx.Tx, projectID uuid.UU
 	if err != nil {
 		return nil, err
 	}
-	names, err := categoryNames(ctx, tx, req.ScopeIDs)
+	names, err := catalog.CategoryNames(ctx, tx, req.ScopeIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -182,14 +183,14 @@ func (s *Service) resubmitItems(ctx context.Context, tx pgx.Tx, projectID, sourc
 		return nil, httpx.NotFound("要补交的导出任务")
 	}
 	if src.Status != StatusDone {
-		return nil, conflictState("只能补交已完成的导出任务的变更，这个任务现在是“%s”", statusLabel(src.Status))
+		return nil, httpx.InvalidState(fmt.Sprintf("只能补交已完成的导出任务的变更，这个任务现在是“%s”", statusLabel(src.Status)))
 	}
 	ch, err := s.changesIn(ctx, tx, src)
 	if err != nil {
 		return nil, err
 	}
 	if len(ch.ResubmitItemIDs) == 0 {
-		return nil, conflictState("导出任务 %s 的交付后变更里没有要补交的条目（有变更、没删除的）", sourceID)
+		return nil, httpx.InvalidState(fmt.Sprintf("导出任务 %s 的交付后变更里没有要补交的条目（有变更、没删除的）", sourceID))
 	}
 	return ch.ResubmitItemIDs, nil
 }

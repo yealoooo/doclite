@@ -8,7 +8,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/catalog"
+	"doclite/server/internal/platform/db"
+	"doclite/server/internal/project"
 )
 
 // 预检（requirements 5.11"预检"，用户决定 Q7）：就绪 = 不在修改中、（require_locked_item 时）已锁定、档号不空、
@@ -235,7 +237,7 @@ func checkCreatable(p *Precheck, onlyReady bool) error {
 
 // scoped 是在一个快照里读出的范围和预检。
 type scoped struct {
-	settings exportSettings
+	settings *project.Settings
 	scope    *resolved
 	items    []*scopeItem
 	precheck *Precheck
@@ -244,14 +246,11 @@ type scoped struct {
 
 // readScope 在快照 tx 里读设置（第一条语句）、范围、条目和页，做预检。
 func (s *Service) readScope(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, req *request) (*scoped, error) {
-	raw, found, err := projectSettings(ctx, tx, projectID)
+	st, err := project.ReadSettings(ctx, tx, projectID)
 	if err != nil {
 		return nil, err
 	}
-	if !found {
-		return nil, httpx.NotFound("项目")
-	}
-	out := &scoped{settings: parseSettings(raw)}
+	out := &scoped{settings: st}
 	if out.scope, err = s.resolveScope(ctx, tx, projectID, req); err != nil {
 		return nil, err
 	}
@@ -268,14 +267,14 @@ func (s *Service) readScope(ctx context.Context, tx pgx.Tx, projectID uuid.UUID,
 			catIDs = append(catIDs, it.CategoryID)
 		}
 	}
-	names, err := categoryNames(ctx, tx, catIDs)
+	names, err := catalog.CategoryNames(ctx, tx, catIDs)
 	if err != nil {
 		return nil, err
 	}
 	for _, it := range out.items {
 		it.CategoryNames = names[it.CategoryID]
 	}
-	out.precheck, out.ready = evaluate(req, out.settings.requireLockedItem, out.items)
+	out.precheck, out.ready = evaluate(req, out.settings.RequireLockedItem, out.items)
 	return out, nil
 }
 
@@ -286,7 +285,7 @@ func (s *Service) Precheck(ctx context.Context, projectID uuid.UUID, body *Reque
 		return nil, err
 	}
 	var out *Precheck
-	err = readSnapshot(ctx, s.pool, func(tx pgx.Tx) error {
+	err = db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		sc, err := s.readScope(ctx, tx, projectID, req)
 		if err != nil {
 			return err

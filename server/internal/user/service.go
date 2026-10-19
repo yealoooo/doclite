@@ -27,15 +27,16 @@ import (
 	"doclite/server/internal/auth"
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/xslices"
 	"doclite/server/internal/role"
 )
 
 const (
-	maxUsernameRunes    = 64
-	maxDisplayNameRunes = 64
-	minPasswordRunes    = 6
-	maxPasswordRunes    = 128
-	maxKeywordRunes     = 64
+	maxUsernameChars    = 64
+	maxDisplayNameChars = 64
+	minPasswordChars    = 6
+	maxPasswordChars    = 128
+	maxKeywordChars     = 64
 )
 
 // Service 是用户的业务规则。
@@ -55,8 +56,8 @@ var errNotFound = httpx.NotFound("用户")
 // List 是用户列表（keyword 匹配登录名或姓名，不区分大小写）。
 func (s *Service) List(ctx context.Context, keyword string, page httpx.PageRequest) (httpx.Page[User], error) {
 	keyword = strings.TrimSpace(keyword)
-	if utf8.RuneCountInString(keyword) > maxKeywordRunes {
-		return httpx.Page[User]{}, httpx.Invalid("搜索关键字最长 %d 个字符", maxKeywordRunes)
+	if utf8.RuneCountInString(keyword) > maxKeywordChars {
+		return httpx.Page[User]{}, httpx.Invalid("搜索关键字最长 %d 个字符", maxKeywordChars)
 	}
 	users, total, err := listUsers(ctx, s.pool, keyword, page)
 	if err != nil {
@@ -79,10 +80,10 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*User, error) {
 
 // CreateInput 是新建用户的输入。
 type CreateInput struct {
-	Username    string
-	DisplayName string
-	Password    string
-	RoleIDs     []uuid.UUID
+	Username    string      `json:"username"`
+	DisplayName string      `json:"display_name"`
+	Password    string      `json:"password"`
+	RoleIDs     []uuid.UUID `json:"role_ids"`
 }
 
 // Create 新建用户（状态 active）并赋予角色。登录名重复 409 `conflict`；有不存在的角色 400。
@@ -98,7 +99,7 @@ func (s *Service) Create(ctx context.Context, operatorID uuid.UUID, in CreateInp
 	if err := checkPassword(in.Password); err != nil {
 		return nil, err
 	}
-	roleIDs := dedup(in.RoleIDs)
+	roleIDs := xslices.Unique(in.RoleIDs)
 	hash, err := s.auth.HashPassword(ctx, in.Password)
 	if err != nil {
 		return nil, err
@@ -143,8 +144,8 @@ func (s *Service) Create(ctx context.Context, operatorID uuid.UUID, in CreateInp
 
 // UpdateInput 是修改用户的输入；nil 表示不改。
 type UpdateInput struct {
-	Username    *string
-	DisplayName *string
+	Username    *string `json:"username"`
+	DisplayName *string `json:"display_name"`
 }
 
 // Update 改登录名、姓名。
@@ -280,7 +281,7 @@ func (s *Service) ResetPassword(ctx context.Context, operatorID, id uuid.UUID, p
 
 // SetRoles 整体替换用户的角色。拿掉最后一个启用的管理员的 admin 角色 409 `last_admin`。
 func (s *Service) SetRoles(ctx context.Context, operatorID, id uuid.UUID, roleIDs []uuid.UUID) (*User, error) {
-	roleIDs = dedup(roleIDs)
+	roleIDs = xslices.Unique(roleIDs)
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if err := s.roles.LockPermissionChanges(ctx, tx); err != nil {
 			return err
@@ -441,19 +442,19 @@ func (s *Service) EnsureInitialAdmin(ctx context.Context, username, displayName,
 
 func normalizeUsername(v string) (string, error) {
 	v = strings.TrimSpace(v)
-	bad := v == "" || utf8.RuneCountInString(v) > maxUsernameRunes ||
+	bad := v == "" || utf8.RuneCountInString(v) > maxUsernameChars ||
 		strings.IndexFunc(v, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0
 	if bad {
-		return "", httpx.Invalid("登录名不能为空，不能包含空格，最长 %d 个字符", maxUsernameRunes)
+		return "", httpx.Invalid("登录名不能为空，不能包含空格，最长 %d 个字符", maxUsernameChars)
 	}
 	return v, nil
 }
 
 func normalizeDisplayName(v string) (string, error) {
 	v = strings.TrimSpace(v)
-	bad := v == "" || utf8.RuneCountInString(v) > maxDisplayNameRunes || strings.IndexFunc(v, unicode.IsControl) >= 0
+	bad := v == "" || utf8.RuneCountInString(v) > maxDisplayNameChars || strings.IndexFunc(v, unicode.IsControl) >= 0
 	if bad {
-		return "", httpx.Invalid("姓名不能为空，最长 %d 个字符", maxDisplayNameRunes)
+		return "", httpx.Invalid("姓名不能为空，最长 %d 个字符", maxDisplayNameChars)
 	}
 	return v, nil
 }
@@ -461,27 +462,14 @@ func normalizeDisplayName(v string) (string, error) {
 // checkPassword：6–128 个字符，原样使用（不去空白）。
 func checkPassword(v string) error {
 	n := utf8.RuneCountInString(v)
-	if n < minPasswordRunes || n > maxPasswordRunes {
-		return httpx.Invalid("密码要有 %d 到 %d 个字符", minPasswordRunes, maxPasswordRunes)
+	if n < minPasswordChars || n > maxPasswordChars {
+		return httpx.Invalid("密码要有 %d 到 %d 个字符", minPasswordChars, maxPasswordChars)
 	}
 	return nil
 }
 
 func errDuplicateUsername(username string) error {
 	return httpx.Conflict("", fmt.Sprintf("登录名 %s 已存在（不区分大小写）", username))
-}
-
-// dedup 去掉重复，保持原来的顺序。
-func dedup(ids []uuid.UUID) []uuid.UUID {
-	seen := map[uuid.UUID]bool{}
-	out := []uuid.UUID{}
-	for _, id := range ids {
-		if !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
-	}
-	return out
 }
 
 func roleCodes(grants []role.Grant) []string {

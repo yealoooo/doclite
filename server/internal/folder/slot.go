@@ -3,7 +3,6 @@ package folder
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -51,7 +50,7 @@ func (s *Service) claimIn(ctx context.Context, q db.Querier, f *folderRow, name 
 	if err != nil {
 		return file.Slot{}, err
 	}
-	path, err := s.Path(ctx, q, f.ID)
+	path, err := file.FolderPath(ctx, q, f.ID)
 	if err != nil {
 		return file.Slot{}, err
 	}
@@ -62,7 +61,7 @@ func (s *Service) claimIn(ctx context.Context, q db.Querier, f *folderRow, name 
 // AddFile 按 slot 插入 folder_files（待分配、第 1 轮），返回它的 id。
 func (s *Service) AddFile(ctx context.Context, tx pgx.Tx, slot file.Slot, fileID, createdBy uuid.UUID) (uuid.UUID, error) {
 	id := db.NewID()
-	if err := insertEntry(ctx, tx, id, slot.ProjectID, slot.FolderID, fileID, slot.FileName, slot.SortNo, createdBy); err != nil {
+	if err := insertFolderFile(ctx, tx, id, slot.ProjectID, slot.FolderID, fileID, slot.FileName, slot.SortNo, createdBy); err != nil {
 		if db.UniqueViolation(err, "ux_folder_files_name") {
 			return uuid.Nil, fileNameConflict(slot.FileName)
 		}
@@ -106,5 +105,3 @@ func fileNameOf(ctx context.Context, q db.Querier, fileID uuid.UUID) (string, er
 	err := q.QueryRow(ctx, `SELECT file_name FROM folder_files WHERE file_id = $1`, fileID).Scan(&name)
 	return name, err
 }
-
-func itoa(n int) string { return strconv.Itoa(n) }

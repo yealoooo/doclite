@@ -3,10 +3,10 @@ package project
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"doclite/server/internal/auth"
 	"doclite/server/internal/platform/db"
@@ -82,16 +82,11 @@ type Item struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-func containsPattern(keyword string) string {
-	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return "%" + r.Replace(keyword) + "%"
-}
-
 // listProjects：未删除的项目，新建的在前。keyword 匹配编码或名称（不区分大小写），status 为空不筛选。
 func listProjects(ctx context.Context, q db.Querier, keyword, status string, page httpx.PageRequest) ([]Item, int, error) {
 	var pattern, st *string
 	if keyword != "" {
-		p := containsPattern(keyword)
+		p := db.ContainsPattern(keyword)
 		pattern = &p
 	}
 	if status != "" {
@@ -147,7 +142,7 @@ const projectSelect = `SELECT p.id, p.project_code, p.project_name, p.descriptio
   (SELECT c.id FROM archive_categories c WHERE c.project_id = p.id AND c.parent_id IS NULL)
 FROM projects p`
 
-func scanProject(sc interface{ Scan(...any) error }) (*projectRow, error) {
+func scanProject(sc pgx.Row) (*projectRow, error) {
 	var p projectRow
 	if err := sc.Scan(&p.ID, &p.ProjectCode, &p.ProjectName, &p.Description, &p.Settings, &p.Status, &p.CreatedBy,
 		&p.CreatedAt, &p.UpdatedAt, &p.RootFolderID, &p.CategoryRootID); err != nil {

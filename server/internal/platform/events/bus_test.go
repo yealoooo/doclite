@@ -20,12 +20,12 @@ func TestOverflowResync(t *testing.T) {
 	for i := 0; i < SubscriptionBuffer; i++ {
 		b.Publish(FoldersChanged(p, uuid.New()))
 	}
-	if len(slow.C) != SubscriptionBuffer || slow.Resyncs() != 0 {
-		t.Fatalf("积压 %d，resync %d", len(slow.C), slow.Resyncs())
+	if len(slow.C) != SubscriptionBuffer || slow.resyncCount() != 0 {
+		t.Fatalf("积压 %d，resync %d", len(slow.C), slow.resyncCount())
 	}
 	b.Publish(FoldersChanged(p, uuid.New()))
-	if len(slow.C) != 1 || slow.Resyncs() != 1 {
-		t.Fatalf("溢出后积压 %d，resync %d", len(slow.C), slow.Resyncs())
+	if len(slow.C) != 1 || slow.resyncCount() != 1 {
+		t.Fatalf("溢出后积压 %d，resync %d", len(slow.C), slow.resyncCount())
 	}
 	if ev := <-slow.C; ev.Type != TypeResync || ev.ProjectID != p {
 		t.Fatalf("溢出后第一条：%+v", ev)
@@ -39,7 +39,7 @@ func TestOverflowResync(t *testing.T) {
 	}
 
 	slow.Close()
-	if b.Subscribers(p) != 0 {
+	if b.subscribers(p) != 0 {
 		t.Fatal("Close 之后还在订阅")
 	}
 	b.Close()
@@ -84,4 +84,18 @@ func TestEventJSON(t *testing.T) {
 	if got := js(FilesChanged(p, []uuid.UUID{f}, many[:MaxIDs])); strings.Count(got, ",") < MaxIDs {
 		t.Fatalf("files.changed 500 个应全带：%d", len(got))
 	}
+}
+
+// resyncCount 是这个订阅因为积压溢出收到 resync 的次数。
+func (s *Subscription) resyncCount() int {
+	s.bus.mu.Lock()
+	defer s.bus.mu.Unlock()
+	return s.resyncs
+}
+
+// subscribers 是某个项目当前的订阅数。
+func (b *Bus) subscribers(projectID uuid.UUID) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.subs[projectID])
 }

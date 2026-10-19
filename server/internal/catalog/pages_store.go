@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"doclite/server/internal/file"
 	"doclite/server/internal/platform/db"
 )
 
@@ -99,7 +100,7 @@ WHERE ff.file_id = ANY($1) AND ff.project_id = $2`, ids, projectID)
 	for id := range folderSet {
 		folders = append(folders, id)
 	}
-	paths, err := folderPaths(ctx, q, folders)
+	paths, err := file.FolderPaths(ctx, q, folders)
 	if err != nil {
 		return nil, err
 	}
@@ -189,36 +190,6 @@ WHERE ff.file_id = $1 AND ff.deleted_at IS NULL AND f.deleted_at IS NULL`, fileI
 	return pid, err
 }
 
-// categoryNames 是这些节点的名称链（从根节点的下一级起到节点自己；根节点为空数组）。祖先按编码精确查。
-func categoryNames(ctx context.Context, q db.Querier, ids []uuid.UUID) (map[uuid.UUID][]string, error) {
-	out := make(map[uuid.UUID][]string, len(ids))
-	for _, id := range ids {
-		out[id] = []string{}
-	}
-	if len(ids) == 0 {
-		return out, nil
-	}
-	rows, err := q.Query(ctx, `SELECT c.id, array_agg(x.category_name ORDER BY x.path_code)
-FROM archive_categories c
-CROSS JOIN LATERAL generate_series(12, length(c.path_code), 6) AS g(n)
-JOIN archive_categories x ON x.project_id = c.project_id AND x.path_code = left(c.path_code, g.n)
-WHERE c.id = ANY($1)
-GROUP BY c.id`, ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id uuid.UUID
-		var names []string
-		if err := rows.Scan(&id, &names); err != nil {
-			return nil, err
-		}
-		out[id] = names
-	}
-	return out, rows.Err()
-}
-
 // deletePages 移出这些页。
 func deletePages(ctx context.Context, q db.Querier, itemID uuid.UUID, fileIDs []uuid.UUID) error {
 	if len(fileIDs) == 0 {
@@ -258,4 +229,34 @@ func insertPages(ctx context.Context, q db.Querier, projectID, itemID, linkedBy 
 SELECT $1, $2, t.file_id, t.page_no, $3 FROM unnest($4::uuid[], $5::int[]) AS t(file_id, page_no)`,
 		projectID, itemID, linkedBy, ids, pages)
 	return err
+}
+
+// CategoryNames 是这些节点的名称链（从根节点的下一级起到节点自己；根节点为空数组）。祖先按编码精确查。
+func CategoryNames(ctx context.Context, q db.Querier, ids []uuid.UUID) (map[uuid.UUID][]string, error) {
+	out := make(map[uuid.UUID][]string, len(ids))
+	for _, id := range ids {
+		out[id] = []string{}
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := q.Query(ctx, `SELECT c.id, array_agg(x.category_name ORDER BY x.path_code)
+FROM archive_categories c
+CROSS JOIN LATERAL generate_series(12, length(c.path_code), 6) AS g(n)
+JOIN archive_categories x ON x.project_id = c.project_id AND x.path_code = left(c.path_code, g.n)
+WHERE c.id = ANY($1)
+GROUP BY c.id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var names []string
+		if err := rows.Scan(&id, &names); err != nil {
+			return nil, err
+		}
+		out[id] = names
+	}
+	return out, rows.Err()
 }

@@ -228,32 +228,6 @@ func (c *Client) List(ctx context.Context, prefix string, max int) ([]string, er
 	return keys, nil
 }
 
-// DeletePrefix 删掉 prefix 下的全部对象，返回删了几个。prefix 不能为空（防止误删整个桶）。
-func (c *Client) DeletePrefix(ctx context.Context, prefix string) (int, error) {
-	if prefix == "" {
-		return 0, errors.New("s3: DeletePrefix 的 prefix 不能为空")
-	}
-	n := 0
-	for {
-		page, err := c.api.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
-			Bucket: aws.String(c.cfg.Bucket), Prefix: aws.String(prefix), MaxKeys: aws.Int32(1000),
-		})
-		if err != nil {
-			return n, wrap("列出", prefix, err)
-		}
-		if len(page.Contents) == 0 {
-			return n, nil
-		}
-		// 逐个删（DeleteObjects 要带请求体的校验和，各家 S3 实现的要求不一样；用到的地方量都很小）。
-		for _, o := range page.Contents {
-			if err := c.Delete(ctx, aws.ToString(o.Key)); err != nil {
-				return n, err
-			}
-			n++
-		}
-	}
-}
-
 // ErrNotFound：对象不存在。
 var ErrNotFound = errors.New("对象不存在")
 

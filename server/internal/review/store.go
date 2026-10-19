@@ -2,7 +2,6 @@ package review
 
 import (
 	"context"
-	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,7 +49,7 @@ func filesInProject(ctx context.Context, q db.Querier, projectID uuid.UUID, ids 
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	return collectIDs(ctx, q, `SELECT file_id FROM folder_files WHERE file_id = ANY($1) AND project_id = $2`, ids, projectID)
+	return db.CollectIDs(ctx, q, `SELECT file_id FROM folder_files WHERE file_id = ANY($1) AND project_id = $2`, ids, projectID)
 }
 
 // rereadFiles 在锁住 files 行之后重读这些文件：未删除（所在文件夹、项目也未删除）、在这个项目里的，带当前快照和 open 的
@@ -241,16 +240,6 @@ ORDER BY r.id DESC LIMIT 1`, fileID, result).Scan(&r.ID, &r.ReviewerID, &r.Revie
 	return &r, nil
 }
 
-// projectSettings 是项目存的 settings（项目已删除或不存在为 nil）。
-func projectSettings(ctx context.Context, q db.Querier, projectID uuid.UUID) ([]byte, error) {
-	var raw []byte
-	err := q.QueryRow(ctx, `SELECT settings FROM projects WHERE id = $1 AND deleted_at IS NULL`, projectID).Scan(&raw)
-	if db.IsNoRows(err) {
-		return nil, nil
-	}
-	return raw, err
-}
-
 // assignmentFile 是分配所在的文件和项目；文件不在了（已删除，或所在文件夹、项目已删除）时 ok 为 false。
 func assignmentFile(ctx context.Context, q db.Querier, id uuid.UUID) (fileID, projectID uuid.UUID, ok bool, err error) {
 	err = q.QueryRow(ctx, `SELECT r.file_id, r.project_id FROM file_reviews r
@@ -345,29 +334,12 @@ LIMIT $4)`, projectID, lo, hi, limit)
 // subtreeOpenOf 是某人在子树里未删除文件上的 open 分配的 file_id（不加锁，按子树改派的候选）。最多取 limit 个。
 func subtreeOpenOf(ctx context.Context, q db.Querier, projectID, reviewerID uuid.UUID, f *scopeFolder, limit int) ([]uuid.UUID, error) {
 	lo, hi := f.subtreeRange()
-	return collectIDs(ctx, q, `SELECT r.file_id FROM file_reviews r
+	return db.CollectIDs(ctx, q, `SELECT r.file_id FROM file_reviews r
 JOIN folder_files ff ON ff.file_id = r.file_id AND ff.deleted_at IS NULL
 JOIN folders f ON f.id = ff.folder_id AND f.deleted_at IS NULL
 WHERE r.project_id = $1 AND r.status = 'open' AND r.reviewer_id = $2
   AND f.path_code >= $3 AND f.path_code < $4
 LIMIT $5`, projectID, reviewerID, lo, hi, limit)
-}
-
-func collectIDs(ctx context.Context, q db.Querier, sql string, args ...any) ([]uuid.UUID, error) {
-	rows, err := q.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
 }
 
 // folderNameOf 是文件夹现在的名字。
@@ -383,5 +355,3 @@ func displayName(ctx context.Context, q db.Querier, userID uuid.UUID) (string, e
 	err := q.QueryRow(ctx, `SELECT display_name FROM users WHERE id = $1`, userID).Scan(&name)
 	return name, err
 }
-
-func itoa(n int) string { return strconv.Itoa(n) }

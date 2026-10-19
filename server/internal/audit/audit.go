@@ -32,10 +32,11 @@ const (
 	TargetExportTask = "export_task"
 	// M7-1：许可证（import、replace；target_id 是许可证的 license_id）。
 	TargetLicense = "license"
-	// M7-2：存储迁移改了位置的快照（action storage_migrate，每个快照一条）；迁移的开始、取消、结束记在源存储上
-	// （target_type storage_profile，action migrate_start、migrate_cancel、migrate_end）。
-	TargetFileSnapshot = "file_snapshot"
 )
+
+// M7-2：存储迁移改了位置的快照记 target_type file_snapshot、action storage_migrate（每个快照一条，storage 里一条 SQL
+// 批量写）；迁移的开始、取消、结束记在源存储上（target_type storage_profile，action migrate_start、migrate_cancel、
+// migrate_end）。
 
 // Entry 是一条审计记录。
 type Entry struct {
@@ -47,14 +48,26 @@ type Entry struct {
 	Detail     any
 }
 
-// Write 在调用方的事务里写一条审计记录。
-func Write(ctx context.Context, q db.Querier, e Entry) error {
-	detail := e.Detail
-	if detail == nil {
-		detail = map[string]any{}
+// Write 在调用方的事务里写审计记录（一条语句，按给的顺序，id 递增）。
+func Write(ctx context.Context, q db.Querier, entries ...Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	projects := make([]*uuid.UUID, len(entries))
+	operators := make([]*uuid.UUID, len(entries))
+	types := make([]string, len(entries))
+	ids := make([]uuid.UUID, len(entries))
+	actions := make([]string, len(entries))
+	details := make([]any, len(entries))
+	for i, e := range entries {
+		projects[i], operators[i], types[i], ids[i], actions[i], details[i] = e.ProjectID, e.OperatorID, e.TargetType, e.TargetID, e.Action, e.Detail
+		if details[i] == nil {
+			details[i] = map[string]any{}
+		}
 	}
 	_, err := q.Exec(ctx, `INSERT INTO audit_logs (project_id, operator_id, target_type, target_id, action, detail)
-VALUES ($1, $2, $3, $4, $5, $6)`, e.ProjectID, e.OperatorID, e.TargetType, e.TargetID, e.Action, detail)
+SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::uuid[], $5::text[], $6::jsonb[])`,
+		projects, operators, types, ids, actions, details)
 	return err
 }
 

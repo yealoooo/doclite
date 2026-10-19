@@ -8,14 +8,12 @@ import (
 	"github.com/google/uuid"
 
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/xslices"
 	"doclite/server/internal/storage"
 )
 
 // 看图（requirements 5.7）：列表不返回图片地址，图片信息统一由 batch 给；全部版本由 snapshots 给。
 // 图片地址是按天取整签名的预签名 URL（storage.Service.ImageURLs），图片不经过 server。
-
-// MaxBatchIDs 是 batch 一次最多的 file_id 数。
-const MaxBatchIDs = 500
 
 // ImageFields 是快照的规格和图片地址（batch、snapshots 共用）。
 type ImageFields struct {
@@ -60,10 +58,10 @@ type BatchResponse struct {
 // Batch 给一批文件当前版本的信息和图片地址（登录即可；只给用户能进的项目里的文件，其余放 missing）。
 // 空列表返回空结果；超过 500 个 400。
 func (s *Service) Batch(ctx context.Context, userID uuid.UUID, fileIDs []uuid.UUID) (*BatchResponse, error) {
-	if len(fileIDs) > MaxBatchIDs {
-		return nil, httpx.Invalid("一次最多取 %d 个文件的图片信息", MaxBatchIDs)
+	if len(fileIDs) > httpx.MaxBatchIDs {
+		return nil, httpx.Invalid("一次最多取 %d 个文件的图片信息", httpx.MaxBatchIDs)
 	}
-	ids := dedup(fileIDs)
+	ids := xslices.Unique(fileIDs)
 	out := &BatchResponse{Items: []ImageItem{}, Missing: []uuid.UUID{}}
 	if len(ids) == 0 {
 		return out, nil
@@ -196,17 +194,4 @@ func (s *Service) ProjectOfFile(ctx context.Context, fileID uuid.UUID) (uuid.UUI
 		return uuid.Nil, errFileNotFound
 	}
 	return f.ProjectID, nil
-}
-
-// dedup 去重，保持第一次出现的顺序。
-func dedup(ids []uuid.UUID) []uuid.UUID {
-	out := make([]uuid.UUID, 0, len(ids))
-	seen := make(map[uuid.UUID]bool, len(ids))
-	for _, id := range ids {
-		if !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
-	}
-	return out
 }

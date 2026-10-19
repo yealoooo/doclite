@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"doclite/server/internal/catalog"
 	"doclite/server/internal/platform/db"
@@ -34,7 +35,7 @@ type folderRow struct {
 const folderColumns = `f.id, f.project_id, f.parent_id, f.folder_name, f.path_code, f.remark, f.created_at, f.updated_at,
   f.deleted_at IS NOT NULL`
 
-func scanFolder(sc interface{ Scan(...any) error }) (*folderRow, error) {
+func scanFolder(sc pgx.Row) (*folderRow, error) {
 	var f folderRow
 	if err := sc.Scan(&f.ID, &f.ProjectID, &f.ParentID, &f.FolderName, &f.PathCode, &f.Remark, &f.CreatedAt, &f.UpdatedAt,
 		&f.Deleted); err != nil {
@@ -105,33 +106,6 @@ WHERE project_id = $1 AND path_code = ANY($2::text[]) ORDER BY path_code`, proje
 			return nil, err
 		}
 		out = append(out, a)
-	}
-	return out, rows.Err()
-}
-
-// folderPaths 是这些文件夹从根文件夹起用 / 连接的路径（按 path_code 的各级前缀取祖先，走 (project_id, path_code) 索引）。
-func folderPaths(ctx context.Context, q db.Querier, ids []uuid.UUID) (map[uuid.UUID]string, error) {
-	out := map[uuid.UUID]string{}
-	if len(ids) == 0 {
-		return out, nil
-	}
-	rows, err := q.Query(ctx, `SELECT f.id, string_agg(a.folder_name, '/' ORDER BY g.n)
-FROM folders f
-CROSS JOIN LATERAL generate_series(6, length(f.path_code), 6) AS g(n)
-JOIN folders a ON a.project_id = f.project_id AND a.path_code = left(f.path_code, g.n)
-WHERE f.id = ANY($1)
-GROUP BY f.id`, ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id uuid.UUID
-		var p string
-		if err := rows.Scan(&id, &p); err != nil {
-			return nil, err
-		}
-		out[id] = p
 	}
 	return out, rows.Err()
 }
@@ -257,7 +231,7 @@ WHERE project_id = $1 AND path_code >= $2 COLLATE "C" AND path_code < $3 COLLATE
 // subtreeLiveFileIDs 是子树里未删除的文件的 file_id。
 func subtreeLiveFileIDs(ctx context.Context, q db.Querier, projectID uuid.UUID, prefix string) ([]uuid.UUID, error) {
 	lo, hi := subtreeRange(prefix)
-	return collectIDs(ctx, q, `SELECT ff.file_id FROM folder_files ff JOIN folders f ON f.id = ff.folder_id
+	return db.CollectIDs(ctx, q, `SELECT ff.file_id FROM folder_files ff JOIN folders f ON f.id = ff.folder_id
 WHERE f.project_id = $1 AND f.path_code >= $2 COLLATE "C" AND f.path_code < $3 COLLATE "C" AND ff.deleted_at IS NULL`,
 		projectID, lo, hi)
 }
@@ -275,25 +249,8 @@ LIMIT $4) x`, projectID, lo, hi, limit).Scan(&n)
 // subtreeLiveFolderIDs 是子树里未删除的文件夹。
 func subtreeLiveFolderIDs(ctx context.Context, q db.Querier, projectID uuid.UUID, prefix string) ([]uuid.UUID, error) {
 	lo, hi := subtreeRange(prefix)
-	return collectIDs(ctx, q, `SELECT id FROM folders
+	return db.CollectIDs(ctx, q, `SELECT id FROM folders
 WHERE project_id = $1 AND path_code >= $2 COLLATE "C" AND path_code < $3 COLLATE "C" AND deleted_at IS NULL`, projectID, lo, hi)
-}
-
-func collectIDs(ctx context.Context, q db.Querier, sql string, args ...any) ([]uuid.UUID, error) {
-	rows, err := q.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
 }
 
 // catalogedAmong 是这些文件里删不掉的已归类文件（在某个条目里、条目不在修改中），按给的顺序。修改中的条目的页
@@ -302,7 +259,7 @@ func catalogedAmong(ctx context.Context, q db.Querier, fileIDs []uuid.UUID) ([]u
 	if len(fileIDs) == 0 {
 		return nil, nil
 	}
-	return collectIDs(ctx, q, `SELECT t.id FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, i)
+	return db.CollectIDs(ctx, q, `SELECT t.id FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, i)
 WHERE EXISTS (SELECT 1 FROM archive_item_files af JOIN archive_items a ON a.id = af.archive_item_id
               WHERE af.file_id = t.id AND a.source_status <> 'modifying') ORDER BY t.i`, fileIDs)
 }
@@ -326,8 +283,8 @@ func softDeleteFilesIn(ctx context.Context, q db.Querier, folderIDs []uuid.UUID,
 WHERE folder_id = ANY($1) AND deleted_at IS NULL RETURNING file_id, folder_id, file_name`, folderIDs, by))
 }
 
-// softDeleteEntries 软删除这些 folder_files（按 id）。
-func softDeleteEntries(ctx context.Context, q db.Querier, ids []uuid.UUID, by uuid.UUID) ([]deletedFile, error) {
+// softDeleteFolderFiles 软删除这些 folder_files（按 id）。
+func softDeleteFolderFiles(ctx context.Context, q db.Querier, ids []uuid.UUID, by uuid.UUID) ([]deletedFile, error) {
 	return scanDeleted(q.Query(ctx, `UPDATE folder_files SET deleted_at = now(), deleted_by = $2
 WHERE id = ANY($1) AND deleted_at IS NULL RETURNING file_id, folder_id, file_name`, ids, by))
 }
@@ -362,8 +319,8 @@ func cancelOpenReviews(ctx context.Context, q db.Querier, fileIDs []uuid.UUID) e
 	return err
 }
 
-// entryRow 是 folder_files 的一行（界面上的"文件"）。
-type entryRow struct {
+// folderFileRow 是 folder_files 的一行（界面上的"文件"）。
+type folderFileRow struct {
 	ID        uuid.UUID
 	ProjectID uuid.UUID
 	FolderID  uuid.UUID
@@ -374,8 +331,8 @@ type entryRow struct {
 	FolderPathCode string
 }
 
-// liveEntries：这些 folder_files 里未删除的（所在文件夹、项目也未删除）。
-func liveEntries(ctx context.Context, q db.Querier, ids []uuid.UUID) (map[uuid.UUID]*entryRow, error) {
+// liveFolderFiles：这些 folder_files 里未删除的（所在文件夹、项目也未删除）。
+func liveFolderFiles(ctx context.Context, q db.Querier, ids []uuid.UUID) (map[uuid.UUID]*folderFileRow, error) {
 	rows, err := q.Query(ctx, `SELECT ff.id, ff.project_id, ff.folder_id, ff.file_id, ff.file_name, ff.sort_no, f.path_code
 FROM folder_files ff JOIN folders f ON f.id = ff.folder_id JOIN projects p ON p.id = ff.project_id
 WHERE ff.id = ANY($1) AND ff.deleted_at IS NULL AND f.deleted_at IS NULL AND p.deleted_at IS NULL`, ids)
@@ -383,9 +340,9 @@ WHERE ff.id = ANY($1) AND ff.deleted_at IS NULL AND f.deleted_at IS NULL AND p.d
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[uuid.UUID]*entryRow{}
+	out := map[uuid.UUID]*folderFileRow{}
 	for rows.Next() {
-		var e entryRow
+		var e folderFileRow
 		if err := rows.Scan(&e.ID, &e.ProjectID, &e.FolderID, &e.FileID, &e.FileName, &e.SortNo, &e.FolderPathCode); err != nil {
 			return nil, err
 		}
@@ -423,15 +380,15 @@ func nextSortNo(ctx context.Context, q db.Querier, folderID uuid.UUID) (int, err
 	return n, err
 }
 
-func insertEntry(ctx context.Context, q db.Querier, id, projectID, folderID, fileID uuid.UUID, name string, sortNo int,
+func insertFolderFile(ctx context.Context, q db.Querier, id, projectID, folderID, fileID uuid.UUID, name string, sortNo int,
 	createdBy uuid.UUID) error {
 	_, err := q.Exec(ctx, `INSERT INTO folder_files (id, project_id, folder_id, file_id, file_name, sort_no, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7)`, id, projectID, folderID, fileID, name, sortNo, createdBy)
 	return err
 }
 
-// updateEntry 写回位置和名字（只改 folder_files，硬性规则 3）。
-func updateEntry(ctx context.Context, q db.Querier, id, folderID uuid.UUID, name string, sortNo int) error {
+// updateFolderFile 写回位置和名字（只改 folder_files，硬性规则 3）。
+func updateFolderFile(ctx context.Context, q db.Querier, id, folderID uuid.UUID, name string, sortNo int) error {
 	_, err := q.Exec(ctx, `UPDATE folder_files SET folder_id = $2, file_name = $3, sort_no = $4, updated_at = now() WHERE id = $1`,
 		id, folderID, name, sortNo)
 	return err

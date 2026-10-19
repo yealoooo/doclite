@@ -69,8 +69,8 @@ type ObjectKeys struct {
 	Cover    string
 }
 
-// KeysFor 生成一个版本的对象 key。扩展名按文件头识别出的格式，不用原文件的扩展名。
-func KeysFor(pathPrefix, projectCode string, fileID uuid.UUID, versionNo int, format imagehdr.Format) ObjectKeys {
+// keysFor 生成一个版本的对象 key。扩展名按文件头识别出的格式，不用原文件的扩展名。
+func keysFor(pathPrefix, projectCode string, fileID uuid.UUID, versionNo int, format imagehdr.Format) ObjectKeys {
 	base := pathPrefix + projectCode + "/" + fileID.String() + "/v" + strconv.Itoa(versionNo)
 	return ObjectKeys{Original: base + "." + format.Ext(), Cover: base + ".cover.jpg"}
 }
@@ -78,28 +78,94 @@ func KeysFor(pathPrefix, projectCode string, fileID uuid.UUID, versionNo int, fo
 // metaOriginalName 是原图对象的自定义元数据（x-amz-meta-original-name）：原始文件名，URL 编码。
 const metaOriginalName = "original-name"
 
-// PutObjects 把原图和封面（有的话）传到 target（事务外）。对象带 `Cache-Control: private, max-age=<预签名有效期>,
-// immutable`，原图的元数据里存原始文件名。封面传失败时，已经传上去的原图记成孤儿对象。
-func (s *Service) PutObjects(ctx context.Context, target *storage.Target, keys ObjectKeys, u *Upload) error {
+// Staged 是已经传到存储、还没入库的一个版本（上传是 v1，重扫是当前版本 + 1）。入库没成功时调 [Staged.Orphans]。
+type Staged struct {
+	fileID    uuid.UUID
+	versionNo int
+	target    *storage.Target
+	keys      ObjectKeys
+	upload    *Upload
+}
+
+// Stage 把原图和封面（有的话）传到默认存储（事务外），key 按硬性规则 7。对象带 `Cache-Control: private,
+// max-age=<预签名有效期>, immutable`，原图的元数据里存原始文件名。封面传失败时，已经传上去的原图记成孤儿对象。
+func (s *Service) Stage(ctx context.Context, projectID, fileID uuid.UUID, versionNo int, u *Upload) (*Staged, error) {
+	target, err := s.storage.DefaultTarget(ctx)
+	if err != nil {
+		return nil, err
+	}
+	code, err := ProjectCode(ctx, s.pool, projectID)
+	if err != nil {
+		return nil, err
+	}
+	st := &Staged{fileID: fileID, versionNo: versionNo, target: target, upload: u,
+		keys: keysFor(target.PathPrefix, code, fileID, versionNo, u.Info.Format)}
 	cc := fmt.Sprintf("private, max-age=%d, immutable", int64(s3.PresignExpiry(target.URLExpireHours).Seconds()))
-	err := target.Client.Put(ctx, keys.Original, u.Original(), s3.PutOptions{
+	err = target.Client.Put(ctx, st.keys.Original, u.Original(), s3.PutOptions{
 		ContentType: u.Info.Format.MIME(), CacheControl: cc,
 		Metadata: map[string]string{metaOriginalName: url.PathEscape(u.FileName)},
 	})
 	if err != nil {
-		return fmt.Errorf("原图传到存储失败：%w", err)
+		return nil, fmt.Errorf("原图传到存储失败：%w", err)
 	}
 	if u.Cover != nil {
-		err := target.Client.Put(ctx, keys.Cover, bytes.NewReader(u.Cover), s3.PutOptions{ContentType: "image/jpeg", CacheControl: cc})
+		err := target.Client.Put(ctx, st.keys.Cover, bytes.NewReader(u.Cover), s3.PutOptions{ContentType: "image/jpeg", CacheControl: cc})
 		if err != nil {
-			orphans(ctx, target, keys.Original)
-			return fmt.Errorf("封面传到存储失败：%w", err)
+			orphans(ctx, target, st.keys.Original)
+			return nil, fmt.Errorf("封面传到存储失败：%w", err)
 		}
 	}
-	return nil
+	return st, nil
 }
 
-// orphans 记下传上去但没有入库的对象（requirements 5.6：只记警告）。
+// Lock 在入库的事务里拿存储配置行（仍是 active 的默认）和内容锁（requirements 3.6：在文件树锁、文件夹行或 files 行
+// 之后），之后在锁内复查重、插入快照。
+func (s *Service) Lock(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, st *Staged) error {
+	if err := s.storage.LockForSnapshot(ctx, tx, st.target.ProfileID); err != nil {
+		return err
+	}
+	return project.LockContent(ctx, tx, projectID, st.upload.SHA256)
+}
+
+// Snapshot 是这个版本要插入的快照（snapshotType 是 original 或 rescan）。
+func (st *Staged) Snapshot(snapshotType string, createdBy uuid.UUID) *Snapshot {
+	u := st.upload
+	var cover *string
+	if u.Cover != nil {
+		cover = &st.keys.Cover
+	}
+	w, h := u.Info.Width, u.Info.Height
+	snap := &Snapshot{ID: db.NewID(), FileID: st.fileID, VersionNo: st.versionNo, SnapshotType: snapshotType,
+		StorageProfileID: st.target.ProfileID, StorageKey: st.keys.Original, CoverKey: cover, ContentSHA256: u.SHA256,
+		FileSize: u.Size, MimeType: u.Info.Format.MIME(), UploadName: &u.FileName, WidthPx: &w, HeightPx: &h,
+		CreatedBy: &createdBy}
+	if u.Info.DPI > 0 {
+		d := u.Info.DPI
+		snap.DPI = &d
+	}
+	if u.Info.ColorMode != "" {
+		c := string(u.Info.ColorMode)
+		snap.ColorMode = &c
+	}
+	return snap
+}
+
+// Response 是入库的响应里和快照有关的字段（文件名、位置由调用方填）。
+func (st *Staged) Response(snap *Snapshot) IngestResponse {
+	return IngestResponse{FileID: st.fileID, SnapshotID: snap.ID, VersionNo: st.versionNo, WidthPx: snap.WidthPx,
+		HeightPx: snap.HeightPx, DPI: snap.DPI, ColorMode: snap.ColorMode, FileSize: snap.FileSize,
+		HasCover: snap.CoverKey != nil, Warnings: st.upload.Warnings()}
+}
+
+// Orphans 记下传上去但没有入库的对象（requirements 5.6：只记警告）。
+func (st *Staged) Orphans(ctx context.Context) {
+	keys := []string{st.keys.Original}
+	if st.upload.Cover != nil {
+		keys = append(keys, st.keys.Cover)
+	}
+	orphans(ctx, st.target, keys...)
+}
+
 func orphans(ctx context.Context, target *storage.Target, keys ...string) {
 	httpx.LoggerFrom(ctx).Warn("上传的对象没有入库，成了孤儿对象", "storage_profile_id", target.ProfileID, "keys", keys)
 }
@@ -113,24 +179,10 @@ func (s *Service) Ingest(ctx context.Context, projectID, folderID, userID uuid.U
 	if err := s.folders.CheckUpload(ctx, folderID); err != nil {
 		return nil, false, err
 	}
-	target, err := s.storage.DefaultTarget(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-	code, err := ProjectCode(ctx, s.pool, projectID)
-	if err != nil {
-		return nil, false, err
-	}
 	fileID := db.NewID()
-	keys := KeysFor(target.PathPrefix, code, fileID, 1, u.Info.Format)
-	if err := s.PutObjects(ctx, target, keys, u); err != nil {
+	st, err := s.Stage(ctx, projectID, fileID, 1, u)
+	if err != nil {
 		return nil, false, err
-	}
-	written := []string{keys.Original}
-	var coverKey *string
-	if u.Cover != nil {
-		coverKey = &keys.Cover
-		written = append(written, keys.Cover)
 	}
 
 	var out *IngestResponse
@@ -143,7 +195,7 @@ func (s *Service) Ingest(ctx context.Context, projectID, folderID, userID uuid.U
 		if err != nil {
 			// 文件夹刚被归档（封存）：ClaimSlot 已经锁住了文件夹行，锁内先看是不是断网重试（同一文件夹里 upload_name 和
 			// sha 都相同 → 200 返回已有文件），不是才报 folder_archived。重叠的重试请求在文件夹刚归档时仍得到 200。
-			if e, ok := httpx.AsError(err); ok && e.Code == CodeFolderArchived {
+			if e, ok := httpx.AsError(err); ok && e.Code == httpx.CodeFolderArchived {
 				if r, rerr := s.retried(ctx, tx, folderID, u); rerr != nil || r != nil {
 					out = r
 					return rerr
@@ -151,23 +203,14 @@ func (s *Service) Ingest(ctx context.Context, projectID, folderID, userID uuid.U
 			}
 			return err
 		}
-		if err := s.storage.LockForSnapshot(ctx, tx, target.ProfileID); err != nil {
-			return err
-		}
-		if err := LockContent(ctx, tx, projectID, u.SHA256); err != nil {
+		if err := s.Lock(ctx, tx, projectID, st); err != nil {
 			return err
 		}
 		if r, err := s.precheck(ctx, tx, projectID, folderID, u); r != nil || err != nil {
 			out = r
 			return err
 		}
-		snap := &NewSnapshot{ID: db.NewID(), FileID: fileID, VersionNo: 1, SnapshotType: SnapshotOriginal,
-			StorageProfileID: target.ProfileID, StorageKey: keys.Original, CoverKey: coverKey, SHA256: u.SHA256,
-			FileSize: u.Size, MimeType: u.Info.Format.MIME(), UploadName: u.FileName, Width: u.Info.Width,
-			Height: u.Info.Height, DPI: dpiOf(u.Info), ColorMode: colorOf(u.Info), CreatedBy: userID}
-		if err := insertFile(ctx, tx, fileID); err != nil {
-			return err
-		}
+		snap := st.Snapshot(SnapshotOriginal, userID)
 		if err := InsertSnapshot(ctx, tx, snap); err != nil {
 			return err
 		}
@@ -180,37 +223,20 @@ func (s *Service) Ingest(ctx context.Context, projectID, folderID, userID uuid.U
 				"upload_name": u.FileName}}); err != nil {
 			return err
 		}
-		w, h := u.Info.Width, u.Info.Height
-		out = &IngestResponse{FileID: fileID, SnapshotID: snap.ID, FolderFileID: ffID, FileName: slot.FileName,
-			Renamed: slot.Renamed, SortNo: slot.SortNo, VersionNo: 1, WidthPx: &w, HeightPx: &h, DPI: snap.DPI,
-			ColorMode: snap.ColorMode, FileSize: u.Size, HasCover: u.Cover != nil, Warnings: u.Warnings()}
+		r := st.Response(snap)
+		r.FolderFileID, r.FileName, r.Renamed, r.SortNo = ffID, slot.FileName, slot.Renamed, slot.SortNo
+		out = &r
 		created = true
 		ev.Add(events.FilesChanged(projectID, []uuid.UUID{folderID}, []uuid.UUID{fileID}))
 		return nil
 	})
 	if !created {
-		orphans(ctx, target, written...)
+		st.Orphans(ctx)
 	}
 	if err != nil {
 		return nil, false, err
 	}
 	return out, created, nil
-}
-
-func dpiOf(info imagehdr.Info) *int {
-	if info.DPI <= 0 {
-		return nil
-	}
-	d := info.DPI
-	return &d
-}
-
-func colorOf(info imagehdr.Info) *string {
-	if info.ColorMode == "" {
-		return nil
-	}
-	c := string(info.ColorMode)
-	return &c
 }
 
 // precheck 按顺序查重（预判和锁内复查都用它）：先看断网重试（同一文件夹里 upload_name 和 sha 都相同 → 返回已有文件），
@@ -246,7 +272,7 @@ func (s *Service) FindDuplicate(ctx context.Context, q db.Querier, projectID uui
 	if err != nil || c == nil {
 		return err
 	}
-	path, err := s.folders.Path(ctx, q, c.FolderID)
+	path, err := FolderPath(ctx, q, c.FolderID)
 	if err != nil {
 		return err
 	}

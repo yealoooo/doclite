@@ -74,24 +74,3 @@ func TestPlanPages(t *testing.T) {
 		t.Errorf("页号不连续：%+v", p)
 	}
 }
-
-func TestLongestIncreasing(t *testing.T) {
-	for _, tc := range []struct {
-		xs   []int
-		want int
-	}{
-		{nil, 0}, {[]int{5}, 1}, {[]int{1, 2, 3}, 3}, {[]int{3, 2, 1}, 1},
-		{[]int{2, 6, 3, 4, 1, 5}, 4}, {[]int{10, 1, 2, 11, 3, 12, 4}, 4},
-	} {
-		in := longestIncreasing(tc.xs)
-		var seq []int
-		for i, ok := range in {
-			if ok {
-				seq = append(seq, tc.xs[i])
-			}
-		}
-		if len(seq) != tc.want || !slices.IsSorted(seq) {
-			t.Errorf("%v：%v", tc.xs, seq)
-		}
-	}
-}

@@ -92,21 +92,6 @@ func (e *Error) PageProblem() bool {
 	return false
 }
 
-// KindOf 返回 err 的类别；不是 *Error 时返回空串。
-func KindOf(err error) Kind {
-	var e *Error
-	if errors.As(err, &e) {
-		return e.Kind
-	}
-	return ""
-}
-
-// IsRetryable：err 是可以重试的 *Error。
-func IsRetryable(err error) bool {
-	var e *Error
-	return errors.As(err, &e) && e.Retryable()
-}
-
 // ---------------------------------------------------------------------------
 // 包内的错误：处理过程中用这几种包一层，最后由 classify 定类别、补上是哪一页。
 

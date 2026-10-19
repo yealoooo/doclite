@@ -10,6 +10,7 @@ import (
 	"doclite/server/internal/folder"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/xslices"
 	"doclite/server/internal/project"
 )
 
@@ -41,8 +42,8 @@ func (s *Service) Assign(ctx context.Context, userID, projectID uuid.UUID, in As
 	if byFolder == (in.FileIDs != nil) {
 		return nil, httpx.Invalid("folder_id 和 file_ids 要给一个，而且只能给一个")
 	}
-	if !byFolder && (len(in.FileIDs) == 0 || len(in.FileIDs) > MaxBatchFiles) {
-		return nil, httpx.Invalid("按选中的文件分配一次 1–%d 个", MaxBatchFiles)
+	if !byFolder && (len(in.FileIDs) == 0 || len(in.FileIDs) > httpx.MaxBatchIDs) {
+		return nil, httpx.Invalid("按选中的文件分配一次 1–%d 个", httpx.MaxBatchIDs)
 	}
 	reviewer, err := s.eligibility(ctx, projectID, *in.ReviewerID)
 	if err != nil {
@@ -71,7 +72,7 @@ func (s *Service) Assign(ctx context.Context, userID, projectID uuid.UUID, in As
 				return httpx.Invalid("这个文件夹（含子文件夹）待分配的文件超过 %d 个，请选子文件夹分别分配", MaxFolderFiles)
 			}
 		} else {
-			candidates = dedup(in.FileIDs)
+			candidates = xslices.Unique(in.FileIDs)
 		}
 		locked, err := s.lockFilesHeld(ctx, tx, projectID, candidates)
 		if err != nil {
@@ -79,7 +80,7 @@ func (s *Service) Assign(ctx context.Context, userID, projectID uuid.UUID, in As
 		}
 		if !byFolder {
 			if missing := locked.missing(candidates); len(missing) > 0 {
-				return notFoundIDs(missing)
+				return notFoundFiles(missing)
 			}
 		}
 		var picked []*fileState
@@ -193,7 +194,7 @@ func (s *Service) ReassignOne(ctx context.Context, userID, projectID, assignment
 			return err
 		}
 		if status != statusOpen || f.Status != folder.ReviewPending || f.Open == nil || f.Open.ID != assignmentID {
-			return invalidState("这一行分配已经不是待审核的了（可能刚被审完、改派或撤回），请刷新")
+			return httpx.InvalidState("这一行分配已经不是待审核的了（可能刚被审完、改派或撤回），请刷新")
 		}
 		out = &ReassignOneResult{AssignmentID: assignmentID, FileID: fileID, FolderID: f.FolderID, ReviewerID: to.ID,
 			FromReviewerID: from}
@@ -267,8 +268,8 @@ func (s *Service) ReassignMany(ctx context.Context, userID, projectID uuid.UUID,
 		return nil, httpx.Invalid("file_ids 和 from_reviewer_id + folder_id 只能给一种")
 	case bySubtree && (in.FromReviewerID == nil || in.FolderID == nil):
 		return nil, httpx.Invalid("按子树改派要同时给 from_reviewer_id 和 folder_id")
-	case !bySubtree && (len(in.FileIDs) == 0 || len(in.FileIDs) > MaxBatchFiles):
-		return nil, httpx.Invalid("按选中的文件改派一次 1–%d 个", MaxBatchFiles)
+	case !bySubtree && (len(in.FileIDs) == 0 || len(in.FileIDs) > httpx.MaxBatchIDs):
+		return nil, httpx.Invalid("按选中的文件改派一次 1–%d 个", httpx.MaxBatchIDs)
 	case bySubtree && *in.FromReviewerID == *in.ToReviewerID:
 		return nil, httpx.Invalid("原审核人和新审核人是同一个人")
 	}
@@ -298,7 +299,7 @@ func (s *Service) ReassignMany(ctx context.Context, userID, projectID uuid.UUID,
 				return httpx.Invalid("这个人在这个文件夹（含子文件夹）下的待审超过 %d 个，请选子文件夹分别改派", MaxFolderFiles)
 			}
 		} else {
-			candidates = dedup(in.FileIDs)
+			candidates = xslices.Unique(in.FileIDs)
 		}
 		locked, err := s.lockFilesHeld(ctx, tx, projectID, candidates)
 		if err != nil {
@@ -306,7 +307,7 @@ func (s *Service) ReassignMany(ctx context.Context, userID, projectID uuid.UUID,
 		}
 		if !bySubtree {
 			if missing := locked.missing(candidates); len(missing) > 0 {
-				return notFoundIDs(missing)
+				return notFoundFiles(missing)
 			}
 		}
 		var picked []*fileState

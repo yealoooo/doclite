@@ -149,7 +149,7 @@ func (s *Service) Summary(ctx context.Context, projectID uuid.UUID, folderID *uu
 	if err != nil {
 		return nil, err
 	}
-	key := summaryKey{project: projectID, requireLocked: st.requireLockedItem, version: version}
+	key := summaryKey{project: projectID, requireLocked: st.RequireLockedItem, version: version}
 	if folderID != nil {
 		key.folder = *folderID
 	}
@@ -159,7 +159,7 @@ func (s *Service) Summary(ctx context.Context, projectID uuid.UUID, folderID *uu
 // summary 是不经缓存的看板。
 func (s *Service) summary(ctx context.Context, projectID uuid.UUID, folderID *uuid.UUID, st *settings) (*Summary, error) {
 	var out *Summary
-	err := readSnapshot(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		f, err := summaryFolder(ctx, tx, projectID, folderID)
 		if err != nil {
 			return err
@@ -179,7 +179,7 @@ func (s *Service) summary(ctx context.Context, projectID uuid.UUID, folderID *uu
 		if err != nil {
 			return err
 		}
-		out = &Summary{FolderID: f.ID, FolderName: f.Name, ParentID: f.ParentID, RequireLockedItem: st.requireLockedItem,
+		out = &Summary{FolderID: f.ID, FolderName: f.Name, ParentID: f.ParentID, RequireLockedItem: st.RequireLockedItem,
 			Children: make([]SummaryChild, len(children))}
 		byPath := make(map[string]*SummaryCounts, len(children))
 		for i, c := range children {
@@ -198,7 +198,7 @@ func (s *Service) summary(ctx context.Context, projectID uuid.UUID, folderID *uu
 				c.add(b.ReviewStatus, b.ItemStatus, b.N)
 			}
 		}
-		items, err := summaryItemBuckets(ctx, tx, projectID, f.PathCode, st.requireLockedItem)
+		items, err := summaryItemBuckets(ctx, tx, projectID, f.PathCode, st.RequireLockedItem)
 		if err != nil {
 			return err
 		}

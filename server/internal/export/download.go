@@ -13,6 +13,7 @@ import (
 	"doclite/server/internal/audit"
 	"doclite/server/internal/file"
 	"doclite/server/internal/platform/db"
+	"doclite/server/internal/platform/httpx"
 )
 
 // 下载（requirements 5.11"下载和保留"，用户决定 Q5）：返回 JSON（不用 302：壳经代理会把 zip 转一遍），url 是按天取整、
@@ -49,14 +50,14 @@ func (s *Service) Download(ctx context.Context, userID, id uuid.UUID) (*Download
 		return nil, errTaskNotFound
 	}
 	if t.Status != StatusDone {
-		return nil, conflictState("任务%s，没有可以下载的导出物", statusLabel(t.Status))
+		return nil, httpx.InvalidState(fmt.Sprintf("任务%s，没有可以下载的导出物", statusLabel(t.Status)))
 	}
 	if t.Expired || t.OutputKey == nil || t.StorageProfileID == nil {
 		when := ""
 		if t.ExpiresAt != nil {
 			when = fmt.Sprintf("（%s 到期）", t.ExpiresAt.In(exportZone).Format("2006-01-02 15:04"))
 		}
-		return nil, conflictState("导出物已过期删除%s，任务和明细还在，可以按原来的范围重新导出", when)
+		return nil, httpx.InvalidState(fmt.Sprintf("导出物已过期删除%s，任务和明细还在，可以按原来的范围重新导出", when))
 	}
 	code, err := file.ProjectCode(ctx, s.pool, t.ProjectID)
 	if err != nil {

@@ -19,7 +19,7 @@ const segmentLen = 6 // 5 位数字 + 点
 // childPath 拼子编码；n 超过 99999 时 409 tree_full。
 func childPath(parent string, n int) (string, error) {
 	if n < 1 || n > MaxChildNo {
-		return "", httpx.Conflict("tree_full", fmt.Sprintf("这一层的子文件夹编号已用完（每个文件夹下最多 %d 个，删除的也占编号）", MaxChildNo))
+		return "", httpx.Conflict(httpx.CodeTreeFull, fmt.Sprintf("这一层的子文件夹编号已用完（每个文件夹下最多 %d 个，删除的也占编号）", MaxChildNo))
 	}
 	return fmt.Sprintf("%s%05d.", parent, n), nil
 }

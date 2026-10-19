@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"doclite/server/internal/platform/db"
-	"doclite/server/internal/project"
 )
 
 // 给其他模块在自己的事务里调用的函数（文件夹的整理、以后的审核、归类、导出）。
@@ -111,23 +111,15 @@ func LockFiles(ctx context.Context, q db.Querier, ids []uuid.UUID) error {
 	return rows.Err()
 }
 
-// LockContent 在调用方的事务里拿 (项目, sha256) 的内容锁（事务级咨询锁，提交或回滚时释放），拿到之后在锁内再查一次重：
-// 同内容同时传进同一项目的不同文件夹时，只有一个能入库（requirements 3.6）。它是事务里最后拿的锁（在存储配置行之后），
-// 之后只有插入。唯一的例外：复制（folder.CopyEntry）在内容锁里重读源快照，发现
-// 它刚被存储迁移改到了别的存储时，在内容锁之后再对那个存储配置行拿 FOR KEY SHARE（和插入快照时外键检查拿的锁一样）。
-// 不会成环：对存储配置行拿冲突锁（FOR UPDATE）的只有设默认、停用、删除三处，它们都不拿、也不等内容锁、树锁、files 行、
-// folders 行；其余拿存储配置行的都是 FOR KEY SHARE / FOR NO KEY UPDATE，和 FOR KEY SHARE 不冲突。
-// 实现在 project.LockContent（存储迁移改快照位置时也拿这把锁，storage 不能 import 这个包）。
-func LockContent(ctx context.Context, q db.Querier, projectID uuid.UUID, sha []byte) error {
-	return project.LockContent(ctx, q, projectID, sha)
-}
-
 // Snapshot 是 file_snapshots 的一行。
 type Snapshot struct {
-	ID               uuid.UUID
-	FileID           uuid.UUID
-	VersionNo        int
-	SnapshotType     string
+	ID           uuid.UUID
+	FileID       uuid.UUID
+	VersionNo    int
+	SnapshotType string
+	// ParentSnapshotID、EditOps：复制时记来源快照（edit_ops 是 JSON），其他为 nil。
+	ParentSnapshotID *uuid.UUID
+	EditOps          []byte
 	StorageProfileID uuid.UUID
 	StorageKey       string
 	// CoverKey 为 nil 表示没有封面。
@@ -144,12 +136,12 @@ type Snapshot struct {
 	CreatedAt     time.Time
 }
 
-const snapshotColumns = `s.id, s.file_id, s.version_no, s.snapshot_type, s.storage_profile_id, s.storage_key, s.cover_key,
-  s.content_sha256, s.file_size, s.mime_type, s.upload_name, s.width_px, s.height_px, s.dpi, s.color_mode, s.created_by, s.created_at`
+const snapshotColumns = `s.id, s.file_id, s.version_no, s.snapshot_type, s.parent_snapshot_id, s.edit_ops,
+  s.storage_profile_id, s.storage_key, s.cover_key, s.content_sha256, s.file_size, s.mime_type, s.upload_name, s.width_px, s.height_px, s.dpi, s.color_mode, s.created_by, s.created_at`
 
-func scanSnapshot(sc interface{ Scan(...any) error }, extra ...any) (*Snapshot, error) {
+func scanSnapshot(sc pgx.Row, extra ...any) (*Snapshot, error) {
 	var s Snapshot
-	dest := []any{&s.ID, &s.FileID, &s.VersionNo, &s.SnapshotType, &s.StorageProfileID, &s.StorageKey, &s.CoverKey,
+	dest := []any{&s.ID, &s.FileID, &s.VersionNo, &s.SnapshotType, &s.ParentSnapshotID, &s.EditOps, &s.StorageProfileID, &s.StorageKey, &s.CoverKey,
 		&s.ContentSHA256, &s.FileSize, &s.MimeType, &s.UploadName, &s.WidthPx, &s.HeightPx, &s.DPI, &s.ColorMode,
 		&s.CreatedBy, &s.CreatedAt}
 	if err := sc.Scan(append(dest, extra...)...); err != nil {
@@ -194,22 +186,49 @@ CROSS JOIN LATERAL (SELECT * FROM file_snapshots x WHERE x.file_id = f.id ORDER 
 // 对象 key、封面 key、sha、大小和规格，不复制字节；parent_snapshot_id 指向源快照，edit_ops 记来源，upload_name 为空。
 // 源快照所在存储的检查（不是 disabled）由调用方先做（storage.Service.LockForReuse）。返回新快照的 id。
 func InsertCopy(ctx context.Context, q db.Querier, newFileID uuid.UUID, src *Snapshot, createdBy uuid.UUID) (uuid.UUID, error) {
-	if _, err := q.Exec(ctx, `INSERT INTO files (id) VALUES ($1)`, newFileID); err != nil {
-		return uuid.Nil, err
-	}
-	id := db.NewID()
 	ops, err := json.Marshal(map[string]any{"source_file_id": src.FileID, "source_snapshot_id": src.ID})
 	if err != nil {
 		return uuid.Nil, err
 	}
-	_, err = q.Exec(ctx, `INSERT INTO file_snapshots (id, file_id, version_no, snapshot_type, parent_snapshot_id, edit_ops,
-  storage_profile_id, storage_key, cover_key, content_sha256, file_size, mime_type, upload_name,
-  width_px, height_px, dpi, color_mode, created_by)
-VALUES ($1, $2, 1, 'copy', $3, $4::jsonb, $5, $6, $7, $8, $9, $10, NULL, $11, $12, $13, $14, $15)`,
-		id, newFileID, src.ID, string(ops), src.StorageProfileID, src.StorageKey, src.CoverKey, src.ContentSHA256,
-		src.FileSize, src.MimeType, src.WidthPx, src.HeightPx, src.DPI, src.ColorMode, createdBy)
-	if err != nil {
-		return uuid.Nil, err
+	snap := *src
+	snap.ID, snap.FileID, snap.VersionNo, snap.SnapshotType = db.NewID(), newFileID, 1, SnapshotCopy
+	snap.ParentSnapshotID, snap.EditOps, snap.UploadName, snap.CreatedBy = &src.ID, ops, nil, &createdBy
+	return snap.ID, InsertSnapshot(ctx, q, &snap)
+}
+
+// FolderPaths 是一批文件夹从根文件夹起用 / 连接的路径（按 id；日志 detail 的 folder_path、界面显示的路径）。
+// 跨模块的只读查询（folders 属于 internal/folder），文件夹、审核、归类都用。
+func FolderPaths(ctx context.Context, q db.Querier, ids []uuid.UUID) (map[uuid.UUID]string, error) {
+	out := map[uuid.UUID]string{}
+	if len(ids) == 0 {
+		return out, nil
 	}
-	return id, nil
+	rows, err := q.Query(ctx, `SELECT f.id, string_agg(a.folder_name, '/' ORDER BY g.n)
+FROM folders f
+CROSS JOIN LATERAL generate_series(6, length(f.path_code), 6) AS g(n)
+JOIN folders a ON a.project_id = f.project_id AND a.path_code = left(f.path_code, g.n)
+WHERE f.id = ANY($1)
+GROUP BY f.id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var p string
+		if err := rows.Scan(&id, &p); err != nil {
+			return nil, err
+		}
+		out[id] = p
+	}
+	return out, rows.Err()
+}
+
+// FolderPath 是一个文件夹的路径（见 [FolderPaths]）。
+func FolderPath(ctx context.Context, q db.Querier, folderID uuid.UUID) (string, error) {
+	paths, err := FolderPaths(ctx, q, []uuid.UUID{folderID})
+	if err != nil {
+		return "", err
+	}
+	return paths[folderID], nil
 }

@@ -9,6 +9,7 @@ package audit
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -74,8 +75,9 @@ type LogList struct {
 
 // ParseFilter 读查询参数：from、to（RFC 3339）、operator_id、project_id（UUID）、target_type、action、cursor、limit
 // （默认 50，1–200）。不合法 400 invalid_input。
-func ParseFilter(get func(string) string) (Filter, error) {
-	f := Filter{Limit: DefaultLimit}
+func ParseFilter(r *http.Request) (Filter, error) {
+	var f Filter
+	get := r.URL.Query().Get
 	parseTime := func(name string) (*time.Time, error) {
 		v := strings.TrimSpace(get(name))
 		if v == "" {
@@ -87,17 +89,6 @@ func ParseFilter(get func(string) string) (Filter, error) {
 		}
 		return &t, nil
 	}
-	parseID := func(name string) (*uuid.UUID, error) {
-		v := strings.TrimSpace(get(name))
-		if v == "" {
-			return nil, nil
-		}
-		id, err := uuid.Parse(v)
-		if err != nil {
-			return nil, httpx.Invalid("%s 不是合法的 UUID", name)
-		}
-		return &id, nil
-	}
 	var err error
 	if f.From, err = parseTime("from"); err != nil {
 		return f, err
@@ -105,10 +96,10 @@ func ParseFilter(get func(string) string) (Filter, error) {
 	if f.To, err = parseTime("to"); err != nil {
 		return f, err
 	}
-	if f.OperatorID, err = parseID("operator_id"); err != nil {
+	if f.OperatorID, err = httpx.QueryUUID(r, "operator_id"); err != nil {
 		return f, err
 	}
-	if f.ProjectID, err = parseID("project_id"); err != nil {
+	if f.ProjectID, err = httpx.QueryUUID(r, "project_id"); err != nil {
 		return f, err
 	}
 	for _, p := range []struct {
@@ -128,14 +119,8 @@ func ParseFilter(get func(string) string) (Filter, error) {
 		}
 		f.Cursor = n
 	}
-	if v := strings.TrimSpace(get("limit")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > MaxLimit {
-			return f, httpx.Invalid("limit 要在 1 到 %d 之间", MaxLimit)
-		}
-		f.Limit = n
-	}
-	return f, nil
+	f.Limit, err = httpx.QueryLimit(r, DefaultLimit, MaxLimit)
+	return f, err
 }
 
 // List 查一页审计记录，新的在前。

@@ -5,7 +5,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
+	"doclite/server/internal/file"
 	"doclite/server/internal/platform/db"
 )
 
@@ -38,7 +40,7 @@ const itemColumns = `i.id, i.project_id, i.category_id, i.item_no, i.archive_no,
   i.row_version, i.created_by, i.created_at, i.updated_by, i.updated_at, i.deleted_at IS NOT NULL, c.path_code,
   i.source_folder_id, i.source_status`
 
-func scanItemRow(sc interface{ Scan(...any) error }) (*itemRow, error) {
+func scanItemRow(sc pgx.Row) (*itemRow, error) {
 	var r itemRow
 	if err := sc.Scan(&r.ID, &r.ProjectID, &r.CategoryID, &r.ItemNo, &r.ArchiveNo, &r.Title, &r.ExtraFields, &r.Status,
 		&r.RowVersion, &r.CreatedBy, &r.CreatedAt, &r.UpdatedBy, &r.UpdatedAt, &r.Deleted, &r.CategoryPath,
@@ -234,7 +236,7 @@ CROSS JOIN LATERAL (
   SELECT max(a.created_at) AS locked_at FROM audit_logs a
   WHERE i.status = 'locked' AND a.target_type = 'archive_item' AND a.target_id = i.id AND a.action = 'lock') la`
 
-func scanSummary(sc interface{ Scan(...any) error }) (ItemSummary, error) {
+func scanSummary(sc pgx.Row) (ItemSummary, error) {
 	var s ItemSummary
 	err := sc.Scan(&s.ID, &s.CategoryID, &s.ItemNo, &s.ArchiveNo, &s.Title, &s.Status, &s.RowVersion,
 		&s.PageCount, &s.PageCounts.Unassigned, &s.PageCounts.Pending, &s.PageCounts.Approved, &s.PageCounts.Rejected,
@@ -252,7 +254,7 @@ func fillSourcePaths(ctx context.Context, q db.Querier, items []ItemSummary) err
 	for i, it := range items {
 		ids[i] = it.SourceFolderID
 	}
-	paths, err := folderPaths(ctx, q, ids)
+	paths, err := file.FolderPaths(ctx, q, ids)
 	if err != nil {
 		return err
 	}
@@ -364,7 +366,7 @@ ORDER BY af.page_no`, itemID)
 	for id := range folderIDs {
 		ids = append(ids, id)
 	}
-	paths, err := folderPaths(ctx, q, ids)
+	paths, err := file.FolderPaths(ctx, q, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -372,30 +374,6 @@ ORDER BY af.page_no`, itemID)
 		out[i].FolderPath = paths[out[i].FolderID]
 	}
 	return out, nil
-}
-
-// folderPaths 是这些文件夹从项目根文件夹起用 `/` 连接的路径（跨模块的读）。
-func folderPaths(ctx context.Context, q db.Querier, ids []uuid.UUID) (map[uuid.UUID]string, error) {
-	rows, err := q.Query(ctx, `SELECT f.id, string_agg(a.folder_name, '/' ORDER BY a.path_code)
-FROM folders f
-CROSS JOIN LATERAL generate_series(1, length(f.path_code) / 6) AS k(n)
-JOIN folders a ON a.project_id = f.project_id AND a.path_code = left(f.path_code, 6 * k.n)
-WHERE f.id = ANY($1)
-GROUP BY f.id`, ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[uuid.UUID]string{}
-	for rows.Next() {
-		var id uuid.UUID
-		var p string
-		if err := rows.Scan(&id, &p); err != nil {
-			return nil, err
-		}
-		out[id] = p
-	}
-	return out, rows.Err()
 }
 
 // pageStats 是锁定前置条件要看的页：页数、没审核通过的页数和其中最前的页号（审核状态按这一刻读，不锁文件）。

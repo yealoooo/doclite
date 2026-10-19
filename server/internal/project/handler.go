@@ -30,17 +30,11 @@ import (
 //	PUT    /api/projects/{pid}/access  {user_ids, role_ids} → 200 Access（整体替换）
 type Handler struct {
 	svc    *Service
-	stream StreamOptions
+	stream events.StreamOptions
 }
 
-// StreamOptions 是实时通道的间隔（0 用默认的 15 秒保活、60 秒复核；测试里调短）。
-type StreamOptions struct {
-	KeepAlive    time.Duration
-	RecheckEvery time.Duration
-}
-
-// NewHandler 建 Handler。
-func NewHandler(svc *Service, stream StreamOptions) *Handler {
+// NewHandler 建 Handler。stream 只用 KeepAlive、RecheckEvery（0 用默认的 15 秒保活、60 秒复核；测试里调短）。
+func NewHandler(svc *Service, stream events.StreamOptions) *Handler {
 	return &Handler{svc: svc, stream: stream}
 }
 
@@ -74,13 +68,10 @@ func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) error {
 	pid := auth.ProjectID(r.Context())
 	p := auth.Current(r.Context())
 	token := auth.SessionToken(r)
-	events.Serve(w, r, h.svc.events, pid, events.StreamOptions{
-		KeepAlive:    h.stream.KeepAlive,
-		RecheckEvery: h.stream.RecheckEvery,
-		Recheck:      func(ctx context.Context) error { return h.svc.recheckStream(ctx, token, pid) },
-		Until:        p.SessionExpiresAt,
-		Log:          httpx.LoggerFrom(r.Context()),
-	})
+	opts := h.stream
+	opts.Recheck = func(ctx context.Context) error { return h.svc.auth.RecheckProject(ctx, token, pid) }
+	opts.Until, opts.Log = p.SessionExpiresAt, httpx.LoggerFrom(r.Context())
+	events.Serve(w, r, h.svc.events, pid, opts)
 	return nil
 }
 
@@ -111,20 +102,12 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-type createRequest struct {
-	ProjectCode string  `json:"project_code"`
-	ProjectName string  `json:"project_name"`
-	Description *string `json:"description"`
-}
-
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) error {
-	var req createRequest
-	if err := httpx.ReadJSON(r, &req); err != nil {
+	var in CreateInput
+	if err := httpx.ReadJSON(r, &in); err != nil {
 		return err
 	}
-	d, err := h.svc.Create(r.Context(), auth.Current(r.Context()).UserID, CreateInput{
-		ProjectCode: req.ProjectCode, ProjectName: req.ProjectName, Description: req.Description,
-	})
+	d, err := h.svc.Create(r.Context(), auth.Current(r.Context()).UserID, in)
 	if err != nil {
 		return err
 	}

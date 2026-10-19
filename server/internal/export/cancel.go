@@ -2,12 +2,14 @@ package export
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"doclite/server/internal/audit"
 	"doclite/server/internal/platform/events"
+	"doclite/server/internal/platform/httpx"
 )
 
 // 取消（requirements 5.11"取消"，总控决定）：
@@ -35,9 +37,9 @@ func (s *Service) Cancel(ctx context.Context, userID, id uuid.UUID) (*Task, erro
 		}
 		switch {
 		case taskStatus == StatusDone || taskStatus == StatusFailed || taskStatus == StatusCanceled:
-			return conflictState("任务%s，不能取消", statusLabel(taskStatus))
+			return httpx.InvalidState(fmt.Sprintf("任务%s，不能取消", statusLabel(taskStatus)))
 		case jobStatus == StatusCanceled:
-			return conflictState("任务%s，不能取消", statusLabel(StatusCanceled))
+			return httpx.InvalidState(fmt.Sprintf("任务%s，不能取消", statusLabel(StatusCanceled)))
 		case jobStatus == StatusQueued:
 			if _, err := tx.Exec(ctx, `UPDATE background_jobs SET status = 'canceled', finished_at = now() WHERE id = $1`, *jobID); err != nil {
 				return err
@@ -45,7 +47,7 @@ func (s *Service) Cancel(ctx context.Context, userID, id uuid.UUID) (*Task, erro
 		case jobStatus == StatusRunning:
 			interrupt = jobID
 		default:
-			return conflictState("任务是“%s”而后台任务是“%s”，状态对不上，不能取消", statusLabel(taskStatus), statusLabel(jobStatus))
+			return httpx.InvalidState(fmt.Sprintf("任务是“%s”而后台任务是“%s”，状态对不上，不能取消", statusLabel(taskStatus), statusLabel(jobStatus)))
 		}
 		if _, err := tx.Exec(ctx, `UPDATE export_tasks SET status = 'canceled', finished_at = now() WHERE id = $1`, id); err != nil {
 			return err

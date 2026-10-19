@@ -210,7 +210,7 @@ func checkNotElsewhere(ctx context.Context, q db.Querier, itemID uuid.UUID, link
 		msg = fmt.Sprintf("有 %d 个文件还在别的条目里（例如%s在%s，一个文件只能在一个条目里）；它们是从修改中的文件夹移过来的，"+
 			"先重新归档那几件", len(ids), name, at)
 	}
-	return httpx.Conflict("file_cataloged", msg).WithDetails(map[string]any{"ids": ids, "items": items})
+	return httpx.Conflict(httpx.CodeFileCataloged, msg).WithDetails(map[string]any{"ids": ids, "items": items})
 }
 
 // itemLabel 是条目的称呼：有档号用档号，没有时"第 n 件"。
@@ -228,7 +228,7 @@ type CatalogedElsewhere struct {
 }
 
 func elsewhereDetails(ctx context.Context, q db.Querier, rows []*placementRow) ([]CatalogedElsewhere, error) {
-	names, err := categoryNames(ctx, q, categoryIDsOf(rows))
+	names, err := CategoryNames(ctx, q, categoryIDsOf(rows))
 	if err != nil {
 		return nil, err
 	}

@@ -1,7 +1,6 @@
 package catalog
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"slices"
@@ -14,6 +13,7 @@ import (
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/xslices"
 	"doclite/server/internal/project"
 )
 
@@ -41,9 +41,6 @@ const (
 
 	sourceSealed    = "sealed"
 	sourceModifying = "modifying"
-
-	// MaxLockBatch 是批量锁定一次最多的条目数。
-	MaxLockBatch = 500
 )
 
 // 单个条目的状态动作（路径的最后一段）。
@@ -53,10 +50,8 @@ const (
 )
 
 func errLockedEdit(what string) error {
-	return httpx.Conflict("item_locked", fmt.Sprintf("条目已锁定，不能%s；要先解锁", what))
+	return httpx.Conflict(httpx.CodeItemLocked, fmt.Sprintf("条目已锁定，不能%s；要先解锁", what))
 }
-
-func invalidState(msg string) error { return httpx.Conflict(httpx.CodeInvalidState, msg) }
 
 const msgModifying = "条目修改中（来源文件夹解除了封存），不能锁定；改完先重新归档"
 
@@ -66,16 +61,16 @@ func transition(action string, r *itemRow) (string, error) {
 	case ActionLock:
 		switch {
 		case r.Status == statusLocked:
-			return "", invalidState("条目已经锁定了")
+			return "", httpx.InvalidState("条目已经锁定了")
 		case r.SourceStatus == sourceModifying:
-			return "", invalidState(msgModifying)
+			return "", httpx.InvalidState(msgModifying)
 		}
 		return statusLocked, nil
 	case ActionUnlock:
 		if r.Status == statusLocked {
 			return statusDraft, nil
 		}
-		return "", invalidState("条目没有锁定，不用解锁")
+		return "", httpx.InvalidState("条目没有锁定，不用解锁")
 	}
 	return "", httpx.NotFound("动作")
 }
@@ -121,7 +116,7 @@ func lockBlocker(ctx context.Context, q db.Querier, st *settings, r *itemRow, ps
 		}
 		return blockNoArchiveNo, "条目没有档号，不能锁定" + why, nil, nil
 	}
-	if st.lockRequiresApproved && ps.NotApproved > 0 {
+	if st.LockRequiresApproved && ps.NotApproved > 0 {
 		return blockUnapproved, fmt.Sprintf("条目有 %d 页还没审核通过（例如第 %d 页），项目设置要求全部页审核通过才能锁定",
 			ps.NotApproved, ps.FirstNotOK), nil, nil
 	}
@@ -179,10 +174,10 @@ func (s *Service) ItemAction(ctx context.Context, operatorID, id uuid.UUID, acti
 				return err
 			}
 			if kind != "" {
-				return invalidState(msg)
+				return httpx.InvalidState(msg)
 			}
 			detail["archive_no"], detail["page_count"] = r.ArchiveNo, stats[id].Pages
-			detail["lock_requires_approved"] = st.lockRequiresApproved
+			detail["lock_requires_approved"] = st.LockRequiresApproved
 		case ActionUnlock:
 			detail["archive_no"] = r.ArchiveNo
 		}
@@ -216,21 +211,15 @@ type LockResult struct {
 	ItemIDs []uuid.UUID `json:"item_ids"`
 }
 
-func dedupSorted(ids []uuid.UUID) []uuid.UUID {
-	out := slices.Clone(ids)
-	slices.SortFunc(out, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
-	return slices.Compact(out)
-}
-
 // LockItems 批量锁定（一个事务）。
 func (s *Service) LockItems(ctx context.Context, operatorID, projectID uuid.UUID, ids []uuid.UUID) (*LockResult, error) {
 	if len(ids) == 0 {
 		return nil, httpx.Invalid("至少要选一个条目")
 	}
-	if len(ids) > MaxLockBatch {
-		return nil, httpx.Invalid("一次最多锁定 %d 个条目，这次有 %d 个", MaxLockBatch, len(ids))
+	if len(ids) > httpx.MaxBatchIDs {
+		return nil, httpx.Invalid("一次最多锁定 %d 个条目，这次有 %d 个", httpx.MaxBatchIDs, len(ids))
 	}
-	uniq := dedupSorted(ids)
+	uniq := xslices.SortedIDs(ids)
 	st, err := loadSettings(ctx, s.pool, projectID)
 	if err != nil {
 		return nil, err
@@ -301,22 +290,22 @@ func (s *Service) LockItems(ctx context.Context, operatorID, projectID uuid.UUID
 					parts = append(parts, fmt.Sprintf("%d 个%s", counts[k], k))
 				}
 			}
-			return httpx.Conflict(httpx.CodeInvalidState, fmt.Sprintf("有 %d 个条目不能锁定（%s），这次一个都没有锁定%s",
+			return httpx.InvalidState(fmt.Sprintf("有 %d 个条目不能锁定（%s），这次一个都没有锁定%s",
 				len(failed), strings.Join(parts, "，"), example)).WithDetails(map[string]any{"ids": failed})
 		}
 		if err := setItemsStatus(ctx, tx, todoIDs, statusLocked, operatorID); err != nil {
 			return err
 		}
-		entries := make([]auditEntry, len(todo))
+		entries := make([]audit.Entry, len(todo))
 		catIDs := make([]uuid.UUID, 0, len(todo))
 		for i, r := range todo {
-			entries[i] = auditEntry{TargetType: audit.TargetArchiveItem, TargetID: r.ID, Action: "lock",
+			entries[i] = audit.Entry{ProjectID: &projectID, OperatorID: &operatorID, TargetType: audit.TargetArchiveItem, TargetID: r.ID, Action: "lock",
 				Detail: map[string]any{"before": map[string]any{"status": r.Status}, "after": map[string]any{"status": statusLocked},
 					"archive_no": r.ArchiveNo, "page_count": stats[r.ID].Pages,
-					"lock_requires_approved": st.lockRequiresApproved, "batch": true}}
+					"lock_requires_approved": st.LockRequiresApproved, "batch": true}}
 			catIDs = append(catIDs, r.CategoryID)
 		}
-		if err := insertAudits(ctx, tx, projectID, operatorID, entries); err != nil {
+		if err := audit.Write(ctx, tx, entries...); err != nil {
 			return err
 		}
 		out.Locked, out.ItemIDs = len(todo), todoIDs
@@ -375,7 +364,7 @@ func (s *Service) Renumber(ctx context.Context, operatorID, projectID uuid.UUID,
 		}
 		if err := audit.Write(ctx, tx, audit.Entry{ProjectID: &projectID, OperatorID: audit.Operator(operatorID),
 			TargetType: audit.TargetArchiveCategory, TargetID: cat.ID, Action: "renumber",
-			Detail: map[string]any{"after": map[string]any{"template": st.template, "renumbered": out.Renumbered,
+			Detail: map[string]any{"after": map[string]any{"template": st.ArchiveNoTemplate, "renumbered": out.Renumbered,
 				"skipped_locked": out.SkippedLocked, "archive_no_conflicts": out.ArchiveNoConflicts}}}); err != nil {
 			return err
 		}

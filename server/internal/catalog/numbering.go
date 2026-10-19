@@ -266,7 +266,7 @@ func renumberSubtree(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.
 	var reused []uuid.UUID
 	ids := make([]uuid.UUID, len(changed))
 	nos := make([]*string, len(changed))
-	entries := make([]auditEntry, len(changed))
+	entries := make([]audit.Entry, len(changed))
 	for i, a := range changed {
 		if a.Current != nil && newNos[*a.Current] {
 			reused = append(reused, a.ID)
@@ -280,13 +280,13 @@ func renumberSubtree(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.
 		if a.conflicted() {
 			detail["conflict"] = map[string]any{"archive_no": a.Generated, "item_id": a.Holder}
 		}
-		entries[i] = auditEntry{TargetType: audit.TargetArchiveItem, TargetID: a.ID, Action: "renumber", Detail: detail}
+		entries[i] = audit.Entry{ProjectID: &projectID, OperatorID: &operatorID, TargetType: audit.TargetArchiveItem, TargetID: a.ID, Action: "renumber", Detail: detail}
 		res.Changed = append(res.Changed, a.ID)
 	}
 	if err := writeArchiveNos(ctx, tx, operatorID, reused, ids, nos); err != nil {
 		return res, err
 	}
-	if err := insertAudits(ctx, tx, projectID, operatorID, entries); err != nil {
+	if err := audit.Write(ctx, tx, entries...); err != nil {
 		return res, err
 	}
 	return res, nil

@@ -12,9 +12,11 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"doclite/server/internal/audit"
+	"doclite/server/internal/file"
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/xslices"
 	"doclite/server/internal/project"
 )
 
@@ -57,7 +59,7 @@ type SealedDetails struct {
 // SealedCheck：folderIDs 里有封存的文件夹时返回 409 `folder_archived`（what 是被挡住的操作，如"上传文件"），否则 nil。
 // 在调用方的事务里、锁住这些文件夹行之后调用（文件目录、上传用）。
 func SealedCheck(ctx context.Context, q db.Querier, what string, folderIDs ...uuid.UUID) error {
-	folderIDs = dedupKeepOrder(folderIDs)
+	folderIDs = xslices.Unique(folderIDs)
 	if len(folderIDs) == 0 {
 		return nil
 	}
@@ -66,7 +68,7 @@ func SealedCheck(ctx context.Context, q db.Querier, what string, folderIDs ...uu
 		return err
 	}
 	first := sealed[0]
-	names, err := categoryNames(ctx, q, []uuid.UUID{first.CategoryID})
+	names, err := CategoryNames(ctx, q, []uuid.UUID{first.CategoryID})
 	if err != nil {
 		return err
 	}
@@ -84,7 +86,7 @@ func SealedCheck(ctx context.Context, q db.Querier, what string, folderIDs ...uu
 		msg = fmt.Sprintf("文件夹「%s」已归档为 %s（%s）并锁定，不能%s；要修改先解锁这一件、再解除封存", first.FolderName, where,
 			titleOrPlaceholder(first.Title), what)
 	}
-	return httpx.Conflict("folder_archived", msg).WithDetails(d)
+	return httpx.Conflict(httpx.CodeFolderArchived, msg).WithDetails(d)
 }
 
 // normalizeReason：去掉首尾空白，空串为 nil；≤ 200 字，不能有控制字符（换行、制表符可以）。
@@ -143,7 +145,7 @@ func (s *Service) Unseal(ctx context.Context, operatorID, id uuid.UUID, rowVersi
 		case r.Status == statusLocked:
 			return errLockedEdit("解除封存")
 		case r.SourceStatus == sourceModifying:
-			return invalidState("条目已经在修改中了（来源文件夹已解除封存）")
+			return httpx.InvalidState("条目已经在修改中了（来源文件夹已解除封存）")
 		}
 		if r.RowVersion != rowVersion {
 			return staleVersion(r.RowVersion)
@@ -151,7 +153,7 @@ func (s *Service) Unseal(ctx context.Context, operatorID, id uuid.UUID, rowVersi
 		if err := setSourceStatus(ctx, tx, id, sourceModifying, operatorID, why); err != nil {
 			return err
 		}
-		paths, err := folderPaths(ctx, tx, []uuid.UUID{*r.SourceFolderID})
+		paths, err := file.FolderPaths(ctx, tx, []uuid.UUID{*r.SourceFolderID})
 		if err != nil {
 			return err
 		}
@@ -262,7 +264,7 @@ func planReseal(ctx context.Context, q db.Querier, r *itemRow) (*resealPlan, err
 	if err != nil {
 		return nil, err
 	}
-	paths, err := folderPaths(ctx, q, []uuid.UUID{folderID})
+	paths, err := file.FolderPaths(ctx, q, []uuid.UUID{folderID})
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +286,7 @@ func planReseal(ctx context.Context, q db.Querier, r *itemRow) (*resealPlan, err
 			"来源文件夹「%s」里有 %d 个文件，一件最多 %d 页", node.Name, fs.Files, MaxItemPages)}
 	}
 	if pv.Problem != nil {
-		out.stateErr = invalidState(pv.Problem.Message)
+		out.stateErr = httpx.InvalidState(pv.Problem.Message)
 	}
 
 	var files []folderFile
@@ -331,13 +333,13 @@ func planReseal(ctx context.Context, q db.Querier, r *itemRow) (*resealPlan, err
 	if pv.Problem == nil && len(p.Linked) > 0 {
 		if err := checkNotElsewhere(ctx, q, r.ID, fileIDsOf(p.Linked), info); err != nil {
 			e, ok := httpx.AsError(err)
-			if !ok || e.Code != "file_cataloged" {
+			if !ok || e.Code != httpx.CodeFileCataloged {
 				return nil, err
 			}
 			out.elsewhere = err
 			d, _ := e.Details.(map[string]any)
 			items, _ := d["items"].([]CatalogedElsewhere)
-			pv.Problem = &ResealProblem{Code: "file_cataloged", Message: e.Message, Items: items}
+			pv.Problem = &ResealProblem{Code: httpx.CodeFileCataloged, Message: e.Message, Items: items}
 		}
 	}
 	return out, nil
@@ -346,7 +348,7 @@ func planReseal(ctx context.Context, q db.Querier, r *itemRow) (*resealPlan, err
 // ResealPreview 是重新归档的对比（不写库，任何状态都能看；只有修改中的能真的重新归档）。
 func (s *Service) ResealPreview(ctx context.Context, projectID, id uuid.UUID) (*ResealPreview, error) {
 	var out *ResealPreview
-	err := readSnapshot(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		r, err := getItem(ctx, tx, id)
 		if err != nil {
 			return err
@@ -384,7 +386,7 @@ func (s *Service) Reseal(ctx context.Context, operatorID, id uuid.UUID, rowVersi
 		case r.Status == statusLocked:
 			return errLockedEdit("重新归档")
 		case r.SourceStatus != sourceModifying:
-			return invalidState("条目没有解除封存，不用重新归档")
+			return httpx.InvalidState("条目没有解除封存，不用重新归档")
 		}
 		if r.RowVersion != rowVersion {
 			return staleVersion(r.RowVersion)
@@ -476,7 +478,7 @@ type ModifyingList struct {
 // Modifying 列出项目里修改中的条目。
 func (s *Service) Modifying(ctx context.Context, projectID uuid.UUID) (*ModifyingList, error) {
 	var out *ModifyingList
-	err := readSnapshot(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		items, total, err := listModifying(ctx, tx, projectID, MaxModifyingItems)
 		if err != nil {
 			return err
@@ -486,11 +488,11 @@ func (s *Service) Modifying(ctx context.Context, projectID uuid.UUID) (*Modifyin
 		for i, m := range items {
 			cats[i], folders[i] = m.CategoryID, m.SourceFolderID
 		}
-		names, err := categoryNames(ctx, tx, cats)
+		names, err := CategoryNames(ctx, tx, cats)
 		if err != nil {
 			return err
 		}
-		paths, err := folderPaths(ctx, tx, folders)
+		paths, err := file.FolderPaths(ctx, tx, folders)
 		if err != nil {
 			return err
 		}

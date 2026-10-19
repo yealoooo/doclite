@@ -29,7 +29,7 @@ import (
 const (
 	// lastSeenInterval：距离上次记录超过这么久才更新 last_seen_at。
 	lastSeenInterval  = time.Minute
-	maxUserAgentRunes = 512
+	maxUserAgentChars = 512
 )
 
 // Options 是 auth 的配置。
@@ -99,7 +99,7 @@ func ParseClientInfo(r *http.Request) (ClientInfo, error) {
 		ci.IP = &addr
 	}
 	if ua := r.UserAgent(); ua != "" {
-		ua = truncate(ua, maxUserAgentRunes)
+		ua = truncate(ua, maxUserAgentChars)
 		ci.UserAgent = &ua
 	}
 	return ci, nil

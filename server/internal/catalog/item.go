@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"doclite/server/internal/audit"
+	"doclite/server/internal/file"
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
@@ -91,7 +92,7 @@ func (s *Service) GetItem(ctx context.Context, projectID, id uuid.UUID) (*Item, 
 		return nil, err
 	}
 	var out *Item
-	err = readSnapshot(ctx, s.pool, func(tx pgx.Tx) error {
+	err = db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		out, err = readItem(ctx, tx, st, id)
 		return err
 	})
@@ -135,7 +136,7 @@ func (s *Service) ListItems(ctx context.Context, projectID, categoryID uuid.UUID
 		return nil, err
 	}
 	var out *ItemList
-	err = readSnapshot(ctx, s.pool, func(tx pgx.Tx) error {
+	err = db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		cat, err := getCategory(ctx, tx, projectID, categoryID)
 		if err != nil {
 			return err
@@ -316,7 +317,7 @@ func (s *Service) UpdateItem(ctx context.Context, operatorID, id uuid.UUID, in I
 					return err
 				}
 				if after.ItemNo > MaxItemNo {
-					return httpx.Conflict(httpx.CodeInvalidState, fmt.Sprintf("目标节点里的件号已经用到 %d，不能再移进条目", MaxItemNo))
+					return httpx.InvalidState(fmt.Sprintf("目标节点里的件号已经用到 %d，不能再移进条目", MaxItemNo))
 				}
 			}
 			if st.tmpl == nil {
@@ -448,7 +449,7 @@ func (s *Service) DeleteItem(ctx context.Context, operatorID, id uuid.UUID, rowV
 			"item_no": r.ItemNo, "archive_no": r.ArchiveNo, "title": r.Title, "status": r.Status,
 			"source_status": r.SourceStatus, "page_count": len(pages.Plan.Unlinked)}
 		if r.SourceFolderID != nil {
-			paths, err := folderPaths(ctx, tx, []uuid.UUID{*r.SourceFolderID})
+			paths, err := file.FolderPaths(ctx, tx, []uuid.UUID{*r.SourceFolderID})
 			if err != nil {
 				return err
 			}

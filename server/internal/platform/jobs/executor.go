@@ -16,28 +16,15 @@ import (
 	"doclite/server/internal/platform/db"
 )
 
-// 单实例锁：会话级咨询锁 (6006, 0)，在执行器专用的一条连接上持有（类别号登记在 project/locks.go 的注释里）。
-const (
-	lockClass = 6006
-	lockKey   = 0
-)
-
-// ErrBusy：另一个 server 进程正拿着后台任务的锁（Start 不启动）。
-var ErrBusy = errors.New("另一个 server 进程正在执行后台任务")
-
 // 一次执行被停下的原因（context.Cause）。
 var (
 	errShutdown = errors.New("server 正在退出")
 	errCancel   = errors.New("任务已取消")
 	errLost     = errors.New("后台任务已经不归这次执行了")
-	errLockLost = errors.New("失去了后台任务的锁")
 )
 
-// 回收时写进 error_message 的原因。
-const (
-	whyRestart = "执行中断（server 被停止或重启）"
-	whyOrphan  = "执行中断（没能记下执行结果）"
-)
+// whyRestart 是启动时放回队列写进 error_message 的原因。
+const whyRestart = "执行中断（server 被停止或重启）"
 
 // Executor 是执行器。用 [New] 建，[Executor.Register] 注册各种任务，[Executor.Start] 启动，[Executor.Stop] 退出。
 type Executor struct {
@@ -53,10 +40,8 @@ type Executor struct {
 	mu  sync.Mutex
 	cur *session // 正在运行的这一轮（Start 到 Stop）；没在运行时为 nil
 	wg  sync.WaitGroup
-	// running 是这个进程里正在执行的 job（含停下后正在改状态的）；claiming 是正在领取（job 行已锁、事务还没提交或者
-	// 还没交给执行）的。回收跳过这两类。
-	running  map[uuid.UUID]context.CancelCauseFunc
-	claiming map[uuid.UUID]bool
+	// running 是这个进程里正在执行的 job（含停下后正在改状态的），Interrupt 用。
+	running map[uuid.UUID]context.CancelCauseFunc
 }
 
 // session 是一轮运行（Start 到 Stop）。
@@ -64,10 +49,7 @@ type session struct {
 	base    context.Context
 	stop    context.CancelCauseFunc
 	slots   chan struct{}
-	lock    *pgx.Conn     // 拿着咨询锁的专用连接（只有 keeper 用）
-	release chan struct{} // 关闭时 keeper 释放锁、退出
 	workers sync.WaitGroup
-	keeper  chan struct{} // keeper 退出时关闭
 }
 
 // New 建执行器（还不启动）。
@@ -84,7 +66,6 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) *Executor {
 		handlers: map[string]Handler{},
 		wake:     make(chan struct{}, 1),
 		running:  map[uuid.UUID]context.CancelCauseFunc{},
-		claiming: map[uuid.UUID]bool{},
 	}
 }
 
@@ -98,7 +79,7 @@ func (e *Executor) Register(jobType string, h Handler) {
 	e.handlers[jobType] = h
 }
 
-// OnStart 登记 Start 拿到锁之后、开始领取之前要做的事（清理临时目录之类：只有拿到锁的进程才能动它们）。
+// OnStart 登记 Start 时、开始领取之前要做的事（清理临时目录之类）。
 func (e *Executor) OnStart(fn func()) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -108,13 +89,6 @@ func (e *Executor) OnStart(fn func()) {
 // Enabled：Concurrency 大于 0（这个进程要执行后台任务）。
 func (e *Executor) Enabled() bool { return e.opts.Concurrency > 0 }
 
-// Active：正在运行（拿着锁、在领取）。
-func (e *Executor) Active() bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.cur != nil
-}
-
 func (e *Executor) types() []string {
 	out := make([]string, 0, len(e.handlers))
 	for t := range e.handlers {
@@ -123,43 +97,17 @@ func (e *Executor) types() []string {
 	return out
 }
 
-// tryLock 在一条新连接上拿单实例锁。拿不到时 conn 为 nil。
-func (e *Executor) tryLock(ctx context.Context) (*pgx.Conn, error) {
-	conn, err := pgx.ConnectConfig(ctx, e.pool.Config().ConnConfig.Copy())
-	if err != nil {
-		return nil, err
-	}
-	var ok bool
-	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1::int4, $2::int4)`, lockClass, lockKey).Scan(&ok); err != nil || !ok {
-		conn.Close(context.WithoutCancel(ctx))
-		return nil, err
-	}
-	return conn, nil
-}
-
-// Start 启动：拿单实例锁（拿不到返回 [ErrBusy]，什么都不做）→ OnStart 登记的事 → 回收上次留下的 running（放回队列）
-// → 开始领取，并且每个心跳间隔回收一次。Concurrency 为 0 时什么都不做。ctx 只用于启动这一段；Stop 之后可以再 Start
-// （测试里模拟重启）。
+// Start 启动：OnStart 登记的事 → 把上次留下的 running 放回队列（[Executor.reap]）→ 开始领取。Concurrency 为 0 时
+// 什么都不做。ctx 只用于启动这一段；Stop 之后可以再 Start（测试里模拟重启）。
 func (e *Executor) Start(ctx context.Context) error {
 	if !e.Enabled() {
 		return nil
 	}
-	if e.Active() {
-		return errors.New("jobs: 已经在运行了")
-	}
-	conn, err := e.tryLock(ctx)
-	if err != nil {
-		return fmt.Errorf("后台任务：拿单实例锁失败：%w", err)
-	}
-	if conn == nil {
-		return ErrBusy
-	}
-	ss := &session{slots: make(chan struct{}, e.opts.Concurrency), lock: conn, release: make(chan struct{}), keeper: make(chan struct{})}
+	ss := &session{slots: make(chan struct{}, e.opts.Concurrency)}
 	ss.base, ss.stop = context.WithCancelCause(context.Background())
 	e.mu.Lock()
 	if e.cur != nil {
 		e.mu.Unlock()
-		conn.Close(ctx)
 		return errors.New("jobs: 已经在运行了")
 	}
 	e.cur = ss
@@ -173,15 +121,13 @@ func (e *Executor) Start(ctx context.Context) error {
 	} else if n > 0 {
 		e.log.Info("后台任务：上次执行中的已放回队列", "count", n)
 	}
-	ss.workers.Add(2)
+	ss.workers.Add(1)
 	go e.loop(ss)
-	go e.reaper(ss)
-	go e.keep(ss)
 	return nil
 }
 
-// Stop 优雅退出：不再领取；正在执行的停下、job 放回队列（不算一次尝试）；然后释放单实例锁。最多等到 ctx 结束；
-// 来不及收尾的 job 留在 running，下次启动时回收。
+// Stop 优雅退出：不再领取；正在执行的停下、job 放回队列（不算一次尝试）。最多等到 ctx 结束；来不及收尾的 job 留在
+// running，下次启动时放回队列。
 func (e *Executor) Stop(ctx context.Context) {
 	e.mu.Lock()
 	ss := e.cur
@@ -202,11 +148,6 @@ func (e *Executor) Stop(ctx context.Context) {
 	case <-ctx.Done():
 		e.log.Warn("后台任务：退出时没等到正在执行的收尾，下次启动时放回队列")
 	}
-	close(ss.release)
-	select {
-	case <-ss.keeper:
-	case <-ctx.Done():
-	}
 }
 
 // Wake 让执行器马上看一次有没有可领的任务（建任务之后调用）。没启动时什么都不做。
@@ -224,47 +165,6 @@ func (e *Executor) Interrupt(jobID uuid.UUID) {
 	e.mu.Unlock()
 	if cancel != nil {
 		cancel(errCancel)
-	}
-}
-
-// keep 守着单实例锁：每个心跳间隔看一次专用连接；断了就重新拿锁，拿不到就停下执行器（执行中的放回队列）。
-// release 关闭时释放锁、关连接、退出。
-func (e *Executor) keep(ss *session) {
-	defer close(ss.keeper)
-	t := time.NewTicker(e.opts.Heartbeat)
-	defer t.Stop()
-	for {
-		select {
-		case <-ss.release:
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_, _ = ss.lock.Exec(ctx, `SELECT pg_advisory_unlock($1::int4, $2::int4)`, lockClass, lockKey)
-			ss.lock.Close(ctx)
-			cancel()
-			return
-		case <-t.C:
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
-		_, err := ss.lock.Exec(ctx, `SELECT 1`)
-		if err == nil {
-			cancel()
-			continue
-		}
-		e.log.Warn("后台任务：拿着单实例锁的连接断了，重新拿锁", "error", err)
-		ss.lock.Close(ctx)
-		conn, lerr := e.tryLock(ctx)
-		cancel()
-		if conn != nil {
-			ss.lock = conn
-			continue
-		}
-		e.log.Error("后台任务：重新拿单实例锁失败，停下执行器（执行中的放回队列）", "error", lerr)
-		e.mu.Lock()
-		if e.cur == ss {
-			e.cur = nil
-		}
-		e.mu.Unlock()
-		ss.stop(errLockLost)
-		return
 	}
 }
 
@@ -290,56 +190,31 @@ func (e *Executor) loop(ss *session) {
 			}
 			continue
 		}
-		// 领到了：登记为执行中（同一把锁里去掉"领取中"），回收不会碰它。
+		// 领到了：登记为执行中（Interrupt 能找到它）。
 		ctx, cancel := context.WithCancelCause(ss.base)
 		e.mu.Lock()
 		e.running[job.ID] = cancel
-		delete(e.claiming, job.ID)
 		e.mu.Unlock()
 		e.wg.Add(1)
 		go e.execute(ss, ctx, cancel, job, h)
 	}
 }
 
-// reaper 每个心跳间隔回收一次没人执行的 running。
-func (e *Executor) reaper(ss *session) {
-	defer ss.workers.Done()
-	t := time.NewTicker(e.opts.Heartbeat)
-	defer t.Stop()
-	for {
-		select {
-		case <-ss.base.Done():
-			return
-		case <-t.C:
-		}
-		if n, err := e.reap(ss.base, whyOrphan); err != nil && ss.base.Err() == nil {
-			e.log.Error("后台任务：回收失败", "error", err)
-		} else if n > 0 {
-			e.log.Warn("后台任务：回收了没人执行的 running", "count", n)
-		}
-	}
-}
-
-// Executing：这个进程正在执行（含正在领取）这个 job。
-func (e *Executor) Executing(id uuid.UUID) bool { return e.busy(id) }
-
-// busy：这个进程正在执行或者正在领取这个 job。
+// busy：这个进程正在执行这个 job。
 func (e *Executor) busy(id uuid.UUID) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.running[id] != nil || e.claiming[id]
+	return e.running[id] != nil
 }
 
 // claim 领一个：一个短事务，FOR UPDATE SKIP LOCKED 挑一个到时间的 queued，改成 running、attempts + 1，再让 Handler
 // 把业务对象改成执行中。没有可领的返回 nil。业务对象已取消、没法执行的在这里就改好状态，也返回 nil（循环接着领）。
-// 锁住 job 行之后、提交之前就登记为"领取中"，提交之后到交给执行之间回收也不会碰它。
 func (e *Executor) claim(base context.Context) (*Job, Handler, error) {
 	ctx, cancel := context.WithTimeout(base, dbTimeout)
 	defer cancel()
 	var job *Job
 	var h Handler
 	var settled bool
-	var claimedID uuid.UUID
 	err := db.InTx(ctx, e.pool, func(tx pgx.Tx) error {
 		var id uuid.UUID
 		err := tx.QueryRow(ctx, `SELECT id FROM background_jobs
@@ -353,10 +228,6 @@ FOR UPDATE SKIP LOCKED`, e.types()).Scan(&id)
 		if err != nil {
 			return err
 		}
-		claimedID = id
-		e.mu.Lock()
-		e.claiming[id] = true
-		e.mu.Unlock()
 		j, err := scanJob(tx.QueryRow(ctx, `UPDATE background_jobs SET status = 'running', runner_id = $2, started_at = now(),
   heartbeat_at = now(), attempts = attempts + 1, progress_done = 0, error_message = NULL, finished_at = NULL
 WHERE id = $1
@@ -384,13 +255,6 @@ WHERE id = $1`, j.ID, f.Message)
 		}
 		return err
 	})
-	if err != nil || job == nil || settled {
-		if claimedID != uuid.Nil {
-			e.mu.Lock()
-			delete(e.claiming, claimedID)
-			e.mu.Unlock()
-		}
-	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -493,7 +357,7 @@ const (
 	outCanceled
 )
 
-// finish 按 Run 的结果改 job 的状态。改不成（写库失败）时 job 留在 running，由回收接手。
+// finish 按 Run 的结果改 job 的状态。改不成（写库失败）时 job 留在 running，下次启动时放回队列。
 func (e *Executor) finish(job *Job, h Handler, cause, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 	defer cancel()
@@ -515,7 +379,7 @@ func (e *Executor) finish(job *Job, h Handler, cause, err error) {
 	case errors.Is(cause, errCancel) || errors.Is(err, ErrCanceled):
 		e.log.Info("后台任务：已取消，清理完", "job_id", job.ID)
 		e.settle(ctx, job, h, outCanceled, "")
-	case errors.Is(cause, errShutdown) || errors.Is(cause, errLockLost):
+	case errors.Is(cause, errShutdown):
 		e.log.Info("后台任务：退出时放回队列", "job_id", job.ID, "attempt", job.Attempt)
 		e.settle(ctx, job, h, outRequeue, "")
 	case Retryable(err) && job.Attempt < job.MaxAttempts:
@@ -529,7 +393,7 @@ func (e *Executor) finish(job *Job, h Handler, cause, err error) {
 }
 
 // settle 在一个事务里改 job（先锁 job 行、核对是这次执行的）和业务对象（Handler.Settled）。业务对象已取消的一律
-// 改成 canceled。失败时只记日志：job 留在 running、这次执行结束后不在 running 表里，下一轮回收接手。
+// 改成 canceled。失败时只记日志：job 留在 running，下次启动时放回队列。
 func (e *Executor) settle(ctx context.Context, job *Job, h Handler, out outcome, message string) {
 	err := db.InTx(ctx, e.pool, func(tx pgx.Tx) error {
 		owned, err := LockOwned(ctx, tx, job)
@@ -570,18 +434,15 @@ WHERE id = $1`, job.ID, message)
 		return h.Settled(ctx, tx, job, to)
 	})
 	if err != nil {
-		e.log.Error("后台任务：改状态失败，留给回收", "job_id", job.ID, "error", err)
+		e.log.Error("后台任务：改状态失败，下次启动时放回队列", "job_id", job.ID, "error", err)
 		return
 	}
 	h.Notify(job)
 }
 
-// RequeueRunning 回收库里 running 而这个进程里没有在执行、也没有在领取的 job（启动时、每个心跳间隔调用）。返回处理
-// 了几个。
-func (e *Executor) RequeueRunning(ctx context.Context) (int, error) { return e.reap(ctx, whyRestart) }
-
-// reap 按"执行中断"处理没人执行的 running：业务对象已取消的改成 canceled；次数用完的改成 failed；其余放回队列（算
-// 一次尝试，run_after 是现在）。每个 job 一个短事务，锁住 job 行之后再确认一次没人执行。
+// reap 在启动时按"执行中断"处理库里的 running（上次进程被杀、或者改状态写库失败留下的）：业务对象已取消的改成
+// canceled；次数用完的改成 failed；其余放回队列（算一次尝试，run_after 是现在）。每个 job 一个短事务。
+// 这个进程里还在执行的跳过（上次 Stop 没等到它收尾就又 Start 了）。
 func (e *Executor) reap(ctx context.Context, why string) (int, error) {
 	rows, err := e.pool.Query(ctx, `SELECT id FROM background_jobs WHERE status = 'running' AND job_type = ANY($1) ORDER BY id`, e.types())
 	if err != nil {
@@ -607,9 +468,6 @@ FOR NO KEY UPDATE`, id))
 			}
 			if err != nil {
 				return err
-			}
-			if e.busy(id) { // 锁住之前刚被领走（领取的事务提交前就登记了）
-				return nil
 			}
 			h = e.handlers[j.Type]
 			canceled, err := h.CancelRequested(ctx, tx, j)
@@ -638,7 +496,7 @@ WHERE id = $1`, id, fmt.Sprintf("第 %d 次%s，已放回队列", j.Attempt, why
 			return h.Settled(ctx, tx, j, to)
 		})
 		if err != nil {
-			// 这一个改不成（下一轮再试），不挡后面的。
+			// 这一个改不成（下次启动再试），不挡后面的。
 			if firstErr == nil {
 				firstErr = fmt.Errorf("回收 job %s：%w", id, err)
 			}

@@ -5,6 +5,8 @@ import (
 	"slices"
 
 	"github.com/google/uuid"
+
+	"doclite/server/internal/platform/xslices"
 )
 
 // 页序的纯函数（requirements 5.9）：重新归档把条目的页换成来源文件夹现在的文件，页号重排成 1..n；
@@ -89,38 +91,11 @@ func planPages(current []curPage, wanted []uuid.UUID) pagePlan {
 		}
 	}
 	p.Kept = len(kept)
-	inLIS := longestIncreasing(keptTo)
+	inLIS := xslices.LongestIncreasing(keptTo)
 	for i, c := range kept {
 		if !inLIS[i] {
 			p.Moved = append(p.Moved, pageMove{FileID: c.FileID, From: c.PageNo, To: keptTo[i]})
 		}
 	}
 	return p
-}
-
-// longestIncreasing 标出 xs 的一个最长严格递增子序列（O(n log n)）。xs 互不相同。
-func longestIncreasing(xs []int) []bool {
-	in := make([]bool, len(xs))
-	if len(xs) == 0 {
-		return in
-	}
-	tails := make([]int, 0, len(xs)) // tails[k] 是长度 k+1 的递增子序列里最小结尾的下标
-	prev := make([]int, len(xs))
-	for i, x := range xs {
-		k, _ := slices.BinarySearchFunc(tails, x, func(t, v int) int { return cmp.Compare(xs[t], v) })
-		if k > 0 {
-			prev[i] = tails[k-1]
-		} else {
-			prev[i] = -1
-		}
-		if k == len(tails) {
-			tails = append(tails, i)
-		} else {
-			tails[k] = i
-		}
-	}
-	for i := tails[len(tails)-1]; i >= 0; i = prev[i] {
-		in[i] = true
-	}
-	return in
 }

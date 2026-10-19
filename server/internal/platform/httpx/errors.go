@@ -60,6 +60,12 @@ const (
 	CodeUpgradeRequired      = "client_upgrade_required"
 	CodeInternal             = "internal"
 	CodeBusy                 = "busy"
+	// 几个模块共用的业务错误码。
+	CodeFolderArchived = "folder_archived" // 文件夹已封存（硬性规则 3）
+	CodeFileCataloged  = "file_cataloged"  // 文件已归类
+	CodeItemLocked     = "item_locked"
+	CodeTreeFull       = "tree_full"
+	CodeTreeCycle      = "tree_cycle"
 	// M7-1：许可证。登录和请求被拒（403）：没有有效的许可证、已到期、在线会话满了；导入时（400）：文件不对或签名
 	// 验不过、install_id 不符、已经过期。
 	CodeLicenseMissing     = "license_missing"
@@ -80,12 +86,22 @@ func NotFound(what string) *Error {
 	return NewError(http.StatusNotFound, CodeNotFound, what+"不存在")
 }
 
+// NotFoundIDs 是批量接口的 404 `not_found`：details.ids 是找不到的 id。
+func NotFoundIDs(message string, ids any) *Error {
+	return NewError(http.StatusNotFound, CodeNotFound, message).WithDetails(map[string]any{"ids": ids})
+}
+
 // Conflict 是 409，code 为空时用 `conflict`。
 func Conflict(code, message string) *Error {
 	if code == "" {
 		code = CodeConflict
 	}
 	return NewError(http.StatusConflict, code, message)
+}
+
+// InvalidState 是 409 `invalid_state`（当前状态不允许这个操作）。
+func InvalidState(message string) *Error {
+	return NewError(http.StatusConflict, CodeInvalidState, message)
 }
 
 // Forbidden 是 403 `forbidden`（菜单权限不够）。

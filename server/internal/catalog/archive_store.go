@@ -127,7 +127,7 @@ WHERE f.id = ANY($1)`, ids)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	names, err := categoryNames(ctx, q, cats)
+	names, err := CategoryNames(ctx, q, cats)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +293,7 @@ WHERE a.source_folder_id = ANY($1) AND a.deleted_at IS NULL`, folderIDs)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	names, err := categoryNames(ctx, q, cats)
+	names, err := CategoryNames(ctx, q, cats)
 	if err != nil {
 		return nil, err
 	}

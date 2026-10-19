@@ -13,6 +13,8 @@ import (
 
 	"doclite/server/internal/file"
 	"doclite/server/internal/platform/db"
+	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/xslices"
 )
 
 // 交付后变更（requirements 5.11，用户决定 Q6）：只对 done 的任务。在一个只读快照里拿冻结的明细和 payload（条目当时的
@@ -101,7 +103,7 @@ type Changes struct {
 // Changes 是任务的交付后变更（只对 done 的任务，其他 409）。
 func (s *Service) Changes(ctx context.Context, id uuid.UUID) (*Changes, error) {
 	var out *Changes
-	err := readSnapshot(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		t, err := getTask(ctx, tx, id)
 		if err != nil {
 			return err
@@ -110,7 +112,7 @@ func (s *Service) Changes(ctx context.Context, id uuid.UUID) (*Changes, error) {
 			return errTaskNotFound
 		}
 		if t.Status != StatusDone {
-			return conflictState("交付后变更只对已完成的导出有意义，这个任务现在是“%s”", statusLabel(t.Status))
+			return httpx.InvalidState(fmt.Sprintf("交付后变更只对已完成的导出有意义，这个任务现在是“%s”", statusLabel(t.Status)))
 		}
 		out, err = s.changesIn(ctx, tx, t)
 		return err
@@ -278,7 +280,7 @@ func pageReasons(itemID uuid.UUID, ps []*exportedPage, added []addedPage, onlyAp
 			ranks[i] = *p.PageNow
 		}
 	}
-	inOrder := longestIncreasing(ranks)
+	inOrder := xslices.LongestIncreasing(ranks)
 	var reordered []ChangePage
 	for i, p := range kept {
 		if !inOrder[i] {
@@ -435,31 +437,3 @@ func str(v *string) string {
 }
 
 func intp(v int) *int { return &v }
-
-// longestIncreasing 标出 a 的一个最长严格递增子序列（true 是在子序列里的）。O(n log n)。
-func longestIncreasing(a []int) []bool {
-	n := len(a)
-	in := make([]bool, n)
-	if n == 0 {
-		return in
-	}
-	tails := []int{} // tails[k]：长度 k+1 的递增子序列结尾的下标
-	prev := make([]int, n)
-	for i, v := range a {
-		k := sort.Search(len(tails), func(j int) bool { return a[tails[j]] >= v })
-		if k > 0 {
-			prev[i] = tails[k-1]
-		} else {
-			prev[i] = -1
-		}
-		if k == len(tails) {
-			tails = append(tails, i)
-		} else {
-			tails[k] = i
-		}
-	}
-	for i := tails[len(tails)-1]; i >= 0; i = prev[i] {
-		in[i] = true
-	}
-	return in
-}

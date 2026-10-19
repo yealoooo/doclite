@@ -105,8 +105,8 @@ func (s *Service) create(ctx context.Context, userID, projectID uuid.UUID, req *
 	taskID, jobID := db.NewID(), db.NewID()
 	pl := &payload{
 		ExportTaskID: taskID, PayloadVersion: PayloadVersion, ResubmitOf: req.ResubmitOf, OnlyReady: req.OnlyReady,
-		RequireLockedItem: sc.settings.requireLockedItem, ItemCount: len(readyItems), PageCount: len(rows),
-		SkippedItemCount: p.NotReadyCount, ScopeCategories: sc.scope.scopeCategories, ItemFields: sc.settings.fields,
+		RequireLockedItem: sc.settings.RequireLockedItem, ItemCount: len(readyItems), PageCount: len(rows),
+		SkippedItemCount: p.NotReadyCount, ScopeCategories: sc.scope.scopeCategories, ItemFields: itemFields(sc.settings.ItemFields),
 		Items: make([]frozenItem, len(readyItems)),
 	}
 	for i, it := range readyItems {
@@ -130,7 +130,7 @@ func (s *Service) create(ctx context.Context, userID, projectID uuid.UUID, req *
 	}
 	after := map[string]any{
 		"scope_type": req.ScopeType, "scope_ids": req.ScopeIDs, "export_format": req.Format, "only_approved": req.OnlyApproved,
-		"only_ready": req.OnlyReady, "require_locked_item": sc.settings.requireLockedItem, "item_count": len(readyItems),
+		"only_ready": req.OnlyReady, "require_locked_item": sc.settings.RequireLockedItem, "item_count": len(readyItems),
 		"page_count": len(rows), "skipped_item_count": p.NotReadyCount, "job_id": jobID, "status": StatusQueued,
 	}
 	if req.ResubmitOf != nil {

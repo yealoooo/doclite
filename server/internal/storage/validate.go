@@ -12,13 +12,13 @@ import (
 // 存储配置的校验（requirements 5.4）。不合格一律 400 `invalid_input`。
 
 const (
-	maxProfileNameRunes   = 64
-	maxEndpointRunes      = 255
+	maxProfileNameChars   = 64
+	maxEndpointChars      = 255
 	maxPathPrefixBytes    = 128 // 给项目编码、file_id 和 `v<no>.cover.jpg` 留足 1024 字节 key 的余量
-	maxRegionRunes        = 64
-	maxAccessKeyRunes     = 128
-	maxSecretKeyRunes     = 256
-	maxRemarkRunes        = 500
+	maxRegionChars        = 64
+	maxAccessKeyChars     = 128
+	maxSecretKeyChars     = 256
+	maxRemarkChars        = 500
 	defaultPathPrefix     = "doclite/"
 	defaultURLExpireHours = 24
 	minURLExpireHours     = 1
@@ -33,8 +33,8 @@ func hasControl(s string) bool {
 
 func normalizeProfileName(v string) (string, error) {
 	v = strings.TrimSpace(v)
-	if v == "" || utf8.RuneCountInString(v) > maxProfileNameRunes || hasControl(v) {
-		return "", httpx.Invalid("存储名称不能为空，最长 %d 个字符", maxProfileNameRunes)
+	if v == "" || utf8.RuneCountInString(v) > maxProfileNameChars || hasControl(v) {
+		return "", httpx.Invalid("存储名称不能为空，最长 %d 个字符", maxProfileNameChars)
 	}
 	return v, nil
 }
@@ -45,8 +45,8 @@ func normalizeEndpoint(field, v string) (string, error) {
 	if v == "" {
 		return "", httpx.Invalid("%s 不能为空", field)
 	}
-	if utf8.RuneCountInString(v) > maxEndpointRunes {
-		return "", httpx.Invalid("%s 最长 %d 个字符", field, maxEndpointRunes)
+	if utf8.RuneCountInString(v) > maxEndpointChars {
+		return "", httpx.Invalid("%s 最长 %d 个字符", field, maxEndpointChars)
 	}
 	ep, err := s3.NormalizeEndpoint(v)
 	if err != nil {
@@ -103,14 +103,14 @@ func normalizeBucket(v string) (string, error) {
 
 func normalizeRegion(v string) (string, error) {
 	v = strings.TrimSpace(v)
-	ok := v != "" && utf8.RuneCountInString(v) <= maxRegionRunes
+	ok := v != "" && utf8.RuneCountInString(v) <= maxRegionChars
 	for _, c := range v {
 		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
 			ok = false
 		}
 	}
 	if !ok {
-		return "", httpx.Invalid("region 要有 1 到 %d 个字符，只能有字母、数字、- 和 _，例如 %s", maxRegionRunes, s3.DefaultRegion)
+		return "", httpx.Invalid("region 要有 1 到 %d 个字符，只能有字母、数字、- 和 _，例如 %s", maxRegionChars, s3.DefaultRegion)
 	}
 	return v, nil
 }
@@ -162,10 +162,10 @@ func normalizeKey(field, v string, max int) (string, error) {
 }
 
 func normalizeAccessKey(v string) (string, error) {
-	return normalizeKey("access_key", v, maxAccessKeyRunes)
+	return normalizeKey("access_key", v, maxAccessKeyChars)
 }
 func normalizeSecretKey(v string) (string, error) {
-	return normalizeKey("secret_key", v, maxSecretKeyRunes)
+	return normalizeKey("secret_key", v, maxSecretKeyChars)
 }
 
 func checkURLExpireHours(h int) (int, error) {
@@ -173,18 +173,6 @@ func checkURLExpireHours(h int) (int, error) {
 		return 0, httpx.Invalid("url_expire_hours 要在 %d 到 %d 小时之间", minURLExpireHours, maxURLExpireHours)
 	}
 	return h, nil
-}
-
-// normalizeRemark：去掉首尾空白，空的当作没有。
-func normalizeRemark(v string) (*string, error) {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return nil, nil
-	}
-	if utf8.RuneCountInString(v) > maxRemarkRunes {
-		return nil, httpx.Invalid("备注最长 %d 个字符", maxRemarkRunes)
-	}
-	return &v, nil
 }
 
 func checkStatus(v string) (string, error) {

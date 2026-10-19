@@ -49,9 +49,7 @@ type Grant struct {
 }
 
 // HasAdmin 判断这组角色里有没有 admin。
-func HasAdmin(grants []Grant) bool { return hasAdmin(grants) }
-
-func hasAdmin(grants []Grant) bool {
+func HasAdmin(grants []Grant) bool {
 	return slices.ContainsFunc(grants, func(g Grant) bool { return g.RoleCode == auth.AdminRoleCode })
 }
 
@@ -60,7 +58,7 @@ func CheckManageUser(op *Operator, target []Grant) error {
 	if op.IsAdmin() {
 		return nil
 	}
-	if hasAdmin(target) {
+	if HasAdmin(target) {
 		return httpx.AdminRequired("这个用户是系统管理员，只有系统管理员才能修改他")
 	}
 	for _, g := range target {
@@ -76,7 +74,7 @@ func CheckAssignRoles(op *Operator, before, after []Grant) error {
 	if op.IsAdmin() {
 		return nil
 	}
-	if hasAdmin(before) != hasAdmin(after) {
+	if HasAdmin(before) != HasAdmin(after) {
 		return httpx.AdminRequired("只有系统管理员才能授予或收回系统管理员角色")
 	}
 	for _, g := range after {

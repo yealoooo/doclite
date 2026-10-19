@@ -15,39 +15,12 @@ import (
 // export 的 SQL：export_tasks、export_task_files，以及导出任务的 background_jobs 行（payload、进度、错误）。
 //
 // 跨模块的只读查询（requirements 3.6：建任务、预检、交付后变更在一致快照里读，不加锁）：
-//   - projects（settings、project_code）；users（建任务的人的显示名）；
-//   - archive_categories（范围、名称链）、archive_items（条目、著录、状态）、archive_item_files（条目的页，页号 1..n）；
+//   - projects（settings 经 project.ReadSettings、project_code）；users（建任务的人的显示名）；
+//   - archive_categories（范围；名称链经 catalog.CategoryNames）、archive_items（条目、著录、状态）、archive_item_files（条目的页，页号 1..n）；
 //   - folder_files、folders（文件和文件夹未删除才算页、审核状态读那一刻的值、文件名）；
 //   - file_snapshots（冻结的快照的大小、sha256、mime、存储和 key；交付后变更时导出的版本号）。
 //
 // 当前快照用 file.CurrentOf（file 模块），文件日志经 file.WriteLogs；审计经 audit.Write。
-
-// readSnapshot 在一个只读的 REPEATABLE READ 事务里执行 fn（预检、交付后变更的几条查询看到同一个快照）。
-func readSnapshot(ctx context.Context, pool interface {
-	BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
-}, fn func(tx pgx.Tx) error) error {
-	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck
-	if err := fn(tx); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
-// projectSettings 读未删除项目的 settings（跨模块的读）；项目不存在或已删除时 found 为 false。
-func projectSettings(ctx context.Context, q db.Querier, projectID uuid.UUID) (raw []byte, found bool, err error) {
-	err = q.QueryRow(ctx, `SELECT settings FROM projects WHERE id = $1 AND deleted_at IS NULL`, projectID).Scan(&raw)
-	if db.IsNoRows(err) {
-		return nil, false, nil
-	}
-	if raw == nil {
-		raw = []byte("{}")
-	}
-	return raw, err == nil, err
-}
 
 // liveCategories 是 ids 里这个项目未删除的节点（id → path_code）。
 func liveCategories(ctx context.Context, q db.Querier, projectID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]string, error) {
@@ -165,36 +138,6 @@ ORDER BY c.path_code, a.item_no, a.id`, projectID, ids)
 	return out, rows.Err()
 }
 
-// categoryNames 是这些节点的名称链（从根节点的下一级起到节点自己；根节点为空数组）。
-func categoryNames(ctx context.Context, q db.Querier, ids []uuid.UUID) (map[uuid.UUID][]string, error) {
-	out := make(map[uuid.UUID][]string, len(ids))
-	for _, id := range ids {
-		out[id] = []string{}
-	}
-	if len(ids) == 0 {
-		return out, nil
-	}
-	rows, err := q.Query(ctx, `SELECT c.id, array_agg(x.category_name ORDER BY x.path_code)
-FROM archive_categories c
-CROSS JOIN LATERAL generate_series(12, length(c.path_code), 6) AS g(n)
-JOIN archive_categories x ON x.project_id = c.project_id AND x.path_code = left(c.path_code, g.n)
-WHERE c.id = ANY($1)
-GROUP BY c.id`, ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id uuid.UUID
-		var names []string
-		if err := rows.Scan(&id, &names); err != nil {
-			return nil, err
-		}
-		out[id] = names
-	}
-	return out, rows.Err()
-}
-
 // pageRow 是条目的一页（冻结用）。
 type pageRow struct {
 	ItemID uuid.UUID
@@ -308,7 +251,7 @@ FROM export_tasks t
 LEFT JOIN background_jobs j ON j.id = t.job_id
 LEFT JOIN users u ON u.id = t.created_by`
 
-func scanTask(sc interface{ Scan(...any) error }) (*taskRow, error) {
+func scanTask(sc pgx.Row) (*taskRow, error) {
 	var r taskRow
 	if err := sc.Scan(&r.ID, &r.ProjectID, &r.ScopeType, &r.ScopeIDs, &r.Format, &r.OnlyApproved, &r.Status,
 		&r.StorageProfileID, &r.OutputKey, &r.OutputSize, &r.ExpiresAt, &r.Expired,

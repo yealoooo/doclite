@@ -42,13 +42,13 @@ type Options struct {
 	// MasterKey 是主密钥（加密存储配置的 secret_key），必填。
 	MasterKey config.MasterKey
 	// Stream 是实时通道的保活、复核间隔；零值用默认的 15 秒、60 秒（测试里调短）。
-	Stream project.StreamOptions
+	Stream events.StreamOptions
 	// Upload 是上传的配置（TMP_DIR、MAX_UPLOAD_BYTES、MAX_IMAGE_PIXELS）；零值用默认值。导出的临时目录也在 TMP_DIR 下。
 	Upload file.Options
-	// Jobs 是后台任务执行器的配置（JOB_CONCURRENCY、JOB_HEARTBEAT_SECS、JOB_RETRY_BACKOFF_SECS）。Concurrency 为 0 时
+	// Jobs 是后台任务执行器的配置（JOB_CONCURRENCY；心跳、重试间隔只给测试调小）。Concurrency 为 0 时
 	// StartBackground 什么都不启动（测试默认如此，要执行导出的测试自己设）。
 	Jobs jobs.Options
-	// ExportCleanupInterval 是导出物到期清理的间隔（EXPORT_CLEANUP_INTERVAL_SECS）；零值 10 分钟。
+	// ExportCleanupInterval 是导出物到期清理的间隔，只给测试调；零值 10 分钟。
 	ExportCleanupInterval time.Duration
 	// ExportPartSize 是导出物分片上传每片的大小，只给测试调小；零值按导出物的预计大小算（至少 8 MiB）。
 	ExportPartSize int64
@@ -112,11 +112,11 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	executor := jobs.New(pool, opts.Jobs, log)
 	exportSvc := export.NewService(pool, bus, storageSvc, executor, export.Options{TmpDir: opts.Upload.TmpDir, PartSize: opts.ExportPartSize}, log)
 	executor.Register(export.JobType, exportSvc.JobHandler())
-	// 导出的临时目录只有拿到单实例锁的进程才能清（别的进程可能正在用）。
+	// 导出的临时目录由执行后台任务的进程在启动时清。
 	executor.OnStart(func() { export.SweepTmp(opts.Upload.TmpDir, log) })
 	licenseSvc := license.NewService(pool, authSvc, opts.License)
 	authSvc.SetLicense(licenseSvc)
-	// 存储迁移（M7-2）：后台任务 storage_migrate；迁移的临时目录同样只有拿到单实例锁的进程才能清。
+	// 存储迁移（M7-2）：后台任务 storage_migrate；迁移的临时目录同样在执行器启动时清。
 	migrateOpts := opts.StorageMigrate
 	if migrateOpts.TmpDir == "" {
 		migrateOpts.TmpDir = opts.Upload.TmpDir
@@ -176,19 +176,14 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	}, nil
 }
 
-// StartBackground 启动后台任务执行器（拿单实例锁 → 清导出的临时目录 → 回收上次执行中的）和导出物的到期清理。
-// JOB_CONCURRENCY 为 0 时都不启动（导出一直排队，过期的导出物也不删）；同一个库上另一个 server 进程拿着锁时也不启动
-// （打一条 warn），HTTP 照常，下载和查询不受影响。
+// StartBackground 启动后台任务执行器（清导出的临时目录 → 把上次执行中的放回队列）和导出物的到期清理。
+// JOB_CONCURRENCY 为 0 时都不启动（导出一直排队，过期的导出物也不删）。
 func (a *App) StartBackground(ctx context.Context) error {
 	if !a.Jobs.Enabled() {
 		a.log.Warn("JOB_CONCURRENCY=0：这个进程不执行后台任务（导出会一直排队），也不做导出物的到期清理")
 		return nil
 	}
 	if err := a.Jobs.Start(ctx); err != nil {
-		if errors.Is(err, jobs.ErrBusy) {
-			a.log.Warn("另一个 server 进程正在执行后台任务：这个进程不执行导出、不做到期清理（HTTP 照常）")
-			return nil
-		}
 		return err
 	}
 	cctx, cancel := context.WithCancel(context.Background())
@@ -228,7 +223,7 @@ func (a *App) EnsureInitialAdmin(ctx context.Context, admin *config.InitAdmin) e
 
 // InitLicense 生成 install_id（首次启动）、读导入的许可证并验签（M7-1）。要在处理请求之前调用。
 func (a *App) InitLicense(ctx context.Context) error {
-	if err := a.License.Init(ctx); err != nil {
+	if err := a.License.Reload(ctx); err != nil {
 		return err
 	}
 	if a.License.Dev() {

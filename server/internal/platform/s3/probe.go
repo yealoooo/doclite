@@ -56,7 +56,7 @@ const maxProbeBody = 64 << 10
 // wrongSecretSuffix 接在 secret_key 后面，让签名一定不对。
 const wrongSecretSuffix = "-doclite-signature-check"
 
-const maxDetailRunes = 300
+const maxDetailChars = 300
 
 // TestReport 是测试连接的结果（接口 `ConnectionTestResult` 的字段）。
 type TestReport struct {
@@ -116,7 +116,7 @@ func TestConnection(ctx context.Context, cfg Config, pathPrefix string) TestRepo
 		}
 	}
 	if report.Detail != nil {
-		d := scrub(truncateRunes(*report.Detail, maxDetailRunes), cfg.SecretKey)
+		d := scrub(truncateRunes(*report.Detail, maxDetailChars), cfg.SecretKey)
 		report.Detail = &d
 	}
 	return report

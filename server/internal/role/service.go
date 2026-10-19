@@ -28,11 +28,12 @@ import (
 	"doclite/server/internal/auth"
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/names"
 )
 
 const (
-	maxRoleNameRunes    = 64
-	maxDescriptionRunes = 500
+	maxRoleNameChars    = 64
+	maxDescriptionChars = 500
 )
 
 var roleCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
@@ -69,10 +70,10 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Role, error) {
 
 // CreateInput 是新建角色的输入。
 type CreateInput struct {
-	RoleCode    string
-	RoleName    string
-	Description *string
-	MenuCodes   []string
+	RoleCode    string   `json:"role_code"`
+	RoleName    string   `json:"role_name"`
+	Description *string  `json:"description"`
+	MenuCodes   []string `json:"menu_codes"`
 }
 
 // Create 新建自建角色。编码重复 409 `conflict`；菜单不存在或是分组 400。
@@ -85,9 +86,9 @@ func (s *Service) Create(ctx context.Context, operatorID uuid.UUID, in CreateInp
 	if err != nil {
 		return nil, err
 	}
-	desc, err := normalizeDescription(in.Description)
+	desc, err := names.OptionalText(in.Description, maxDescriptionChars, "角色说明")
 	if err != nil {
-		return nil, err
+		return nil, httpx.Invalid("%s", err)
 	}
 	menus, err := s.normalizeMenus(ctx, in.MenuCodes)
 	if err != nil {
@@ -129,8 +130,8 @@ func (s *Service) Create(ctx context.Context, operatorID uuid.UUID, in CreateInp
 
 // UpdateInput 是修改角色的输入；nil 表示不改，Description 为空字符串表示清空。
 type UpdateInput struct {
-	RoleName    *string
-	Description *string
+	RoleName    *string `json:"role_name"`
+	Description *string `json:"description"`
 }
 
 // Update 改名称、说明（内置角色也可以改）。
@@ -145,9 +146,9 @@ func (s *Service) Update(ctx context.Context, operatorID, id uuid.UUID, in Updat
 	}
 	var desc *string
 	if in.Description != nil {
-		d, err := normalizeDescription(in.Description)
+		d, err := names.OptionalText(in.Description, maxDescriptionChars, "角色说明")
 		if err != nil {
-			return nil, err
+			return nil, httpx.Invalid("%s", err)
 		}
 		desc = d
 	}
@@ -170,7 +171,7 @@ func (s *Service) Update(ctx context.Context, operatorID, id uuid.UUID, in Updat
 		if in.Description != nil {
 			newDesc = desc
 		}
-		if newName == before.RoleName && equalPtr(newDesc, before.Description) {
+		if newName == before.RoleName && names.SameOptional(newDesc, before.Description) {
 			return nil // 没有变化
 		}
 		if err := updateRole(ctx, tx, id, newName, newDesc); err != nil {
@@ -340,25 +341,10 @@ func (s *Service) GrantsByIDs(ctx context.Context, q db.Querier, ids []uuid.UUID
 
 func normalizeName(v string) (string, error) {
 	v = strings.TrimSpace(v)
-	if v == "" || utf8.RuneCountInString(v) > maxRoleNameRunes {
-		return "", httpx.Invalid("角色名称不能为空，最长 %d 个字符", maxRoleNameRunes)
+	if v == "" || utf8.RuneCountInString(v) > maxRoleNameChars {
+		return "", httpx.Invalid("角色名称不能为空，最长 %d 个字符", maxRoleNameChars)
 	}
 	return v, nil
-}
-
-// normalizeDescription：去掉首尾空白，空的当作没有；最长 500 个字符。
-func normalizeDescription(v *string) (*string, error) {
-	if v == nil {
-		return nil, nil
-	}
-	d := strings.TrimSpace(*v)
-	if d == "" {
-		return nil, nil
-	}
-	if utf8.RuneCountInString(d) > maxDescriptionRunes {
-		return nil, httpx.Invalid("角色说明最长 %d 个字符", maxDescriptionRunes)
-	}
-	return &d, nil
 }
 
 // normalizeMenus 校验要分配给角色的菜单码：去掉重复，每个都必须存在、类型为 menu（分组不能分配）。
@@ -402,11 +388,4 @@ func sameSet(a, b []string) bool {
 	slices.Sort(x)
 	slices.Sort(y)
 	return slices.Equal(x, y)
-}
-
-func equalPtr(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
 }

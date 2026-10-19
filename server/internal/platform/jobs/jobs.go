@@ -4,18 +4,16 @@
 //
 // 单服务器版（硬性规则 16，requirements 5.11 的"可简化"）：
 //   - 同时最多执行 Concurrency 个（进程内信号量）；Concurrency 为 0 时不启动；
-//   - 一个库同时只有一个进程执行后台任务：执行器在一条专用连接上拿会话级咨询锁 (6006, 0)，拿不到就不启动（不放回
-//     队列、不执行，打一条 warn）；那条连接断了先重新拿，拿不到就停下执行器；
+//   - 一个库只有一个 server 进程执行后台任务（部署只有一个进程；开发时别的进程设 JOB_CONCURRENCY=0）；
 //   - 心跳：每 Heartbeat 刷新 heartbeat_at，顺便问 Handler 业务对象是不是已经取消，取消了就停下这次执行；
 //     Handler 报的进度最多每秒写一次库（progress_done，同样刷新心跳、查取消），写完让 Handler 发事件。
 //     同一个进程里的取消接口另外调 [Executor.Interrupt]，不用等心跳；
-//   - 回收：库里 running 而这个进程里没有在执行（也没有正在领取）的 job 按"执行中断"处理——业务对象已取消的
-//     改成 canceled，次数用完的改成 failed，其余放回队列（算一次尝试，马上可以再领）。启动时做一次（上次进程被杀时
-//     正在执行的），之后每个心跳间隔做一次（改状态写库失败、领取后没交给执行的）；
+//   - 启动时回收：库里 running 的 job（上次进程被杀时正在执行的、改状态写库失败留下的）按"执行中断"处理——业务对象
+//     已取消的改成 canceled，次数用完的改成 failed，其余放回队列（算一次尝试，马上可以再领）；
 //   - 失败：可以重试的（[Retryable]）而且没到 max_attempts 的排队，run_after = 现在 + RetryBackoff × 4^(n−1)（最多
 //     1 小时）；否则 failed；
 //   - 优雅退出（[Executor.Stop]）：不再领取；正在执行的停下，job 放回队列（attempts − 1，这次不算一次尝试，马上
-//     可以再领）；之后才释放咨询锁；
+//     可以再领）；
 //   - 不做多实例用的租约、心跳超时回收。一次执行由 (job id, attempts) 标识，改 job 行时都核对它。
 //
 // job 行永久保留，重试复用同一行。导出的 payload 写后不改；存储迁移（storage_migrate）的断点、取消记在 payload 的 state、
@@ -48,7 +46,6 @@ const (
 
 // 默认值。
 const (
-	DefaultConcurrency  = 2
 	DefaultHeartbeat    = 10 * time.Second
 	DefaultRetryBackoff = 30 * time.Second
 	// MaxRetryDelay 是重试前最多等多久。
@@ -61,8 +58,8 @@ const (
 	dbTimeout = 30 * time.Second
 )
 
-// Options 是执行器的配置（JOB_CONCURRENCY、JOB_HEARTBEAT_SECS、JOB_RETRY_BACKOFF_SECS）。零值用默认值，
-// 只有 Concurrency 的 0 就是 0（不执行）。
+// Options 是执行器的配置（Concurrency 来自 JOB_CONCURRENCY；其余只给测试调小）。零值用默认值，只有 Concurrency 的 0
+// 就是 0（不执行）。
 type Options struct {
 	// Concurrency 是同时最多执行几个；0 表示这个进程不执行后台任务。
 	Concurrency int

@@ -3,7 +3,6 @@ package export
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 
 	"github.com/google/uuid"
 
@@ -87,53 +86,16 @@ func parsePayload(raw []byte) (*payload, error) {
 	return &p, nil
 }
 
-// exportSettings 是导出要用的项目设置（读时补默认值）。
-type exportSettings struct {
-	requireLockedItem bool
-	retentionDays     int
-	fields            []itemField
-}
-
-// parseSettings 按 project.EffectiveSettings 补默认值后取导出要用的项。著录项只取 key、label、type 合法的（同归类）。
-func parseSettings(stored []byte) exportSettings {
-	eff := project.EffectiveSettings(stored)
-	s := exportSettings{requireLockedItem: true, retentionDays: defaultRetentionDays, fields: []itemField{}}
-	if e, ok := eff["export"].(map[string]any); ok {
-		if v, ok := e["require_locked_item"].(bool); ok {
-			s.requireLockedItem = v
-		}
-		if n, ok := e["retention_days"].(json.Number); ok {
-			if v, err := n.Int64(); err == nil && v >= 1 && v <= maxRetentionDays {
-				s.retentionDays = int(v)
-			}
-		}
+// itemFields 是建任务时冻结的著录项。
+func itemFields(defs []project.FieldDef) []itemField {
+	out := make([]itemField, len(defs))
+	for i, d := range defs {
+		out[i] = itemField{Key: d.Key, Label: d.Label, Type: d.Type}
 	}
-	seen := map[string]bool{project.TitleKey: true}
-	list, _ := eff["item_fields"].([]any)
-	for _, raw := range list {
-		f, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		var def itemField
-		def.Key, _ = f["key"].(string)
-		def.Label, _ = f["label"].(string)
-		def.Type, _ = f["type"].(string)
-		if def.Key == "" || def.Label == "" || seen[def.Key] || (def.Type != "text" && def.Type != "date" && def.Type != "enum") {
-			continue
-		}
-		seen[def.Key] = true
-		s.fields = append(s.fields, def)
-	}
-	return s
+	return out
 }
-
-const (
-	defaultRetentionDays = 7
-	maxRetentionDays     = 365
-)
 
 // errNotReady 是建任务不满足条件：409 invalid_state，details 是预检结果。
 func errNotReady(message string, p *Precheck) error {
-	return httpx.NewError(http.StatusConflict, httpx.CodeInvalidState, message).WithDetails(p)
+	return httpx.InvalidState(message).WithDetails(p)
 }

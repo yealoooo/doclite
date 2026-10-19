@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"doclite/server/internal/platform/archiveno"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/names"
 )
 
 // projects.settings（requirements 3.4）：读时补默认；写时整体替换，只校验已知键，保留未知键，≤ 64 KiB。
@@ -28,8 +28,9 @@ const (
 	// DefaultTextMaxLength 是 text 著录项不设 max_length 时的上限。
 	DefaultTextMaxLength = 500
 	// MaxTextMaxLength 是 text 著录项 max_length 的上限。
-	MaxTextMaxLength = 10000
-	maxRetentionDays = 365
+	MaxTextMaxLength     = 10000
+	maxRetentionDays     = 365
+	defaultRetentionDays = 7
 	// TitleKey 是题名（条目的固定列）在著录校验里的 key，著录项不能叫这个。
 	TitleKey = "title"
 )
@@ -214,7 +215,7 @@ func validateItemFields(v any) error {
 		if err != nil {
 			return err
 		}
-		if typ != "text" && typ != "date" && typ != "enum" {
+		if typ != FieldText && typ != FieldDate && typ != FieldEnum {
 			return settingsError("%s.type 只能是 text、date 或 enum", at)
 		}
 		if r, ok := f["required"]; ok {
@@ -360,7 +361,7 @@ func CheckTextValue(v string, maxLength int) string {
 	if utf8.RuneCountInString(v) > maxLength {
 		return fmt.Sprintf("最长 %d 个字符", maxLength)
 	}
-	if strings.IndexFunc(v, func(c rune) bool { return unicode.IsControl(c) && c != '\n' && c != '\r' && c != '\t' }) >= 0 {
+	if names.HasControlChars(v) {
 		return "不能有控制字符"
 	}
 	return ""

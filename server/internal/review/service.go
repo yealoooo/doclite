@@ -1,7 +1,7 @@
 // Package review 是审核分配和审核（requirements 5.8）、重扫和待重扫（5.6）。
 //
 // 表：file_reviews（一行是一次分配和它的结果：open / done / cancelled）。审核状态和轮次在 folder_files 上
-// （review_status、review_round），属于 internal/folder，经 folder.Service 的 SetReviewStatus、SetReviewState 写。
+// （review_status、review_round），属于 internal/folder，经 folder.Service 的 SetReviewStatus、SetReviewStatusAndRound 写。
 //
 // 状态流转（requirements 5.8 的表）：
 //
@@ -25,9 +25,7 @@ package review
 
 import (
 	"context"
-	"strings"
-	"unicode"
-	"unicode/utf8"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -40,14 +38,13 @@ import (
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
 	"doclite/server/internal/platform/memo"
+	"doclite/server/internal/platform/xslices"
 	"doclite/server/internal/project"
 	"doclite/server/internal/storage"
 )
 
 // 上限（review-settings 里给前端）。
 const (
-	// MaxBatchFiles：按选中的文件分配、批量改派、批量通过一次最多的文件数。
-	MaxBatchFiles = 500
 	// MaxFolderFiles：按文件夹分配、按子树改派一次最多的文件数。
 	MaxFolderFiles = 10000
 	// MaxCommentChars：说明最多的字符数。
@@ -60,13 +57,11 @@ const (
 	RescanReassign = "same_reviewer"
 )
 
-// file_reviews.status、result。
+// file_reviews.status（open、done、cancelled）、result。
 const (
-	statusOpen      = "open"
-	statusDone      = "done"
-	statusCancelled = "cancelled"
-	resultApproved  = "approved"
-	resultRejected  = "rejected"
+	statusOpen     = "open"
+	resultApproved = "approved"
+	resultRejected = "rejected"
 )
 
 // 错误码。
@@ -83,10 +78,6 @@ var (
 
 func notAssignee(msg string) *httpx.Error {
 	return httpx.NewError(403, CodeNotAssignee, msg)
-}
-
-func invalidState(msg string) *httpx.Error {
-	return httpx.Conflict(httpx.CodeInvalidState, msg)
 }
 
 // Service 是审核的业务规则。
@@ -108,16 +99,6 @@ func NewService(pool *pgxpool.Pool, bus *events.Bus, authSvc *auth.Service, stor
 	folderSvc *folder.Service, fileSvc *file.Service) *Service {
 	return &Service{pool: pool, events: bus, auth: authSvc, storage: storageSvc, folders: folderSvc, files: fileSvc,
 		summaries: memo.New[summaryKey, *Summary](summaryTTL)}
-}
-
-// readOnly 在一个只读的可重复读事务里执行 fn：一个读接口的计数、列表、路径看到同一个快照。
-func (s *Service) readOnly(ctx context.Context, fn func(tx pgx.Tx) error) error {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck
-	return fn(tx)
 }
 
 // lockFiles 在写事务里按 requirements 3.6 锁住这些文件：文件树共享锁 → 只锁这个项目里的 files 行（id 升序）→ 锁住之后
@@ -172,7 +153,7 @@ func (s *Service) withPaths(ctx context.Context, q db.Querier, files []*fileStat
 	for _, f := range files {
 		ids = append(ids, f.FolderID)
 	}
-	paths, err := s.folders.Paths(ctx, q, dedup(ids))
+	paths, err := file.FolderPaths(ctx, q, xslices.Unique(ids))
 	if err != nil {
 		return err
 	}
@@ -193,10 +174,9 @@ func filesChanged(projectID uuid.UUID, files []*fileState) events.Event {
 	return events.FilesChanged(projectID, folders, ids)
 }
 
-// notFoundIDs 是批量接口的 404（details.ids 是 file_id）。
-func notFoundIDs(ids []uuid.UUID) error {
-	return httpx.NewError(404, httpx.CodeNotFound, "有 "+itoa(len(ids))+" 个文件不存在、已删除或不在这个项目里（可能刚被别人删除），请刷新后重试").
-		WithDetails(map[string]any{"ids": ids})
+// notFoundFiles 是批量接口的 404（details.ids 是 file_id）。
+func notFoundFiles(ids []uuid.UUID) error {
+	return httpx.NotFoundIDs("有 "+strconv.Itoa(len(ids))+" 个文件不存在、已删除或不在这个项目里（可能刚被别人删除），请刷新后重试", ids)
 }
 
 // eligibility 检查审核人能不能分给（分配、改派的目标）：不存在、停用、没有 review 菜单、进不了项目都是 400。
@@ -218,38 +198,6 @@ func (s *Service) eligibility(ctx context.Context, projectID, reviewerID uuid.UU
 		return nil, httpx.Invalid("审核人「%s」不能进这个项目，不能分给他", f.DisplayName)
 	}
 	return f, nil
-}
-
-// normalizeComment：去掉首尾空白，空串为 nil；最多 500 个字符；不能有控制字符（换行、回车、制表符可以）。
-func normalizeComment(v *string) (*string, error) {
-	if v == nil {
-		return nil, nil
-	}
-	c := strings.TrimSpace(*v)
-	if c == "" {
-		return nil, nil
-	}
-	if utf8.RuneCountInString(c) > MaxCommentChars {
-		return nil, httpx.Invalid("说明最多 %d 个字", MaxCommentChars)
-	}
-	for _, r := range c {
-		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
-			return nil, httpx.Invalid("说明不能包含控制字符")
-		}
-	}
-	return &c, nil
-}
-
-func dedup(ids []uuid.UUID) []uuid.UUID {
-	out := make([]uuid.UUID, 0, len(ids))
-	seen := make(map[uuid.UUID]bool, len(ids))
-	for _, id := range ids {
-		if !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
-	}
-	return out
 }
 
 // newIDs 生成 n 个主键（UUIDv7，在锁住 files 行之后调用，同一个文件上的分配按先后递增）。

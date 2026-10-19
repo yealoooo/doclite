@@ -78,8 +78,11 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) error {
-	q := r.URL.Query()
-	out, err := h.svc.List(r.Context(), auth.ProjectID(r.Context()), q.Get("limit"), q.Get("cursor"))
+	limit, err := httpx.QueryLimit(r, defaultTaskLimit, maxTaskLimit)
+	if err != nil {
+		return err
+	}
+	out, err := h.svc.List(r.Context(), auth.ProjectID(r.Context()), limit, r.URL.Query().Get("cursor"))
 	if err != nil {
 		return err
 	}
@@ -105,8 +108,11 @@ func (h *Handler) files(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	q := r.URL.Query()
-	out, err := h.svc.Files(r.Context(), id, q.Get("limit"), q.Get("cursor"))
+	limit, err := httpx.QueryLimit(r, defaultFileLimit, maxFileLimit)
+	if err != nil {
+		return err
+	}
+	out, err := h.svc.Files(r.Context(), id, limit, r.URL.Query().Get("cursor"))
 	if err != nil {
 		return err
 	}

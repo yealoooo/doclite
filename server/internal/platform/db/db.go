@@ -2,7 +2,7 @@
 //
 // 写法约定：
 //   - store 里的函数接收 [Querier]：传连接池就是单条语句，传 pgx.Tx 就在调用方的事务里执行；
-//   - 事务边界由 service 决定，用 [InTx]；
+//   - 事务边界由 service 决定，用 [InTx]；只读的几条查询要看到同一个快照时用 [ReadTx]；
 //   - SQL 手写，参数用 $1、$2……；主键由应用生成 UUIDv7（[NewID]）。
 package db
 
@@ -94,6 +94,16 @@ func InTx(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) (er
 	return tx.Commit(ctx)
 }
 
+// ReadTx 在一个只读的 REPEATABLE READ 事务里执行 fn：一个读接口的几条查询（计数、列表、路径……）看到同一个快照。
+func ReadTx(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) error {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck
+	return fn(tx)
+}
+
 // AdvisoryXactLocks 在事务 tx 里拿 (class, key) 的排他咨询锁（事务级），一条语句拿完：键去重、按升序拿（几个事务
 // 各拿几把时顺序一致，不会互相等成环）。
 func AdvisoryXactLocks(ctx context.Context, tx Querier, class int32, keys []int32) error {
@@ -110,6 +120,21 @@ func AdvisoryXactLocks(ctx context.Context, tx Querier, class int32, keys []int3
 	// 数组已经升序；ORDER BY 再保证一次（易变函数在排序之后才算）。
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1::int4, k) FROM unnest($2::int4[]) AS k ORDER BY k`, class, keys)
 	return err
+}
+
+// CollectIDs 执行只返回一列 uuid 的查询，按返回的顺序收集。
+func CollectIDs(ctx context.Context, q Querier, sql string, args ...any) ([]uuid.UUID, error) {
+	rows, err := q.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+}
+
+// ContainsPattern 把 %、_、\ 转义后包成 %关键字%，给 ILIKE 用。
+func ContainsPattern(keyword string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return "%" + r.Replace(keyword) + "%"
 }
 
 // NewID 生成主键（UUIDv7）。

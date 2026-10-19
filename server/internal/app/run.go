@@ -24,8 +24,8 @@ const shutdownTimeout = 15 * time.Second
 const jobsStopTimeout = 8 * time.Second
 
 // Run 启动 server：连数据库 → 执行迁移 → 建初始管理员 → 登记默认存储（库里没有存储配置时按 S3_*）→ 监听端口
-// （端口被占用就到此为止，不动临时目录和后台任务）→ 清上传的临时目录 → 启动后台任务（拿到单实例锁才清导出的临时
-// 目录、回收上次执行中的、到期清理）→ 提供 HTTP；ctx 取消（收到 SIGINT、SIGTERM）后优雅退出（执行中的导出放回
+// （端口被占用就到此为止，不动临时目录和后台任务）→ 清上传的临时目录 → 启动后台任务（清导出的临时目录、把上次执行中的
+// 放回队列、到期清理）→ 提供 HTTP；ctx 取消（收到 SIGINT、SIGTERM）后优雅退出（执行中的导出放回
 // 队列，结束 SSE 连接）。
 func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	log.Info("doclite server 启动", "version", Version, "listen", cfg.ListenAddr,
@@ -56,10 +56,8 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		ClientVersions: cfg.ClientVersions,
 		MasterKey:      cfg.MasterKey,
 		Upload:         file.Options{TmpDir: cfg.TmpDir, MaxUploadBytes: cfg.MaxUploadBytes, MaxImagePixels: cfg.MaxImagePixels},
-		Jobs: jobs.Options{Concurrency: cfg.JobConcurrency, Heartbeat: cfg.JobHeartbeat,
-			RetryBackoff: cfg.JobRetryBackoff},
-		ExportCleanupInterval: cfg.ExportCleanupInterval,
-		License:               license.Options{PublicKey: licenseKey},
+		Jobs:           jobs.Options{Concurrency: cfg.JobConcurrency},
+		License:        license.Options{PublicKey: licenseKey},
 	}, log)
 	if err != nil {
 		return err

@@ -21,8 +21,8 @@ import (
 //
 //	PATCH  /api/folders/{id}  {folder_name?, remark?, parent_id?} → 200 FolderItem
 //	DELETE /api/folders/{id}                                       → 204
-//	PATCH  /api/folder-files/{id}  {file_name?, folder_id?}        → 200 EntryUpdated
-//	POST   /api/folder-files/{id}/copy  {folder_id?}（可以没有请求体）→ 201 EntryCopied
+//	PATCH  /api/folder-files/{id}  {file_name?, folder_id?}        → 200 FolderFileUpdated
+//	POST   /api/folder-files/{id}/copy  {folder_id?}（可以没有请求体）→ 201 FolderFileCopied
 //	DELETE /api/folder-files/{id}                                  → 204
 //	POST   /api/folder-files:move  {ids, folder_id}                → 200 MoveResult
 //	POST   /api/folder-files:delete  {ids}                         → 204
@@ -42,11 +42,11 @@ func (h *Handler) Routes(r *httpx.Router, g *auth.Gate) {
 	r.Handle("POST /api/folders", read, h.create)
 	r.Handle("PATCH /api/folders/{id}", g.InProject(files, h.folderProject), h.update)
 	r.Handle("DELETE /api/folders/{id}", g.InProject(files, h.folderProject), h.delete)
-	r.Handle("PATCH /api/folder-files/{id}", g.InProject(files, h.entryProject), h.updateEntry)
-	r.Handle("POST /api/folder-files/{id}/copy", g.InProject(files, h.entryProject), h.copyEntry)
-	r.Handle("DELETE /api/folder-files/{id}", g.InProject(files, h.entryProject), h.deleteEntry)
-	r.Handle("POST /api/folder-files:move", files, h.moveEntries)
-	r.Handle("POST /api/folder-files:delete", files, h.deleteEntries)
+	r.Handle("PATCH /api/folder-files/{id}", g.InProject(files, h.folderFileProject), h.updateFolderFile)
+	r.Handle("POST /api/folder-files/{id}/copy", g.InProject(files, h.folderFileProject), h.copyFolderFile)
+	r.Handle("DELETE /api/folder-files/{id}", g.InProject(files, h.folderFileProject), h.deleteFolderFile)
+	r.Handle("POST /api/folder-files:move", files, h.moveFolderFiles)
+	r.Handle("POST /api/folder-files:delete", files, h.deleteFolderFiles)
 }
 
 func (h *Handler) folderProject(r *http.Request) (uuid.UUID, error) {
@@ -57,12 +57,12 @@ func (h *Handler) folderProject(r *http.Request) (uuid.UUID, error) {
 	return h.svc.ProjectOf(r.Context(), id)
 }
 
-func (h *Handler) entryProject(r *http.Request) (uuid.UUID, error) {
+func (h *Handler) folderFileProject(r *http.Request) (uuid.UUID, error) {
 	id, err := httpx.PathUUID(r, "id")
 	if err != nil {
 		return uuid.Nil, err
 	}
-	return h.svc.ProjectOfEntry(r.Context(), id)
+	return h.svc.ProjectOfFolderFile(r.Context(), id)
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) error {
@@ -91,20 +91,12 @@ func (h *Handler) children(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-type createRequest struct {
-	ParentID   uuid.UUID `json:"parent_id"`
-	FolderName string    `json:"folder_name"`
-	Remark     *string   `json:"remark"`
-	IfExists   string    `json:"if_exists"`
-}
-
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) error {
-	var req createRequest
-	if err := httpx.ReadJSON(r, &req); err != nil {
+	var in CreateInput
+	if err := httpx.ReadJSON(r, &in); err != nil {
 		return err
 	}
-	item, created, err := h.svc.Create(r.Context(), auth.Current(r.Context()).UserID, CreateInput{
-		ParentID: req.ParentID, FolderName: req.FolderName, Remark: req.Remark, IfExists: req.IfExists})
+	item, created, err := h.svc.Create(r.Context(), auth.Current(r.Context()).UserID, in)
 	if err != nil {
 		return err
 	}
@@ -116,24 +108,18 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-type updateRequest struct {
-	FolderName *string    `json:"folder_name"`
-	Remark     *string    `json:"remark"`
-	ParentID   *uuid.UUID `json:"parent_id"`
-}
-
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) error {
 	id, err := httpx.PathUUID(r, "id")
 	if err != nil {
 		return err
 	}
-	var req updateRequest
-	if err := httpx.ReadJSON(r, &req); err != nil {
+	var in UpdateInput
+	if err := httpx.ReadJSON(r, &in); err != nil {
 		return err
 	}
 	ctx := r.Context()
 	item, err := h.svc.Update(ctx, auth.Current(ctx).UserID, auth.ProjectID(ctx), id,
-		UpdateInput{FolderName: req.FolderName, Remark: req.Remark, ParentID: req.ParentID})
+		in)
 	if err != nil {
 		return err
 	}
@@ -154,23 +140,18 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-type entryRequest struct {
-	FileName *string    `json:"file_name"`
-	FolderID *uuid.UUID `json:"folder_id"`
-}
-
-func (h *Handler) updateEntry(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) updateFolderFile(w http.ResponseWriter, r *http.Request) error {
 	id, err := httpx.PathUUID(r, "id")
 	if err != nil {
 		return err
 	}
-	var req entryRequest
-	if err := httpx.ReadJSON(r, &req); err != nil {
+	var in FolderFileInput
+	if err := httpx.ReadJSON(r, &in); err != nil {
 		return err
 	}
 	ctx := r.Context()
-	res, err := h.svc.UpdateEntry(ctx, auth.Current(ctx).UserID, auth.ProjectID(ctx), id,
-		EntryInput{FileName: req.FileName, FolderID: req.FolderID})
+	res, err := h.svc.UpdateFolderFile(ctx, auth.Current(ctx).UserID, auth.ProjectID(ctx), id,
+		in)
 	if err != nil {
 		return err
 	}
@@ -178,17 +159,17 @@ func (h *Handler) updateEntry(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (h *Handler) copyEntry(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) copyFolderFile(w http.ResponseWriter, r *http.Request) error {
 	id, err := httpx.PathUUID(r, "id")
 	if err != nil {
 		return err
 	}
-	var req entryRequest
-	if _, err := httpx.ReadOptionalJSON(r, &req); err != nil {
+	var in FolderFileInput
+	if _, err := httpx.ReadOptionalJSON(r, &in); err != nil {
 		return err
 	}
 	ctx := r.Context()
-	res, err := h.svc.CopyEntry(ctx, auth.Current(ctx).UserID, auth.ProjectID(ctx), id, req.FolderID)
+	res, err := h.svc.CopyFolderFile(ctx, auth.Current(ctx).UserID, auth.ProjectID(ctx), id, in.FolderID)
 	if err != nil {
 		return err
 	}
@@ -196,13 +177,13 @@ func (h *Handler) copyEntry(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (h *Handler) deleteEntry(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) deleteFolderFile(w http.ResponseWriter, r *http.Request) error {
 	id, err := httpx.PathUUID(r, "id")
 	if err != nil {
 		return err
 	}
 	ctx := r.Context()
-	if err := h.svc.DeleteEntry(ctx, auth.Current(ctx).UserID, auth.ProjectID(ctx), id); err != nil {
+	if err := h.svc.DeleteFolderFile(ctx, auth.Current(ctx).UserID, auth.ProjectID(ctx), id); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -214,7 +195,7 @@ type bulkRequest struct {
 	FolderID uuid.UUID   `json:"folder_id"`
 }
 
-func (h *Handler) moveEntries(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) moveFolderFiles(w http.ResponseWriter, r *http.Request) error {
 	var req bulkRequest
 	if err := httpx.ReadJSON(r, &req); err != nil {
 		return err
@@ -228,7 +209,7 @@ func (h *Handler) moveEntries(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	res, err := h.svc.MoveEntries(ctx, uid, scope, req.FolderID)
+	res, err := h.svc.MoveFolderFiles(ctx, uid, scope, req.FolderID)
 	if err != nil {
 		return err
 	}
@@ -236,7 +217,7 @@ func (h *Handler) moveEntries(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (h *Handler) deleteEntries(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) deleteFolderFiles(w http.ResponseWriter, r *http.Request) error {
 	var req bulkRequest
 	if err := httpx.ReadJSON(r, &req); err != nil {
 		return err
@@ -247,7 +228,7 @@ func (h *Handler) deleteEntries(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if err := h.svc.DeleteEntries(ctx, uid, scope); err != nil {
+	if err := h.svc.DeleteFolderFiles(ctx, uid, scope); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)

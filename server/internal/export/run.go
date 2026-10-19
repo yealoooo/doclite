@@ -21,6 +21,7 @@ import (
 	"doclite/server/internal/platform/httpx"
 	"doclite/server/internal/platform/jobs"
 	"doclite/server/internal/platform/s3"
+	"doclite/server/internal/project"
 )
 
 // 执行（requirements 5.11"执行"）：导出在后台执行器（internal/platform/jobs）里的 Handler。
@@ -425,7 +426,7 @@ WHERE t.id = $1 FOR NO KEY UPDATE OF t`, t.ID).Scan(&status, &settings); err != 
 		if status != StatusRunning {
 			return jobs.ErrCanceled
 		}
-		days := parseSettings(settings).retentionDays
+		days := project.ParseSettings(settings).RetentionDays
 		if _, err := tx.Exec(ctx, `UPDATE export_tasks SET status = 'done', finished_at = now(), output_size = $2,
   expires_at = now() + make_interval(days => $3)
 WHERE id = $1 AND status = 'running'`, t.ID, size, days); err != nil {

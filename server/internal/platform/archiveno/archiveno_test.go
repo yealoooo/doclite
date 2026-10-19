@@ -22,14 +22,8 @@ func mustParse(t *testing.T, s string) *Template {
 
 func TestDefaultTemplate(t *testing.T) {
 	tmpl := mustParse(t, DefaultTemplate)
-	if tmpl.Source() != DefaultTemplate {
-		t.Errorf("Source = %q", tmpl.Source())
-	}
 	if got := tmpl.Levels(); !slices.Equal(got, []CategoryType{Fonds, Category, Year, Retention, Org}) {
 		t.Errorf("Levels = %v", got)
-	}
-	if tmpl.ItemNoWidth() != 4 {
-		t.Errorf("ItemNoWidth = %d", tmpl.ItemNoWidth())
 	}
 	if got := tmpl.Separators(); !slices.Equal(got, []rune{'-', '·'}) {
 		t.Errorf("Separators = %q", got)

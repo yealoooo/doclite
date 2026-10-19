@@ -9,10 +9,10 @@
 //   - [WriteLogs]：写 file_logs；
 //   - [Current]、[CurrentOf]：文件的当前快照（max(version_no)）；
 //   - [InsertCopy]：复制文件时新建 file_id 和 v1 copy 快照；[InsertSnapshot]：追加快照；
-//   - [LockContent]：(项目, sha256) 的内容锁。
+//   - [FolderPaths]：文件夹的路径（只读）。
 //
-// 上传的流程见 upload.go；重扫（M3-1）复用 [Service.UploadBody]、[Service.Receive]、[KeysFor]、[Service.PutObjects]、
-// [LockContent]、[Service.FindDuplicate]、[InsertSnapshot]。
+// 上传的流程见 upload.go；重扫（M3-1）复用 [Service.UploadBody]、[Service.Receive]、[Service.Stage]（传到存储）、
+// [Service.Lock]（入库事务里的存储配置行和内容锁）、[Service.FindDuplicate]、[InsertSnapshot]。
 package file
 
 import (
@@ -26,15 +26,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"doclite/server/internal/auth"
-	"doclite/server/internal/platform/db"
+	"doclite/server/internal/config"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/storage"
 )
 
 // 默认值。
 const (
-	DefaultMaxUploadBytes = 512 << 20
-	DefaultMaxImagePixels = 300_000_000
 	// DefaultIdleTimeout：上传的请求体这么久没收到数据按 400 invalid_input（requirements 5.6）。
 	DefaultIdleTimeout = 60 * time.Second
 )
@@ -56,10 +54,10 @@ func (o Options) withDefaults() Options {
 		o.TmpDir = filepath.Join(os.TempDir(), "doclite")
 	}
 	if o.MaxUploadBytes <= 0 {
-		o.MaxUploadBytes = DefaultMaxUploadBytes
+		o.MaxUploadBytes = config.DefaultMaxUploadBytes
 	}
 	if o.MaxImagePixels <= 0 {
-		o.MaxImagePixels = DefaultMaxImagePixels
+		o.MaxImagePixels = config.DefaultMaxImagePixels
 	}
 	if o.IdleTimeout <= 0 {
 		o.IdleTimeout = DefaultIdleTimeout
@@ -97,8 +95,6 @@ type Folders interface {
 	AddFile(ctx context.Context, tx pgx.Tx, slot Slot, fileID, createdBy uuid.UUID) (uuid.UUID, error)
 	// PreviewName 是现在上传到这个文件夹会得到的名字（不加锁，预检用）。
 	PreviewName(ctx context.Context, folderID uuid.UUID, name string) (string, error)
-	// Path 是文件夹从根文件夹起用 / 连接的路径。
-	Path(ctx context.Context, q db.Querier, folderID uuid.UUID) (string, error)
 }
 
 // Service 是文件的业务规则。

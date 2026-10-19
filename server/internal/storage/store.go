@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"doclite/server/internal/platform/db"
 )
@@ -50,9 +51,7 @@ const usageColumns = `
     OR EXISTS (SELECT 1 FROM ocr_results o WHERE o.storage_profile_id = p.id),
   EXISTS (SELECT 1 FROM export_tasks t WHERE t.storage_profile_id = p.id)`
 
-type scanner interface{ Scan(dest ...any) error }
-
-func scanRow(sc scanner, extra ...any) (*row, error) {
+func scanRow(sc pgx.Row, extra ...any) (*row, error) {
 	var r row
 	dest := []any{&r.ID, &r.ProfileName, &r.StorageType, &r.Endpoint, &r.PublicEndpoint, &r.Bucket, &r.Region, &r.PathPrefix,
 		&r.AccessKey, &r.SecretKeyEnc, &r.ForcePathStyle, &r.URLExpireHours, &r.Status, &r.IsDefault, &r.Remark,
@@ -63,7 +62,7 @@ func scanRow(sc scanner, extra ...any) (*row, error) {
 	return &r, nil
 }
 
-func scanWithUsage(sc scanner) (*row, usage, error) {
+func scanWithUsage(sc pgx.Row) (*row, usage, error) {
 	var u usage
 	var exports bool
 	r, err := scanRow(sc, &u.HasContents, &exports)

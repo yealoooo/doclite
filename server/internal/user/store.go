@@ -2,10 +2,10 @@ package user
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"doclite/server/internal/auth"
 	"doclite/server/internal/platform/db"
@@ -29,9 +29,7 @@ type User struct {
 
 const userColumns = `u.id, u.username, u.display_name, u.status, u.last_login_at, u.created_at, u.updated_at`
 
-type scanner interface{ Scan(dest ...any) error }
-
-func scanUser(row scanner) (*User, error) {
+func scanUser(row pgx.Row) (*User, error) {
 	var u User
 	if err := row.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Status, &u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt); err != nil {
 		return nil, err
@@ -40,17 +38,11 @@ func scanUser(row scanner) (*User, error) {
 	return &u, nil
 }
 
-// containsPattern 把 %、_、\ 转义后包成 %关键字%，给 ILIKE 用。
-func containsPattern(keyword string) string {
-	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return "%" + r.Replace(keyword) + "%"
-}
-
 // listUsers：登录名或姓名包含 keyword（不区分大小写；空表示不筛选），按登录名排序（不区分大小写）。
 func listUsers(ctx context.Context, q db.Querier, keyword string, page httpx.PageRequest) ([]User, int, error) {
 	var pattern *string
 	if keyword != "" {
-		p := containsPattern(keyword)
+		p := db.ContainsPattern(keyword)
 		pattern = &p
 	}
 	const filter = `($1::text IS NULL OR u.username ILIKE $1 OR u.display_name ILIKE $1)`

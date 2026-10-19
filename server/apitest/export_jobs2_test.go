@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -13,11 +12,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"doclite/server/internal/platform/jobs"
 )
 
-// 执行器的兜底（M5-2 审查第 1 轮）：改状态写库失败后由回收接手、单实例锁、真的走分片上传。
+// 执行器的兜底（M5-2 审查第 1 轮）：改状态写库失败后重启时收尾、真的走分片上传。
 
 // failSettles 让 background_jobs 从 running 改成别的状态都失败（模拟执行器改状态时写库出错）；返回删掉触发器的函数。
 func failSettles(e *Env) func() {
@@ -33,38 +30,15 @@ END $$`)
 	return func() { e.Exec(`DROP TRIGGER IF EXISTS test_fail_settle ON background_jobs`) }
 }
 
-// waitOrphan 等任务的 job 在库里是 running、而执行器已经不在执行它了（改状态失败，留给回收）。
-func (e *exportEnv) waitOrphan(taskID uuid.UUID) {
-	e.t.Helper()
-	jobID := QueryValue[uuid.UUID](e.Env, `SELECT job_id FROM export_tasks WHERE id = $1`, taskID)
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		if st, _, _ := e.jobOf(taskID); st == "running" && !e.App.Jobs.Executing(jobID) {
-			return
-		}
-		if time.Now().After(deadline) {
-			e.t.Fatalf("任务 %s 的 job 没有停在“running、没人执行”", taskID)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-// TestExportReaper：执行器改状态写库失败时 job 留在 running；写库恢复后一个回收周期（心跳间隔）内收尾——取消的变成
-// canceled（cleaning_up 变成 false，到期清理接着清），没取消的放回队列（算一次尝试）再执行完。另外：同一个库上第二个
-// 执行器拿不到单实例锁，不启动。
-func TestExportReaper(t *testing.T) {
+// TestExportSettleFailure：执行器改状态写库失败时 job 留在 running（单服务器版不做周期回收）；重启时收尾——取消的变成
+// canceled（cleaning_up 变成 false，到期清理接着清），没取消的放回队列（算一次尝试）再执行完。
+func TestExportSettleFailure(t *testing.T) {
 	t.Parallel()
 	e := newExportEnv(t, "EXO", withProxy)
 	body := e.exportReady("一", 6)
 	e.start()
 
-	// 同一个库上的第二个执行器：拿不到锁，不启动、不回收。
-	other := jobs.New(e.Pool, jobs.Options{Concurrency: 1}, nil)
-	if err := other.Start(context.Background()); !errors.Is(err, jobs.ErrBusy) || other.Active() {
-		t.Fatalf("第二个执行器应拿不到锁：%v", err)
-	}
-
-	// 1. 取消后收尾写库失败：一直 cleaning_up；恢复后一个回收周期内变成 canceled。
+	// 1. 取消后收尾写库失败：一直 cleaning_up。
 	e.proxy.delay.Store(int64(300 * time.Millisecond))
 	t1 := e.createTask(body)
 	e.waitTask(t1.ID, 10*time.Second, "开始执行", func(t exportTask) bool { return t.Status == "running" })
@@ -73,20 +47,31 @@ func TestExportReaper(t *testing.T) {
 	if !c.CleaningUp {
 		t.Fatalf("取消执行中的：%+v", c)
 	}
-	e.waitOrphan(t1.ID)
-	time.Sleep(time.Second) // 回收也一直失败
+
+	// 2. 完成时写库失败：放回队列也失败，job、任务都停在 running。
+	e.proxy.delay.Store(0)
+	t2 := e.createTask(body)
+	e.waitTask(t2.ID, 10*time.Second, "开始执行", func(t exportTask) bool { return t.Status == "running" })
+	time.Sleep(time.Second)
+	e.stop()
 	if tk := e.task(t1.ID); !tk.CleaningUp {
 		t.Fatalf("改状态失败时应一直是 cleaning_up：%+v", tk)
 	}
-	if st, _, _ := e.jobOf(t1.ID); st != "running" {
-		t.Fatalf("job：%s", st)
+	if tk := e.task(t2.ID); tk.Status != "running" || tk.Attempts != 1 {
+		t.Fatalf("写库失败时应停在 running：%+v", tk)
 	}
+	for _, id := range []uuid.UUID{t1.ID, t2.ID} {
+		if st, _, _ := e.jobOf(id); st != "running" {
+			t.Fatalf("job：%s", st)
+		}
+	}
+
+	// 3. 写库恢复后重启：取消的收尾，没取消的再执行一次。
 	restore()
-	start := time.Now()
-	e.waitTask(t1.ID, 2*time.Second, "清理完", func(t exportTask) bool { return !t.CleaningUp })
-	t.Logf("恢复后 %s 收尾完", time.Since(start).Round(time.Millisecond))
+	e.start()
+	e.waitTask(t1.ID, 5*time.Second, "清理完", func(t exportTask) bool { return !t.CleaningUp })
 	if st, _, _ := e.jobOf(t1.ID); st != "canceled" {
-		t.Fatalf("回收后 job：%s", st)
+		t.Fatalf("重启后 job：%s", st)
 	}
 	if n, err := e.App.Exports.Cleanup(context.Background()); err != nil || n > 1 {
 		t.Errorf("收尾后到期清理：%d %v", n, err)
@@ -94,33 +79,13 @@ func TestExportReaper(t *testing.T) {
 	if n := QueryValue[int](e.Env, `SELECT count(*) FROM export_tasks WHERE id = $1 AND output_key IS NOT NULL`, t1.ID); n != 0 {
 		t.Errorf("收尾后到期清理应清空导出物")
 	}
-
-	// 2. 完成时写库失败：放回队列也失败，job、任务都停在 running；恢复后回收放回队列（算一次尝试），再执行完。
-	e.proxy.delay.Store(0)
-	restore = failSettles(e.Env)
-	t2 := e.createTask(body)
-	e.waitOrphan(t2.ID)
-	time.Sleep(time.Second)
-	if tk := e.task(t2.ID); tk.Status != "running" || tk.Attempts != 1 {
-		t.Fatalf("写库失败时应停在 running：%+v", tk)
-	}
-	restore()
 	t2 = e.waitDone(t2.ID)
 	if t2.Attempts != 2 {
-		t.Errorf("回收后再执行一次：%+v", t2)
+		t.Errorf("重启后再执行一次：%+v", t2)
 	}
 	if n := QueryValue[int](e.Env, `SELECT count(*) FROM file_logs WHERE action = 'export'`); n != 6 {
 		t.Errorf("export 日志 %d 条（第 1 次的事务回滚了，只有第 2 次的 6 条）", n)
 	}
-
-	// 第一个执行器停下（释放锁）之后，第二个能拿到。
-	e.stop()
-	if err := other.Start(context.Background()); err != nil || !other.Active() {
-		t.Fatalf("释放锁之后应能启动：%v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	other.Stop(ctx)
 }
 
 // TestExportMultipart：导出物真的走分片上传（测试把每片调到 S3 允许的最小 5 MiB，导出约 11 MB）：正常完成时下载的

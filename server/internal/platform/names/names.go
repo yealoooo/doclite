@@ -221,3 +221,34 @@ func joinRunes(rs []rune, sep string) string {
 	}
 	return strings.Join(parts, sep)
 }
+
+// HasControlChars：有控制字符（换行、回车、制表符不算）。
+func HasControlChars(s string) bool {
+	return strings.IndexFunc(s, func(c rune) bool { return unicode.IsControl(c) && c != '\n' && c != '\r' && c != '\t' }) >= 0
+}
+
+// OptionalText 规整可选的文本（备注、说明）：nil 是没传；去掉首尾空白后为空当作没有（nil）；最长 max 个字符；不能有
+// 控制字符（换行、回车、制表符可以）。label 是给用户看的名称（"备注"）。
+func OptionalText(v *string, max int, label string) (*string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	t := strings.TrimSpace(*v)
+	switch {
+	case t == "":
+		return nil, nil
+	case utf8.RuneCountInString(t) > max:
+		return nil, fmt.Errorf("%s最长 %d 个字符", label, max)
+	case HasControlChars(t):
+		return nil, fmt.Errorf("%s不能包含控制字符", label)
+	}
+	return &t, nil
+}
+
+// SameOptional 判断两个可选的文本是否相同（都没有也算相同）。
+func SameOptional(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}

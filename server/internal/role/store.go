@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"doclite/server/internal/auth"
 	"doclite/server/internal/platform/db"
@@ -38,9 +39,7 @@ const roleSelect = `SELECT r.id, r.role_code, r.role_name, r.description, r.is_b
   (SELECT count(*) FROM user_roles ur WHERE ur.role_id = r.id) AS user_count
 FROM roles r`
 
-type scanner interface{ Scan(dest ...any) error }
-
-func scanRole(row scanner) (*Role, error) {
+func scanRole(row pgx.Row) (*Role, error) {
 	var r Role
 	if err := row.Scan(&r.ID, &r.RoleCode, &r.RoleName, &r.Description, &r.IsBuiltin, &r.CreatedAt, &r.UpdatedAt,
 		&r.MenuCodes, &r.UserCount); err != nil {

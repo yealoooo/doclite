@@ -11,7 +11,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"doclite/server/internal/file"
+	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/xslices"
 )
 
 // 读接口（requirements 5.8"读接口"）：只含未删除的文件和文件夹；folder_id 是子树（不传是整个项目，不在这个项目里或
@@ -33,8 +36,8 @@ type ListParams struct {
 
 var cursorPattern = regexp.MustCompile(`^((?:[0-9]{5}\.)+)_(-?[0-9]{1,10})_([0-9a-f-]{36})$`)
 
-// ParseCursor 解析 cursor（`<path_code>_<sort_no>_<file_id>`）；空串是第一页。不对 400。
-func ParseCursor(s string) (*keyset, error) {
+// parseCursor 解析 cursor（`<path_code>_<sort_no>_<file_id>`）；空串是第一页。不对 400。
+func parseCursor(s string) (*keyset, error) {
 	if s == "" {
 		return nil, nil
 	}
@@ -52,30 +55,6 @@ func ParseCursor(s string) (*keyset, error) {
 
 func (k keyset) String() string {
 	return k.PathCode + "_" + strconv.Itoa(k.SortNo) + "_" + k.FileID.String()
-}
-
-// ParseLimit 解析 limit：空串是默认的 500，1–2000，不对 400。
-func ParseLimit(s string) (int, error) {
-	if s == "" {
-		return DefaultLimit, nil
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n < 1 || n > MaxLimit {
-		return 0, httpx.Invalid("limit 要是 1 到 %d 的整数", MaxLimit)
-	}
-	return n, nil
-}
-
-// ParseOptionalUUID 解析可选的 id 参数：空串当作没传；不是 UUID 400。
-func ParseOptionalUUID(name, s string) (*uuid.UUID, error) {
-	if s == "" {
-		return nil, nil
-	}
-	id, err := uuid.Parse(s)
-	if err != nil {
-		return nil, httpx.Invalid("参数 %s 不是合法的 UUID", name)
-	}
-	return &id, nil
 }
 
 // scope 在只读事务里读范围文件夹（nil 是根文件夹）：不在这个项目里或已删除 404。
@@ -187,7 +166,7 @@ var MyReviewStates = []string{"all", statusOpen, resultApproved, resultRejected}
 // MyReviews 是审核员的待办（项目授权已经查过）。
 func (s *Service) MyReviews(ctx context.Context, userID uuid.UUID, q MyReviewsQuery) (*MyReviews, error) {
 	out := &MyReviews{ProjectID: q.ProjectID, LowDPIThreshold: LowDPI, Folders: []MyReviewFolder{}, Items: []MyReviewItem{}}
-	err := s.readOnly(ctx, func(tx pgx.Tx) error {
+	err := db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		sc, err := scope(ctx, tx, q.ProjectID, q.FolderID)
 		if err != nil {
 			return err
@@ -207,7 +186,7 @@ func (s *Service) MyReviews(ctx context.Context, userID uuid.UUID, q MyReviewsQu
 				out.Items = append(out.Items, r.Item)
 			}
 		}
-		paths, err := s.folders.Paths(ctx, tx, folderIDs)
+		paths, err := file.FolderPaths(ctx, tx, folderIDs)
 		if err != nil {
 			return err
 		}
@@ -341,7 +320,7 @@ func (s *Service) Summary(ctx context.Context, projectID uuid.UUID, folderID *uu
 // summary 是不经缓存的状态计数。
 func (s *Service) summary(ctx context.Context, projectID uuid.UUID, folderID *uuid.UUID) (*Summary, error) {
 	var out *Summary
-	err := s.readOnly(ctx, func(tx pgx.Tx) error {
+	err := db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		sc, err := scope(ctx, tx, projectID, folderID)
 		if err != nil {
 			return err
@@ -418,7 +397,7 @@ type OpenAssignments struct {
 // OpenAssignments 是 open 的分配（改派用）。
 func (s *Service) OpenAssignments(ctx context.Context, projectID uuid.UUID, p ListParams, reviewer *uuid.UUID) (*OpenAssignments, error) {
 	out := &OpenAssignments{Reviewers: []AssignmentReviewer{}}
-	err := s.readOnly(ctx, func(tx pgx.Tx) error {
+	err := db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		sc, err := scope(ctx, tx, projectID, p.FolderID)
 		if err != nil {
 			return err
@@ -461,7 +440,7 @@ func (s *Service) OpenAssignments(ctx context.Context, projectID uuid.UUID, p Li
 		items, out.NextCursor = nextCursor(items, p.Limit, func(a OpenAssignment) keyset {
 			return keyset{PathCode: a.pathCode, SortNo: a.SortNo, FileID: a.FileID}
 		})
-		paths, err := s.folders.Paths(ctx, tx, folderIDsOf(items, func(a OpenAssignment) uuid.UUID { return a.FolderID }))
+		paths, err := file.FolderPaths(ctx, tx, folderIDsOf(items, func(a OpenAssignment) uuid.UUID { return a.FolderID }))
 		if err != nil {
 			return err
 		}
@@ -485,7 +464,7 @@ func folderIDsOf[T any](items []T, id func(T) uuid.UUID) []uuid.UUID {
 	for _, it := range items {
 		out = append(out, id(it))
 	}
-	return dedup(out)
+	return xslices.Unique(out)
 }
 
 // ---------- 待重扫 ----------
@@ -532,7 +511,7 @@ type RescanList struct {
 // Rescans 是已驳回、等重扫的文件。
 func (s *Service) Rescans(ctx context.Context, projectID uuid.UUID, p ListParams) (*RescanList, error) {
 	out := &RescanList{}
-	err := s.readOnly(ctx, func(tx pgx.Tx) error {
+	err := db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		sc, err := scope(ctx, tx, projectID, p.FolderID)
 		if err != nil {
 			return err
@@ -548,7 +527,7 @@ func (s *Service) Rescans(ctx context.Context, projectID uuid.UUID, p ListParams
 		items, out.NextCursor = nextCursor(items, p.Limit, func(it RescanItem) keyset {
 			return keyset{PathCode: it.pathCode, SortNo: it.SortNo, FileID: it.FileID}
 		})
-		paths, err := s.folders.Paths(ctx, tx, folderIDsOf(items, func(it RescanItem) uuid.UUID { return it.FolderID }))
+		paths, err := file.FolderPaths(ctx, tx, folderIDsOf(items, func(it RescanItem) uuid.UUID { return it.FolderID }))
 		if err != nil {
 			return err
 		}
@@ -599,7 +578,7 @@ type FileReviews struct {
 // FileReviews 是一个文件的全部分配和结果（按 id 升序，即分配的先后）。
 func (s *Service) FileReviews(ctx context.Context, projectID, fileID uuid.UUID) (*FileReviews, error) {
 	var out *FileReviews
-	err := s.readOnly(ctx, func(tx pgx.Tx) error {
+	err := db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		list, err := rereadFiles(ctx, tx, projectID, []uuid.UUID{fileID})
 		if err != nil {
 			return err

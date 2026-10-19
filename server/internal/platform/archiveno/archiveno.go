@@ -107,7 +107,6 @@ func (s segment) String() string {
 
 // Template 是解析好的档号模板。
 type Template struct {
-	source   string
 	segments []segment
 }
 
@@ -226,7 +225,7 @@ func Parse(source string) (*Template, error) {
 		}
 		prev = i
 	}
-	return &Template{source: source, segments: segs}, nil
+	return &Template{segments: segs}, nil
 }
 
 // parsePlaceholder 解析花括号里的内容（不含花括号）。
@@ -255,9 +254,6 @@ func parsePlaceholder(inner string) (segment, error) {
 	return segment{}, invalidf("不认识的占位符 {%s}，能用的有 {fonds}、{category}、{year}、{retention}、{org}、{custom}、{item_no}、{item_no:04}", inner)
 }
 
-// Source 是模板原文。
-func (t *Template) Source() string { return t.source }
-
 // Levels 是模板用到的节点类型，按模板里的顺序（catalog-settings 的 archive_no_levels）。
 func (t *Template) Levels() []CategoryType {
 	var out []CategoryType
@@ -267,16 +263,6 @@ func (t *Template) Levels() []CategoryType {
 		}
 	}
 	return out
-}
-
-// ItemNoWidth 是件号补零的位数，0 表示不补零。
-func (t *Template) ItemNoWidth() int {
-	for _, s := range t.segments {
-		if s.itemNo {
-			return s.width
-		}
-	}
-	return 0
 }
 
 // Separators 是文字部分里所有不是字母、数字的字符，按码点排序、去重。归类节点的编码不能含它们。

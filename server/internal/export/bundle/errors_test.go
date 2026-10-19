@@ -88,7 +88,7 @@ func TestErrors(t *testing.T) {
 				t.Fatalf("类别是 %s，应该是 %s：%v", e.Kind, c.kind, err)
 			}
 			wantRetry := c.kind == KindSource || c.kind == KindOutput
-			if e.Retryable() != wantRetry || IsRetryable(err) != wantRetry {
+			if e.Retryable() != wantRetry || isRetryable(err) != wantRetry {
 				t.Fatalf("Retryable 是 %v", e.Retryable())
 			}
 			if c.kind != KindOutput {
@@ -101,8 +101,8 @@ func TestErrors(t *testing.T) {
 			}
 
 			ierr := Inspect(context.Background(), src, c.format, item, bad, c.opts)
-			if KindOf(ierr) != c.inspect {
-				t.Fatalf("Inspect 的类别是 %q，应该是 %q：%v", KindOf(ierr), c.inspect, ierr)
+			if kindOf(ierr) != c.inspect {
+				t.Fatalf("Inspect 的类别是 %q，应该是 %q：%v", kindOf(ierr), c.inspect, ierr)
 			}
 			if ierr != nil {
 				var ie *Error
@@ -125,7 +125,7 @@ func TestErrors(t *testing.T) {
 		tmp := t.TempDir()
 		_, err := Generate(ctx, job, src, io.Discard, Options{TmpDir: tmp}, nil)
 		assertEmptyDir(t, tmp)
-		if KindOf(err) != KindCanceled || !errors.Is(err, context.Canceled) {
+		if kindOf(err) != KindCanceled || !errors.Is(err, context.Canceled) {
 			t.Fatalf("应该是取消：%v", err)
 		}
 	})
@@ -145,7 +145,7 @@ func TestErrors(t *testing.T) {
 			"著录项个数不对":  {Format: FormatPDF, FieldNames: []string{"年度"}, Items: []Item{testItem("A", p)}},
 		} {
 			_, _, err := generate(t, job, ms, Options{})
-			if KindOf(err) != KindInvalidInput || IsRetryable(err) {
+			if kindOf(err) != KindInvalidInput || isRetryable(err) {
 				t.Errorf("%s：应该是 invalid_input，却是 %v", name, err)
 			}
 		}
@@ -176,4 +176,19 @@ func (c *cancelSource) Open(ctx context.Context, p Page) (io.ReadCloser, error) 
 		c.cancel()
 	}
 	return c.memSource.Open(ctx, p)
+}
+
+// kindOf 返回 err 的类别；不是 *Error 时返回空串。
+func kindOf(err error) Kind {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Kind
+	}
+	return ""
+}
+
+// isRetryable：err 是可以重试的 *Error。
+func isRetryable(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Retryable()
 }

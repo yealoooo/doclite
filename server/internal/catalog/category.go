@@ -49,7 +49,7 @@ type UpdatedCategory struct {
 // ListCategories 是 parentID（nil 是根节点）的直接子节点。父节点不在这个项目里或已删除 404。
 func (s *Service) ListCategories(ctx context.Context, projectID uuid.UUID, parentID *uuid.UUID) (*CategoryList, error) {
 	var out *CategoryList
-	err := readSnapshot(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.ReadTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var parent *catRow
 		var err error
 		if parentID == nil {
@@ -79,17 +79,17 @@ func (s *Service) ListCategories(ctx context.Context, projectID uuid.UUID, paren
 
 // CategoryInput 是新建节点的输入。ParentID 为 nil 时建在根节点下。
 type CategoryInput struct {
-	ParentID *uuid.UUID
-	Type     string
-	Code     string
-	Name     string
+	ParentID     *uuid.UUID `json:"parent_id"`
+	CategoryType string     `json:"category_type"`
+	CategoryCode string     `json:"category_code"`
+	CategoryName string     `json:"category_name"`
 }
 
 func codeConflict(code string) error {
 	return httpx.Conflict("", fmt.Sprintf("同一层已有编码为“%s”的节点（区分大小写），请换一个编码", code))
 }
 
-var errTreeFull = httpx.Conflict("tree_full", fmt.Sprintf("这一层的节点已经到上限（%d 个，编码不回收），请换一个上级节点", maxChildNo))
+var errTreeFull = httpx.Conflict(httpx.CodeTreeFull, fmt.Sprintf("这一层的节点已经到上限（%d 个，编码不回收），请换一个上级节点", maxChildNo))
 
 // categoryState 是审计里节点的状态。
 func categoryState(c *catRow, path string) map[string]any {
@@ -97,16 +97,16 @@ func categoryState(c *catRow, path string) map[string]any {
 	if c.ParentID != nil {
 		parent = c.ParentID.String()
 	}
-	return map[string]any{"category_name": c.Name, "category_code": c.Code, "category_type": c.Type,
+	return map[string]any{"category_name": c.CategoryName, "category_code": c.CategoryCode, "category_type": c.CategoryType,
 		"path_code": c.PathCode, "parent_id": parent, "category_path": path}
 }
 
 // CreateCategory 新建节点。
 func (s *Service) CreateCategory(ctx context.Context, operatorID, projectID uuid.UUID, in CategoryInput) (*Category, error) {
-	if err := checkCategoryType(in.Type); err != nil {
+	if err := checkCategoryType(in.CategoryType); err != nil {
 		return nil, err
 	}
-	name, err := normalizeCategoryName(in.Name)
+	name, err := normalizeCategoryName(in.CategoryName)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func (s *Service) CreateCategory(ctx context.Context, operatorID, projectID uuid
 	if err != nil {
 		return nil, err
 	}
-	if err := names.ValidateCategoryCode(in.Code, st.separators()); err != nil {
+	if err := names.ValidateCategoryCode(in.CategoryCode, st.separators()); err != nil {
 		return nil, httpx.Invalid("%s", err.Error())
 	}
 	var out Category
@@ -141,10 +141,10 @@ func (s *Service) CreateCategory(ctx context.Context, operatorID, projectID uuid
 		if parent == nil || parent.Deleted {
 			return httpx.NotFound("上级归类节点")
 		}
-		if dup, err := siblingWithCode(ctx, tx, parent.ID, in.Code, uuid.Nil); err != nil {
+		if dup, err := siblingWithCode(ctx, tx, parent.ID, in.CategoryCode, uuid.Nil); err != nil {
 			return err
 		} else if dup != uuid.Nil {
-			return codeConflict(in.Code)
+			return codeConflict(in.CategoryCode)
 		}
 		path, childNo, ok, err := allocChildPath(ctx, tx, parent.ID)
 		if err != nil {
@@ -153,11 +153,11 @@ func (s *Service) CreateCategory(ctx context.Context, operatorID, projectID uuid
 		if !ok {
 			return errTreeFull
 		}
-		c := &catRow{ID: db.NewID(), ProjectID: projectID, ParentID: &parent.ID, PathCode: path, Type: in.Type, Code: in.Code,
-			Name: name, SortNo: childNo}
+		c := &catRow{ID: db.NewID(), ProjectID: projectID, ParentID: &parent.ID, PathCode: path, CategoryType: in.CategoryType, CategoryCode: in.CategoryCode,
+			CategoryName: name, SortNo: childNo}
 		if err := insertCategory(ctx, tx, c); err != nil {
 			if db.UniqueViolation(err, "ux_archive_categories_code") {
-				return codeConflict(in.Code)
+				return codeConflict(in.CategoryCode)
 			}
 			return err
 		}
@@ -184,10 +184,10 @@ func (s *Service) CreateCategory(ctx context.Context, operatorID, projectID uuid
 
 // CategoryPatch 是修改节点的输入；nil 表示不改，和现在一样的当作没给。
 type CategoryPatch struct {
-	Name     *string
-	Code     *string
-	Type     *string
-	ParentID *uuid.UUID
+	CategoryName *string    `json:"category_name"`
+	CategoryCode *string    `json:"category_code"`
+	CategoryType *string    `json:"category_type"`
+	ParentID     *uuid.UUID `json:"parent_id"`
 }
 
 // categoryDiff 是修改后的值和变了哪些。
@@ -203,31 +203,31 @@ func (d categoryDiff) exclusive() bool { return d.codeChanged || d.typeChgd || d
 
 // diffCategory 校验修改（400），算出变了哪些；根节点有变化 409 `invalid_state`。
 func diffCategory(cur *catRow, in CategoryPatch, st *settings) (categoryDiff, error) {
-	d := categoryDiff{name: cur.Name, code: cur.Code, typ: cur.Type}
-	if in.Name != nil && strings.TrimSpace(*in.Name) != cur.Name {
-		n, err := normalizeCategoryName(*in.Name)
+	d := categoryDiff{name: cur.CategoryName, code: cur.CategoryCode, typ: cur.CategoryType}
+	if in.CategoryName != nil && strings.TrimSpace(*in.CategoryName) != cur.CategoryName {
+		n, err := normalizeCategoryName(*in.CategoryName)
 		if err != nil {
 			return d, err
 		}
 		d.name, d.nameChanged = n, true
 	}
-	if in.Code != nil && *in.Code != cur.Code {
-		if err := names.ValidateCategoryCode(*in.Code, st.separators()); err != nil {
+	if in.CategoryCode != nil && *in.CategoryCode != cur.CategoryCode {
+		if err := names.ValidateCategoryCode(*in.CategoryCode, st.separators()); err != nil {
 			return d, httpx.Invalid("%s", err.Error())
 		}
-		d.code, d.codeChanged = *in.Code, true
+		d.code, d.codeChanged = *in.CategoryCode, true
 	}
-	if in.Type != nil && *in.Type != cur.Type {
-		if err := checkCategoryType(*in.Type); err != nil {
+	if in.CategoryType != nil && *in.CategoryType != cur.CategoryType {
+		if err := checkCategoryType(*in.CategoryType); err != nil {
 			return d, err
 		}
-		d.typ, d.typeChgd = *in.Type, true
+		d.typ, d.typeChgd = *in.CategoryType, true
 	}
 	if in.ParentID != nil && (cur.ParentID == nil || *in.ParentID != *cur.ParentID) {
 		d.parentID, d.move = *in.ParentID, true
 	}
 	if cur.ParentID == nil && d.any() {
-		return d, httpx.Conflict(httpx.CodeInvalidState, "根节点不能改名、改编码、改类型或移动（它的名称和编码跟着项目）")
+		return d, httpx.InvalidState("根节点不能改名、改编码、改类型或移动（它的名称和编码跟着项目）")
 	}
 	return d, nil
 }
@@ -298,7 +298,7 @@ func (s *Service) UpdateCategory(ctx context.Context, operatorID, projectID, id 
 				return httpx.NotFound("目标归类节点")
 			}
 			if strings.HasPrefix(newParent.PathCode, node.PathCode) {
-				return httpx.Conflict("tree_cycle", "不能把节点移到它自己或它下面的节点里")
+				return httpx.Conflict(httpx.CodeTreeCycle, "不能把节点移到它自己或它下面的节点里")
 			}
 		}
 		if exclusive {
@@ -307,9 +307,9 @@ func (s *Service) UpdateCategory(ctx context.Context, operatorID, projectID, id 
 				return err
 			}
 			if n > 0 {
-				return httpx.Conflict("item_locked", fmt.Sprintf(
+				return httpx.Conflict(httpx.CodeItemLocked, fmt.Sprintf(
 					"「%s」下面（含下级节点）有 %d 个已锁定的条目（例如「%s」第 %d 件），不能移动、改编码或改类型；先解锁这些条目",
-					node.Name, n, ex.CategoryName, ex.ItemNo))
+					node.CategoryName, n, ex.CategoryName, ex.ItemNo))
 			}
 		}
 		parentID := *node.ParentID
@@ -328,7 +328,7 @@ func (s *Service) UpdateCategory(ctx context.Context, operatorID, projectID, id 
 			return err
 		}
 		after := *node
-		after.Name, after.Code, after.Type = d.name, d.code, d.typ
+		after.CategoryName, after.CategoryCode, after.CategoryType = d.name, d.code, d.typ
 		if d.move {
 			path, childNo, ok, err := allocChildPath(ctx, tx, newParent.ID)
 			if err != nil {
@@ -418,7 +418,7 @@ func (s *Service) DeleteCategory(ctx context.Context, operatorID, projectID, id 
 		return errCategoryNotFound
 	}
 	if cur.ParentID == nil {
-		return httpx.Conflict(httpx.CodeInvalidState, "根节点不能删除")
+		return httpx.InvalidState("根节点不能删除")
 	}
 	return s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
 		if err := project.LockCatalogTree(ctx, tx, projectID, true); err != nil {
@@ -443,7 +443,7 @@ func (s *Service) DeleteCategory(ctx context.Context, operatorID, projectID, id 
 			}
 			return httpx.Conflict("category_not_empty", fmt.Sprintf(
 				"「%s」下面（含下级节点）还有 %d 个条目（例如「%s」第 %d 件「%s」），不能删除；先把这些条目删除或移走",
-				node.Name, n, ex.CategoryName, ex.ItemNo, title))
+				node.CategoryName, n, ex.CategoryName, ex.ItemNo, title))
 		}
 		ch, err := categoryChain(ctx, tx, projectID, node.PathCode)
 		if err != nil {

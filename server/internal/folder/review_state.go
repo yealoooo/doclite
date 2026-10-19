@@ -29,8 +29,8 @@ WHERE file_id = ANY($1) AND deleted_at IS NULL`, fileIDs, status)
 	return err
 }
 
-// SetReviewState 改一个文件（file_id，未删除的）的审核状态和轮次（重扫：轮次 +1）。
-func (s *Service) SetReviewState(ctx context.Context, tx pgx.Tx, fileID uuid.UUID, status string, round int) error {
+// SetReviewStatusAndRound 改一个文件（file_id，未删除的）的审核状态和轮次（重扫：轮次 +1）。
+func (s *Service) SetReviewStatusAndRound(ctx context.Context, tx pgx.Tx, fileID uuid.UUID, status string, round int) error {
 	_, err := tx.Exec(ctx, `UPDATE folder_files SET review_status = $2, review_round = $3, updated_at = now()
 WHERE file_id = $1 AND deleted_at IS NULL`, fileID, status, round)
 	return err

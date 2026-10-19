@@ -14,7 +14,6 @@ import (
 
 	"doclite/server/internal/app"
 	"doclite/server/internal/platform/events"
-	"doclite/server/internal/project"
 )
 
 // sseConn 是一条打开的 SSE 连接：后台逐行读，事件放进 events，注释（保活）计数，结束时关闭 done。
@@ -125,7 +124,7 @@ func (s *sseConn) closedWithin(t *testing.T, d time.Duration, why string) {
 }
 
 func fastStream(o *app.Options) {
-	o.Stream = project.StreamOptions{KeepAlive: 50 * time.Millisecond, RecheckEvery: 150 * time.Millisecond}
+	o.Stream = events.StreamOptions{KeepAlive: 50 * time.Millisecond, RecheckEvery: 150 * time.Millisecond}
 }
 
 // TestProjectStream：保活、提交后发事件（只带 id，只推本项目）、复核会话和授权（失效即断）。
@@ -189,7 +188,4 @@ func TestProjectStream(t *testing.T) {
 	s4 := openStream(t, admin, d.ID)
 	env.App.Events.Close()
 	s4.closedWithin(t, 2*time.Second, "总线关闭")
-	if env.App.Events.Subscribers(d.ID) != 0 {
-		t.Fatal("还有订阅")
-	}
 }

@@ -67,21 +67,12 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-type createRequest struct {
-	Username    string      `json:"username"`
-	DisplayName string      `json:"display_name"`
-	Password    string      `json:"password"`
-	RoleIDs     []uuid.UUID `json:"role_ids"`
-}
-
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) error {
-	var req createRequest
-	if err := httpx.ReadJSON(r, &req); err != nil {
+	var in CreateInput
+	if err := httpx.ReadJSON(r, &in); err != nil {
 		return err
 	}
-	u, err := h.svc.Create(r.Context(), auth.Current(r.Context()).UserID, CreateInput{
-		Username: req.Username, DisplayName: req.DisplayName, Password: req.Password, RoleIDs: req.RoleIDs,
-	})
+	u, err := h.svc.Create(r.Context(), auth.Current(r.Context()).UserID, in)
 	if err != nil {
 		return err
 	}
@@ -89,23 +80,16 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-type updateRequest struct {
-	Username    *string `json:"username"`
-	DisplayName *string `json:"display_name"`
-}
-
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) error {
 	id, err := httpx.PathUUID(r, "id")
 	if err != nil {
 		return err
 	}
-	var req updateRequest
-	if err := httpx.ReadJSON(r, &req); err != nil {
+	var in UpdateInput
+	if err := httpx.ReadJSON(r, &in); err != nil {
 		return err
 	}
-	u, err := h.svc.Update(r.Context(), auth.Current(r.Context()).UserID, id, UpdateInput{
-		Username: req.Username, DisplayName: req.DisplayName,
-	})
+	u, err := h.svc.Update(r.Context(), auth.Current(r.Context()).UserID, id, in)
 	if err != nil {
 		return err
 	}

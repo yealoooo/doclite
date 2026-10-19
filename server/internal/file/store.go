@@ -64,37 +64,22 @@ LIMIT 1`, sha, projectID, self).Scan(&c.FileID, &c.FolderID, &c.FileName)
 	return &c, nil
 }
 
-// NewSnapshot 是要插入的快照（上传的 original；M3-1 的重扫是 rescan、version_no = max + 1）。
-type NewSnapshot struct {
-	ID, FileID       uuid.UUID
-	VersionNo        int
-	SnapshotType     string
-	StorageProfileID uuid.UUID
-	StorageKey       string
-	CoverKey         *string
-	SHA256           []byte
-	FileSize         int64
-	MimeType         string
-	UploadName       string
-	Width, Height    int
-	DPI              *int
-	ColorMode        *string
-	CreatedBy        uuid.UUID
-}
-
-func insertFile(ctx context.Context, q db.Querier, id uuid.UUID) error {
-	_, err := q.Exec(ctx, `INSERT INTO files (id) VALUES ($1)`, id)
-	return err
-}
-
-// InsertSnapshot 在调用方的事务里插入快照（只追加，硬性规则 2）。created_at 用 clock_timestamp()（插入的这一刻）：
-// 事务可能等了锁，用事务开始的 now() 会早于别的事务里刚发生的事（例如条目锁定），"锁定后有新版本"会漏标。
-func InsertSnapshot(ctx context.Context, q db.Querier, s *NewSnapshot) error {
-	_, err := q.Exec(ctx, `INSERT INTO file_snapshots (id, file_id, version_no, snapshot_type, storage_profile_id, storage_key,
-  cover_key, content_sha256, file_size, mime_type, upload_name, width_px, height_px, dpi, color_mode, created_by, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, clock_timestamp())`,
-		s.ID, s.FileID, s.VersionNo, s.SnapshotType, s.StorageProfileID, s.StorageKey, s.CoverKey, s.SHA256, s.FileSize,
-		s.MimeType, s.UploadName, s.Width, s.Height, s.DPI, s.ColorMode, s.CreatedBy)
+// InsertSnapshot 在调用方的事务里插入快照（只追加，硬性规则 2）；v1 是新文件，先插入 files 行。created_at 用
+// clock_timestamp()（插入的这一刻）：事务可能等了锁，用事务开始的 now() 会早于别的事务里刚发生的事（例如条目锁定），
+// "锁定后有新版本"会漏标。
+func InsertSnapshot(ctx context.Context, q db.Querier, s *Snapshot) error {
+	if s.VersionNo == 1 {
+		if _, err := q.Exec(ctx, `INSERT INTO files (id) VALUES ($1)`, s.FileID); err != nil {
+			return err
+		}
+	}
+	_, err := q.Exec(ctx, `INSERT INTO file_snapshots (id, file_id, version_no, snapshot_type, parent_snapshot_id, edit_ops,
+  storage_profile_id, storage_key, cover_key, content_sha256, file_size, mime_type, upload_name, width_px, height_px, dpi,
+  color_mode, created_by, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, clock_timestamp())`,
+		s.ID, s.FileID, s.VersionNo, s.SnapshotType, s.ParentSnapshotID, s.EditOps, s.StorageProfileID, s.StorageKey,
+		s.CoverKey, s.ContentSHA256, s.FileSize, s.MimeType, s.UploadName, s.WidthPx, s.HeightPx, s.DPI, s.ColorMode,
+		s.CreatedBy)
 	return err
 }
 

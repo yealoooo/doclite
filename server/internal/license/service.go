@@ -86,10 +86,7 @@ func NewService(pool *pgxpool.Pool, authSvc *auth.Service, opts Options) *Servic
 // Dev 是不是开发构建（不检查许可证）。
 func (s *Service) Dev() bool { return s.pub == nil }
 
-// Init 启动时调用：生成 install_id（首次启动）、读导入的许可证并验签，放进内存。
-func (s *Service) Init(ctx context.Context) error { return s.Reload(ctx) }
-
-// Reload 重新从库里读 install_id 和许可证（Init 和测试用）。
+// Reload 从库里读 install_id（首次启动时生成）和导入的许可证并验签，放进内存（启动时调用，测试里模拟重启）。
 func (s *Service) Reload(ctx context.Context) error {
 	id, err := ensureInstallID(ctx, s.pool)
 	if err != nil {
@@ -301,7 +298,7 @@ func (s *Service) check(text, installID string) (*File, *httpx.Error) {
 	return f, nil
 }
 
-var errDevImport = httpx.Conflict(httpx.CodeInvalidState, "开发版不检查许可证，不用导入")
+var errDevImport = httpx.InvalidState("开发版不检查许可证，不用导入")
 
 // Import 导入（或替换）许可证：验签、核对 install_id、不能已经过期；写库、写审计，立即生效。和已导入的完全相同时
 // 什么都不做（不写库、不审计）。

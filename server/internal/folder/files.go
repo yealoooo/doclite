@@ -3,6 +3,7 @@ package folder
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ import (
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
 	"doclite/server/internal/platform/names"
+	"doclite/server/internal/platform/xslices"
 	"doclite/server/internal/project"
 )
 
@@ -23,11 +25,8 @@ import (
 // 文件夹），再查已归类。
 // 只改 folder_files（硬性规则 3）；文件的操作写 file_logs（detail 存当时的名字和文件夹路径）；提交后发 files.changed。
 
-// MaxBulkIDs 是批量移动、删除一次最多的文件数。
-const MaxBulkIDs = 500
-
-// EntryUpdated 是 `PATCH /api/folder-files/{id}` 的响应。
-type EntryUpdated struct {
+// FolderFileUpdated 是 `PATCH /api/folder-files/{id}` 的响应。
+type FolderFileUpdated struct {
 	FolderFileID uuid.UUID `json:"folder_file_id"`
 	FileID       uuid.UUID `json:"file_id"`
 	FolderID     uuid.UUID `json:"folder_id"`
@@ -37,16 +36,16 @@ type EntryUpdated struct {
 	Renamed bool `json:"renamed"`
 }
 
-// EntryInput 是修改文件的输入；nil 表示不改。
-type EntryInput struct {
-	FileName *string
-	FolderID *uuid.UUID
+// FolderFileInput 是修改文件的输入；nil 表示不改。
+type FolderFileInput struct {
+	FileName *string    `json:"file_name"`
+	FolderID *uuid.UUID `json:"folder_id"`
 }
 
-// lockEntries 在事务里锁住这些文件的 files 行（id 升序），再重读 folder_files（未删除，所在文件夹、项目也未删除）。
+// lockFolderFiles 在事务里锁住这些文件的 files 行（id 升序），再重读 folder_files（未删除，所在文件夹、项目也未删除）。
 // 不在这个项目里的当作不存在。
-func lockEntries(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]*entryRow, error) {
-	pre, err := liveEntries(ctx, tx, ids)
+func lockFolderFiles(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]*folderFileRow, error) {
+	pre, err := liveFolderFiles(ctx, tx, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +56,7 @@ func lockEntries(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, ids []uuid
 	if err := file.LockFiles(ctx, tx, fileIDs); err != nil {
 		return nil, err
 	}
-	cur, err := liveEntries(ctx, tx, ids)
+	cur, err := liveFolderFiles(ctx, tx, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -69,20 +68,20 @@ func lockEntries(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, ids []uuid
 	return cur, nil
 }
 
-// UpdateEntry 改名（撞名 409 conflict）或移动到本项目的另一个文件夹（撞名自动改名，排到末尾）；同时改名和移动时新名字
+// UpdateFolderFile 改名（撞名 409 conflict）或移动到本项目的另一个文件夹（撞名自动改名，排到末尾）；同时改名和移动时新名字
 // 在目标里撞名 409，日志先 rename 后 move。没有变化时不写库、不发事件。
-func (s *Service) UpdateEntry(ctx context.Context, userID, projectID, id uuid.UUID, in EntryInput) (*EntryUpdated, error) {
+func (s *Service) UpdateFolderFile(ctx context.Context, userID, projectID, id uuid.UUID, in FolderFileInput) (*FolderFileUpdated, error) {
 	if in.FileName != nil {
 		if err := names.ValidateFileName(*in.FileName); err != nil {
 			return nil, httpx.Invalid("%s", err.Error())
 		}
 	}
-	var out *EntryUpdated
+	var out *FolderFileUpdated
 	err := s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
 		if err := project.LockFileTree(ctx, tx, projectID, false); err != nil {
 			return err
 		}
-		es, err := lockEntries(ctx, tx, projectID, []uuid.UUID{id})
+		es, err := lockFolderFiles(ctx, tx, projectID, []uuid.UUID{id})
 		if err != nil {
 			return err
 		}
@@ -90,7 +89,7 @@ func (s *Service) UpdateEntry(ctx context.Context, userID, projectID, id uuid.UU
 		if e == nil {
 			return errFileNotFound
 		}
-		out = &EntryUpdated{FolderFileID: e.ID, FileID: e.FileID, FolderID: e.FolderID, FileName: e.FileName, SortNo: e.SortNo}
+		out = &FolderFileUpdated{FolderFileID: e.ID, FileID: e.FileID, FolderID: e.FolderID, FileName: e.FileName, SortNo: e.SortNo}
 		rename := in.FileName != nil && *in.FileName != e.FileName
 		move := in.FolderID != nil && *in.FolderID != e.FolderID
 		if !rename && !move {
@@ -120,7 +119,7 @@ func (s *Service) UpdateEntry(ctx context.Context, userID, projectID, id uuid.UU
 				return err
 			}
 		}
-		paths, err := folderPaths(ctx, tx, lockIDs)
+		paths, err := file.FolderPaths(ctx, tx, lockIDs)
 		if err != nil {
 			return err
 		}
@@ -150,7 +149,7 @@ func (s *Service) UpdateEntry(ctx context.Context, userID, projectID, id uuid.UU
 			}
 			logs = append(logs, moveLog(projectID, userID, e, src, dest, paths, name, out.Renamed))
 		}
-		if err := updateEntry(ctx, tx, e.ID, dest.ID, name, sortNo); err != nil {
+		if err := updateFolderFile(ctx, tx, e.ID, dest.ID, name, sortNo); err != nil {
 			if db.UniqueViolation(err, "ux_folder_files_name") {
 				return fileNameConflict(name)
 			}
@@ -169,7 +168,7 @@ func (s *Service) UpdateEntry(ctx context.Context, userID, projectID, id uuid.UU
 	return out, nil
 }
 
-func moveLog(projectID, userID uuid.UUID, e *entryRow, src, dest *folderRow, paths map[uuid.UUID]string, name string,
+func moveLog(projectID, userID uuid.UUID, e *folderFileRow, src, dest *folderRow, paths map[uuid.UUID]string, name string,
 	renamed bool) file.Log {
 	d := map[string]any{"from": src.FolderName, "to": dest.FolderName, "from_path": paths[src.ID], "to_path": paths[dest.ID],
 		"file_name": name}
@@ -179,8 +178,8 @@ func moveLog(projectID, userID uuid.UUID, e *entryRow, src, dest *folderRow, pat
 	return file.Log{ProjectID: projectID, FileID: e.FileID, Action: file.ActionMove, OperatorID: userID, Detail: d}
 }
 
-// EntryCopied 是复制的响应（201）。
-type EntryCopied struct {
+// FolderFileCopied 是复制的响应（201）。
+type FolderFileCopied struct {
 	FolderFileID uuid.UUID `json:"folder_file_id"`
 	// FileID 是新文件的 file_id。
 	FileID     uuid.UUID `json:"file_id"`
@@ -191,15 +190,15 @@ type EntryCopied struct {
 	Renamed    bool      `json:"renamed"`
 }
 
-// CopyEntry 复制文件到 folderID（nil 表示原文件夹，只在本项目内）：新 file_id，v1 类型 copy，复用源文件当前快照的对象
+// CopyFolderFile 复制文件到 folderID（nil 表示原文件夹，只在本项目内）：新 file_id，v1 类型 copy，复用源文件当前快照的对象
 // （不复制字节）；新文件待分配、自动改名、排末尾；只在新文件上记 copy 日志。源存储已停用 409 storage_unavailable。
-func (s *Service) CopyEntry(ctx context.Context, userID, projectID, id uuid.UUID, folderID *uuid.UUID) (*EntryCopied, error) {
-	var out *EntryCopied
+func (s *Service) CopyFolderFile(ctx context.Context, userID, projectID, id uuid.UUID, folderID *uuid.UUID) (*FolderFileCopied, error) {
+	var out *FolderFileCopied
 	err := s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
 		if err := project.LockFileTree(ctx, tx, projectID, false); err != nil {
 			return err
 		}
-		es, err := lockEntries(ctx, tx, projectID, []uuid.UUID{id})
+		es, err := lockFolderFiles(ctx, tx, projectID, []uuid.UUID{id})
 		if err != nil {
 			return err
 		}
@@ -239,7 +238,7 @@ func (s *Service) CopyEntry(ctx context.Context, userID, projectID, id uuid.UUID
 		// 存储迁移（M7-2）改快照位置时拿同一把内容锁：锁内重读源快照，要么拿到迁移之后的位置，要么迁移等这次复制提交后
 		// 把新快照一起改掉，不会留下一个指向已经迁走的位置的新快照。重读到的存储变了（刚迁到可读写的目标存储）再查一次它
 		// 没有停用（FOR KEY SHARE，和插入快照时外键检查拿的锁一样，不挡别的事务）。
-		if err := file.LockContent(ctx, tx, projectID, src.ContentSHA256); err != nil {
+		if err := project.LockContent(ctx, tx, projectID, src.ContentSHA256); err != nil {
 			return err
 		}
 		moved, err := file.Current(ctx, tx, e.FileID)
@@ -259,7 +258,7 @@ func (s *Service) CopyEntry(ctx context.Context, userID, projectID, id uuid.UUID
 		if err != nil {
 			return err
 		}
-		srcPath, err := s.Path(ctx, tx, e.FolderID)
+		srcPath, err := file.FolderPath(ctx, tx, e.FolderID)
 		if err != nil {
 			return err
 		}
@@ -278,7 +277,7 @@ func (s *Service) CopyEntry(ctx context.Context, userID, projectID, id uuid.UUID
 				"file_name": slot.FileName, "folder": slot.FolderName, "folder_path": slot.FolderPath}}); err != nil {
 			return err
 		}
-		out = &EntryCopied{FolderFileID: ffID, FileID: newFileID, SnapshotID: snapID, FolderID: dest.ID, FileName: slot.FileName,
+		out = &FolderFileCopied{FolderFileID: ffID, FileID: newFileID, SnapshotID: snapID, FolderID: dest.ID, FileName: slot.FileName,
 			SortNo: slot.SortNo, Renamed: slot.Renamed}
 		ev.Add(events.FilesChanged(projectID, []uuid.UUID{dest.ID}, []uuid.UUID{newFileID}))
 		return nil
@@ -289,19 +288,19 @@ func (s *Service) CopyEntry(ctx context.Context, userID, projectID, id uuid.UUID
 	return out, nil
 }
 
-// DeleteEntry 软删除一个文件：所在文件夹封存 409 folder_archived；已归类的 409 file_cataloged（修改中的条目的页
+// DeleteFolderFile 软删除一个文件：所在文件夹封存 409 folder_archived；已归类的 409 file_cataloged（修改中的条目的页
 // 除外）；取消进行中的分配；记 delete。
-func (s *Service) DeleteEntry(ctx context.Context, userID, projectID, id uuid.UUID) error {
-	return s.deleteEntries(ctx, userID, projectID, []uuid.UUID{id}, false)
+func (s *Service) DeleteFolderFile(ctx context.Context, userID, projectID, id uuid.UUID) error {
+	return s.deleteFolderFiles(ctx, userID, projectID, []uuid.UUID{id}, false)
 }
 
-// deleteEntries 删除这些文件（一个事务）：有不在的整体 404（bulk 时 details.ids），有已归类的整体 409 file_cataloged。
-func (s *Service) deleteEntries(ctx context.Context, userID, projectID uuid.UUID, ids []uuid.UUID, bulk bool) error {
+// deleteFolderFiles 删除这些文件（一个事务）：有不在的整体 404（bulk 时 details.ids），有已归类的整体 409 file_cataloged。
+func (s *Service) deleteFolderFiles(ctx context.Context, userID, projectID uuid.UUID, ids []uuid.UUID, bulk bool) error {
 	return s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
 		if err := project.LockFileTree(ctx, tx, projectID, false); err != nil {
 			return err
 		}
-		es, err := lockEntries(ctx, tx, projectID, ids)
+		es, err := lockFolderFiles(ctx, tx, projectID, ids)
 		if err != nil {
 			return err
 		}
@@ -309,7 +308,7 @@ func (s *Service) deleteEntries(ctx context.Context, userID, projectID uuid.UUID
 			if !bulk {
 				return errFileNotFound
 			}
-			return notFoundIDs(missing)
+			return httpx.NotFoundIDs("有 "+strconv.Itoa(len(missing))+" 个文件不存在或已删除（可能刚被别人删除），请刷新后重试", missing)
 		}
 		entries := ordered(ids, es)
 		fileIDs := make([]uuid.UUID, len(entries))
@@ -331,11 +330,11 @@ func (s *Service) deleteEntries(ctx context.Context, userID, projectID uuid.UUID
 		if len(cataloged) > 0 {
 			return catalogedError(entries, cataloged, bulk)
 		}
-		paths, err := folderPaths(ctx, tx, folderIDs)
+		paths, err := file.FolderPaths(ctx, tx, folderIDs)
 		if err != nil {
 			return err
 		}
-		if _, err := softDeleteEntries(ctx, tx, ids, userID); err != nil {
+		if _, err := softDeleteFolderFiles(ctx, tx, ids, userID); err != nil {
 			return err
 		}
 		if err := cancelOpenReviews(ctx, tx, fileIDs); err != nil {
@@ -354,7 +353,7 @@ func (s *Service) deleteEntries(ctx context.Context, userID, projectID uuid.UUID
 	})
 }
 
-func catalogedError(entries []*entryRow, cataloged []uuid.UUID, bulk bool) error {
+func catalogedError(entries []*folderFileRow, cataloged []uuid.UUID, bulk bool) error {
 	set := map[uuid.UUID]bool{}
 	for _, id := range cataloged {
 		set[id] = true
@@ -368,10 +367,10 @@ func catalogedError(entries []*entryRow, cataloged []uuid.UUID, bulk bool) error
 		}
 	}
 	if !bulk {
-		return httpx.Conflict("file_cataloged", "文件"+names[0]+"已归类，不能删除")
+		return httpx.Conflict(httpx.CodeFileCataloged, "文件"+names[0]+"已归类，不能删除")
 	}
 	example := strings.Join(names[:min(len(names), 3)], "、")
-	return httpx.Conflict("file_cataloged", "有 "+itoa(len(ids))+" 个文件已归类（"+example+"），不能删除").
+	return httpx.Conflict(httpx.CodeFileCataloged, "有 "+strconv.Itoa(len(ids))+" 个文件已归类（"+example+"），不能删除").
 		WithDetails(map[string]any{"ids": ids})
 }
 
@@ -387,11 +386,11 @@ func (s *Service) ResolveBulk(ctx context.Context, userID uuid.UUID, ids []uuid.
 	if len(ids) == 0 {
 		return nil, httpx.Invalid("ids 不能为空")
 	}
-	if len(ids) > MaxBulkIDs {
-		return nil, httpx.Invalid("一次最多 %d 个文件", MaxBulkIDs)
+	if len(ids) > httpx.MaxBatchIDs {
+		return nil, httpx.Invalid("一次最多 %d 个文件", httpx.MaxBatchIDs)
 	}
-	ids = dedupIDs(ids)
-	es, err := liveEntries(ctx, s.pool, ids)
+	ids = xslices.Unique(ids)
+	es, err := liveFolderFiles(ctx, s.pool, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -410,18 +409,18 @@ func (s *Service) ResolveBulk(ctx context.Context, userID uuid.UUID, ids []uuid.
 		}
 	}
 	if missing := missingOf(ids, es); len(missing) > 0 {
-		return nil, notFoundIDs(missing)
+		return nil, httpx.NotFoundIDs("有 "+strconv.Itoa(len(missing))+" 个文件不存在或已删除（可能刚被别人删除），请刷新后重试", missing)
 	}
 	return &BulkScope{ProjectID: pid, IDs: ids}, nil
 }
 
-// DeleteEntries 批量删除（≤ 500 个，一个事务）：有已归类的整体不做，409 file_cataloged（details.ids）。
-func (s *Service) DeleteEntries(ctx context.Context, userID uuid.UUID, scope *BulkScope) error {
-	return s.deleteEntries(ctx, userID, scope.ProjectID, scope.IDs, true)
+// DeleteFolderFiles 批量删除（≤ 500 个，一个事务）：有已归类的整体不做，409 file_cataloged（details.ids）。
+func (s *Service) DeleteFolderFiles(ctx context.Context, userID uuid.UUID, scope *BulkScope) error {
+	return s.deleteFolderFiles(ctx, userID, scope.ProjectID, scope.IDs, true)
 }
 
-// EntryMoved 是批量移动的一项。
-type EntryMoved struct {
+// FolderFileMoved 是批量移动的一项。
+type FolderFileMoved struct {
 	FolderFileID uuid.UUID `json:"folder_file_id"`
 	FileID       uuid.UUID `json:"file_id"`
 	FolderID     uuid.UUID `json:"folder_id"`
@@ -434,27 +433,27 @@ type EntryMoved struct {
 
 // MoveResult 是批量移动的响应。
 type MoveResult struct {
-	Items []EntryMoved `json:"items"`
+	Items []FolderFileMoved `json:"items"`
 }
 
-// MoveEntries 批量移动到 folderID（≤ 500 个，一个事务）：按原文件夹 path_code、sort_no、名字依次排到目标末尾，
+// MoveFolderFiles 批量移动到 folderID（≤ 500 个，一个事务）：按原文件夹 path_code、sort_no、名字依次排到目标末尾，
 // 撞名自动改名；目标不在这个项目或已删除 404。
-func (s *Service) MoveEntries(ctx context.Context, userID uuid.UUID, scope *BulkScope, folderID uuid.UUID) (*MoveResult, error) {
+func (s *Service) MoveFolderFiles(ctx context.Context, userID uuid.UUID, scope *BulkScope, folderID uuid.UUID) (*MoveResult, error) {
 	projectID := scope.ProjectID
-	out := &MoveResult{Items: []EntryMoved{}}
+	out := &MoveResult{Items: []FolderFileMoved{}}
 	err := s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
 		if err := project.LockFileTree(ctx, tx, projectID, false); err != nil {
 			return err
 		}
-		es, err := lockEntries(ctx, tx, projectID, scope.IDs)
+		es, err := lockFolderFiles(ctx, tx, projectID, scope.IDs)
 		if err != nil {
 			return err
 		}
 		if missing := missingOf(scope.IDs, es); len(missing) > 0 {
-			return notFoundIDs(missing)
+			return httpx.NotFoundIDs("有 "+strconv.Itoa(len(missing))+" 个文件不存在或已删除（可能刚被别人删除），请刷新后重试", missing)
 		}
 		entries := ordered(scope.IDs, es)
-		slices.SortStableFunc(entries, func(a, b *entryRow) int {
+		slices.SortStableFunc(entries, func(a, b *folderFileRow) int {
 			if c := strings.Compare(a.FolderPathCode, b.FolderPathCode); c != 0 {
 				return c
 			}
@@ -486,7 +485,7 @@ func (s *Service) MoveEntries(ctx context.Context, userID uuid.UUID, scope *Bulk
 				return err
 			}
 		}
-		paths, err := folderPaths(ctx, tx, folderIDs)
+		paths, err := file.FolderPaths(ctx, tx, folderIDs)
 		if err != nil {
 			return err
 		}
@@ -499,7 +498,7 @@ func (s *Service) MoveEntries(ctx context.Context, userID uuid.UUID, scope *Bulk
 		changedFolders := []uuid.UUID{dest.ID}
 		for _, e := range entries {
 			if e.FolderID == dest.ID {
-				out.Items = append(out.Items, EntryMoved{FolderFileID: e.ID, FileID: e.FileID, FolderID: e.FolderID,
+				out.Items = append(out.Items, FolderFileMoved{FolderFileID: e.ID, FileID: e.FileID, FolderID: e.FolderID,
 					FileName: e.FileName, SortNo: e.SortNo})
 				continue
 			}
@@ -508,11 +507,11 @@ func (s *Service) MoveEntries(ctx context.Context, userID uuid.UUID, scope *Bulk
 				return err
 			}
 			renamed := name != e.FileName
-			if err := updateEntry(ctx, tx, e.ID, dest.ID, name, sortNo); err != nil {
+			if err := updateFolderFile(ctx, tx, e.ID, dest.ID, name, sortNo); err != nil {
 				return err
 			}
 			logs = append(logs, moveLog(projectID, userID, e, locked[e.FolderID], dest, paths, name, renamed))
-			out.Items = append(out.Items, EntryMoved{FolderFileID: e.ID, FileID: e.FileID, FolderID: dest.ID, FileName: name,
+			out.Items = append(out.Items, FolderFileMoved{FolderFileID: e.ID, FileID: e.FileID, FolderID: dest.ID, FileName: name,
 				SortNo: sortNo, Moved: true, Renamed: renamed})
 			movedFiles = append(movedFiles, e.FileID)
 			changedFolders = append(changedFolders, e.FolderID)
@@ -532,19 +531,7 @@ func (s *Service) MoveEntries(ctx context.Context, userID uuid.UUID, scope *Bulk
 	return out, nil
 }
 
-func dedupIDs(ids []uuid.UUID) []uuid.UUID {
-	out := make([]uuid.UUID, 0, len(ids))
-	seen := map[uuid.UUID]bool{}
-	for _, id := range ids {
-		if !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
-func missingOf(ids []uuid.UUID, es map[uuid.UUID]*entryRow) []uuid.UUID {
+func missingOf(ids []uuid.UUID, es map[uuid.UUID]*folderFileRow) []uuid.UUID {
 	var out []uuid.UUID
 	for _, id := range ids {
 		if es[id] == nil {
@@ -554,13 +541,8 @@ func missingOf(ids []uuid.UUID, es map[uuid.UUID]*entryRow) []uuid.UUID {
 	return out
 }
 
-func notFoundIDs(ids []uuid.UUID) error {
-	return httpx.NewError(404, httpx.CodeNotFound, "有 "+itoa(len(ids))+" 个文件不存在或已删除（可能刚被别人删除），请刷新后重试").
-		WithDetails(map[string]any{"ids": ids})
-}
-
-func ordered(ids []uuid.UUID, es map[uuid.UUID]*entryRow) []*entryRow {
-	out := make([]*entryRow, 0, len(ids))
+func ordered(ids []uuid.UUID, es map[uuid.UUID]*folderFileRow) []*folderFileRow {
+	out := make([]*folderFileRow, 0, len(ids))
 	for _, id := range ids {
 		if e := es[id]; e != nil {
 			out = append(out, e)
@@ -569,7 +551,7 @@ func ordered(ids []uuid.UUID, es map[uuid.UUID]*entryRow) []*entryRow {
 	return out
 }
 
-func uniqueFolders(entries []*entryRow) []uuid.UUID {
+func uniqueFolders(entries []*folderFileRow) []uuid.UUID {
 	var out []uuid.UUID
 	seen := map[uuid.UUID]bool{}
 	for _, e := range entries {

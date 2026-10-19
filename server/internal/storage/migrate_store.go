@@ -25,7 +25,7 @@ LEFT JOIN storage_profiles ss ON ss.id = (j.payload->>'source_profile_id')::uuid
 LEFT JOIN storage_profiles ts ON ts.id = (j.payload->>'target_profile_id')::uuid`
 
 // scanMigration 读一行迁移任务（不含 remaining，失败清单在 payload 里）。
-func scanMigration(sc scanner) (*Migration, error) {
+func scanMigration(sc pgx.Row) (*Migration, error) {
 	var m Migration
 	var raw []byte
 	var srcName, dstName *string

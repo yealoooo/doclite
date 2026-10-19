@@ -123,13 +123,9 @@ func (h *Handler) settings(w http.ResponseWriter, r *http.Request) error {
 // ---------------------------------------------------------------------------
 
 func (h *Handler) listCategories(w http.ResponseWriter, r *http.Request) error {
-	var parentID *uuid.UUID
-	if v := strings.TrimSpace(r.URL.Query().Get("parent_id")); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			return httpx.Invalid("parent_id 不是合法的 UUID")
-		}
-		parentID = &id
+	parentID, err := httpx.QueryUUID(r, "parent_id")
+	if err != nil {
+		return err
 	}
 	out, err := h.svc.ListCategories(r.Context(), auth.ProjectID(r.Context()), parentID)
 	if err != nil {
@@ -139,21 +135,12 @@ func (h *Handler) listCategories(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-type createCategoryRequest struct {
-	ParentID     *uuid.UUID `json:"parent_id"`
-	CategoryType string     `json:"category_type"`
-	CategoryCode string     `json:"category_code"`
-	CategoryName string     `json:"category_name"`
-}
-
 func (h *Handler) createCategory(w http.ResponseWriter, r *http.Request) error {
-	var req createCategoryRequest
-	if err := httpx.ReadJSON(r, &req); err != nil {
+	var in CategoryInput
+	if err := httpx.ReadJSON(r, &in); err != nil {
 		return err
 	}
-	out, err := h.svc.CreateCategory(r.Context(), auth.Current(r.Context()).UserID, auth.ProjectID(r.Context()), CategoryInput{
-		ParentID: req.ParentID, Type: req.CategoryType, Code: req.CategoryCode, Name: req.CategoryName,
-	})
+	out, err := h.svc.CreateCategory(r.Context(), auth.Current(r.Context()).UserID, auth.ProjectID(r.Context()), in)
 	if err != nil {
 		return err
 	}
@@ -161,24 +148,17 @@ func (h *Handler) createCategory(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-type updateCategoryRequest struct {
-	CategoryName *string    `json:"category_name"`
-	CategoryCode *string    `json:"category_code"`
-	CategoryType *string    `json:"category_type"`
-	ParentID     *uuid.UUID `json:"parent_id"`
-}
-
 func (h *Handler) updateCategory(w http.ResponseWriter, r *http.Request) error {
 	id, err := httpx.PathUUID(r, "id")
 	if err != nil {
 		return err
 	}
-	var req updateCategoryRequest
-	if err := httpx.ReadJSON(r, &req); err != nil {
+	var in CategoryPatch
+	if err := httpx.ReadJSON(r, &in); err != nil {
 		return err
 	}
 	out, err := h.svc.UpdateCategory(r.Context(), auth.Current(r.Context()).UserID, auth.ProjectID(r.Context()), id,
-		CategoryPatch{Name: req.CategoryName, Code: req.CategoryCode, Type: req.CategoryType, ParentID: req.ParentID})
+		in)
 	if err != nil {
 		return err
 	}
@@ -207,16 +187,11 @@ func (h *Handler) listItems(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	q := r.URL.Query()
-	limit := DefaultItemLimit
-	if v := strings.TrimSpace(q.Get("limit")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > MaxItemLimit {
-			return httpx.Invalid("limit 要在 1 到 %d 之间", MaxItemLimit)
-		}
-		limit = n
+	limit, err := httpx.QueryLimit(r, DefaultItemLimit, MaxItemLimit)
+	if err != nil {
+		return err
 	}
-	out, err := h.svc.ListItems(r.Context(), auth.ProjectID(r.Context()), id, limit, strings.TrimSpace(q.Get("cursor")))
+	out, err := h.svc.ListItems(r.Context(), auth.ProjectID(r.Context()), id, limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if err != nil {
 		return err
 	}
@@ -224,28 +199,22 @@ func (h *Handler) listItems(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-type archiveRequest struct {
-	FolderIDs []uuid.UUID          `json:"folder_ids"`
-	Titles    map[uuid.UUID]string `json:"titles"`
-	DryRun    bool                 `json:"dry_run"`
-}
-
 func (h *Handler) archiveFolders(w http.ResponseWriter, r *http.Request) error {
 	id, err := httpx.PathUUID(r, "id")
 	if err != nil {
 		return err
 	}
-	var req archiveRequest
-	if err := httpx.ReadJSON(r, &req); err != nil {
+	var in ArchiveInput
+	if err := httpx.ReadJSON(r, &in); err != nil {
 		return err
 	}
 	out, err := h.svc.ArchiveFolders(r.Context(), auth.Current(r.Context()).UserID, auth.ProjectID(r.Context()), id,
-		ArchiveInput{FolderIDs: req.FolderIDs, Titles: req.Titles, DryRun: req.DryRun})
+		in)
 	if err != nil {
 		return err
 	}
 	status := http.StatusCreated
-	if req.DryRun {
+	if in.DryRun {
 		status = http.StatusOK
 	}
 	httpx.WriteJSON(w, status, out)
@@ -482,13 +451,9 @@ func (h *Handler) fileCatalog(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) error {
-	var folderID *uuid.UUID
-	if v := strings.TrimSpace(r.URL.Query().Get("folder_id")); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			return httpx.Invalid("folder_id 不是合法的 UUID")
-		}
-		folderID = &id
+	folderID, err := httpx.QueryUUID(r, "folder_id")
+	if err != nil {
+		return err
 	}
 	out, err := h.svc.Summary(r.Context(), auth.ProjectID(r.Context()), folderID)
 	if err != nil {

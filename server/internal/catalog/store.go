@@ -6,75 +6,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"doclite/server/internal/platform/db"
 )
 
 // catalog 的 SQL：archive_categories、archive_items、archive_item_files（pages_store.go）。
 //
-// 跨模块的读（只读）：projects.settings（归类设置）；folder_files、folders、file_snapshots（条目的页：文件名、
+// 跨模块的读（只读）：projects.settings（归类设置，经 project.ReadSettings）；文件夹路径经 file.FolderPaths；
+// folder_files、folders、file_snapshots（条目的页：文件名、
 // 文件夹路径、审核状态、当前版本；挂接时锁住 files 行之后重读；归类信息、看板）；audit_logs 里 archive_item / lock
 // 的时间（锁定时间）。
-// 跨模块的写：file_logs 经 file.WriteLogs，files 行锁经 file.LockFiles（挂接、移出）。
-// 跨模块的写：audit_logs 的批量插入（[insertAudits]，格式同 audit.Write，重算档号时一次写很多条）。
-
-// readSnapshot 在一个只读的 REPEATABLE READ 事务里执行 fn（列表、详情的几条查询看到同一个快照）。
-func readSnapshot(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) error {
-	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck
-	if err := fn(tx); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
-// projectSettings 读未删除项目的 settings（跨模块的读）；项目不存在或已删除为 nil。
-func projectSettings(ctx context.Context, q db.Querier, projectID uuid.UUID) ([]byte, error) {
-	var raw []byte
-	err := q.QueryRow(ctx, `SELECT settings FROM projects WHERE id = $1 AND deleted_at IS NULL`, projectID).Scan(&raw)
-	if db.IsNoRows(err) {
-		return nil, nil
-	}
-	if raw == nil && err == nil {
-		raw = []byte("{}")
-	}
-	return raw, err
-}
-
-// auditEntry 是批量写的一条审计（项目、操作人由 insertAudits 统一给）。
-type auditEntry struct {
-	TargetType string
-	TargetID   uuid.UUID
-	Action     string
-	Detail     any
-}
-
-// insertAudits 一条语句写多条审计（跨模块的写：格式和 audit.Write 一样）。
-func insertAudits(ctx context.Context, q db.Querier, projectID, operatorID uuid.UUID, entries []auditEntry) error {
-	if len(entries) == 0 {
-		return nil
-	}
-	types := make([]string, len(entries))
-	ids := make([]uuid.UUID, len(entries))
-	actions := make([]string, len(entries))
-	details := make([]any, len(entries))
-	for i, e := range entries {
-		types[i], ids[i], actions[i] = e.TargetType, e.TargetID, e.Action
-		details[i] = e.Detail
-		if details[i] == nil {
-			details[i] = map[string]any{}
-		}
-	}
-	_, err := q.Exec(ctx, `INSERT INTO audit_logs (project_id, operator_id, target_type, target_id, action, detail)
-SELECT $1, $2, t.target_type, t.target_id, t.action, t.detail
-FROM unnest($3::text[], $4::uuid[], $5::text[], $6::jsonb[]) AS t(target_type, target_id, action, detail)`,
-		projectID, operatorID, types, ids, actions, details)
-	return err
-}
+// 跨模块的写：file_logs 经 file.WriteLogs，files 行锁经 file.LockFiles（挂接、移出），审计经 audit.Write（批量）。
+// 给别的模块的只读查询：[CategoryNames]（导出用）。
 
 // ---------------------------------------------------------------------------
 // 归类节点
@@ -82,25 +25,25 @@ FROM unnest($3::text[], $4::uuid[], $5::text[], $6::jsonb[]) AS t(target_type, t
 
 // catRow 是 archive_categories 的一行。
 type catRow struct {
-	ID          uuid.UUID
-	ProjectID   uuid.UUID
-	ParentID    *uuid.UUID
-	PathCode    string
-	LastChildNo int
-	Type        string
-	Code        string
-	Name        string
-	SortNo      int
-	CreatedAt   time.Time
-	Deleted     bool
+	ID           uuid.UUID
+	ProjectID    uuid.UUID
+	ParentID     *uuid.UUID
+	PathCode     string
+	LastChildNo  int
+	CategoryType string
+	CategoryCode string
+	CategoryName string
+	SortNo       int
+	CreatedAt    time.Time
+	Deleted      bool
 }
 
 const catColumns = `id, project_id, parent_id, path_code, last_child_no, category_type, category_code, category_name, sort_no,
   created_at, deleted_at IS NOT NULL`
 
-func scanCat(sc interface{ Scan(...any) error }) (*catRow, error) {
+func scanCat(sc pgx.Row) (*catRow, error) {
 	var c catRow
-	if err := sc.Scan(&c.ID, &c.ProjectID, &c.ParentID, &c.PathCode, &c.LastChildNo, &c.Type, &c.Code, &c.Name, &c.SortNo,
+	if err := sc.Scan(&c.ID, &c.ProjectID, &c.ParentID, &c.PathCode, &c.LastChildNo, &c.CategoryType, &c.CategoryCode, &c.CategoryName, &c.SortNo,
 		&c.CreatedAt, &c.Deleted); err != nil {
 		return nil, err
 	}
@@ -222,7 +165,7 @@ const categoryViewSelect = `SELECT c.id, c.project_id, c.parent_id, c.path_code,
   c.created_at
 FROM archive_categories c`
 
-func scanCategory(sc interface{ Scan(...any) error }) (Category, error) {
+func scanCategory(sc pgx.Row) (Category, error) {
 	var c Category
 	err := sc.Scan(&c.ID, &c.ProjectID, &c.ParentID, &c.PathCode, &c.CategoryType, &c.CategoryCode, &c.CategoryName, &c.SortNo,
 		&c.ChildCount, &c.ItemCount, &c.CreatedAt)
@@ -291,7 +234,7 @@ WHERE parent_id = $1 AND category_code = $2 AND deleted_at IS NULL AND id <> $3 
 func insertCategory(ctx context.Context, q db.Querier, c *catRow) error {
 	_, err := q.Exec(ctx, `INSERT INTO archive_categories
   (id, project_id, parent_id, path_code, category_type, category_code, category_name, sort_no)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, c.ID, c.ProjectID, c.ParentID, c.PathCode, c.Type, c.Code, c.Name, c.SortNo)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, c.ID, c.ProjectID, c.ParentID, c.PathCode, c.CategoryType, c.CategoryCode, c.CategoryName, c.SortNo)
 	return err
 }
 
@@ -306,7 +249,7 @@ WHERE project_id = $1 AND path_code >= $2 AND path_code < $4`, projectID, oldPat
 func updateCategoryRow(ctx context.Context, q db.Querier, c *catRow) error {
 	_, err := q.Exec(ctx, `UPDATE archive_categories
 SET category_name = $2, category_code = $3, category_type = $4, parent_id = $5, sort_no = $6 WHERE id = $1`,
-		c.ID, c.Name, c.Code, c.Type, c.ParentID, c.SortNo)
+		c.ID, c.CategoryName, c.CategoryCode, c.CategoryType, c.ParentID, c.SortNo)
 	return err
 }
 

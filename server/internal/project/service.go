@@ -33,11 +33,12 @@ import (
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
 	"doclite/server/internal/platform/names"
+	"doclite/server/internal/platform/xslices"
 )
 
 const (
-	maxDescriptionRunes = 500
-	maxKeywordRunes     = 64
+	maxDescriptionChars = 500
+	maxKeywordChars     = 64
 	maxAccessEntries    = 1000
 	// 项目状态。
 	StatusActive   = "active"
@@ -66,8 +67,8 @@ func (s *Service) ListMine(ctx context.Context, userID uuid.UUID) ([]MyProject, 
 // List 是系统管理里的项目列表（未删除的，新建的在前）。
 func (s *Service) List(ctx context.Context, keyword, status string, page httpx.PageRequest) (httpx.Page[Item], error) {
 	keyword = strings.TrimSpace(keyword)
-	if utf8.RuneCountInString(keyword) > maxKeywordRunes {
-		return httpx.Page[Item]{}, httpx.Invalid("搜索关键字最长 %d 个字符", maxKeywordRunes)
+	if utf8.RuneCountInString(keyword) > maxKeywordChars {
+		return httpx.Page[Item]{}, httpx.Invalid("搜索关键字最长 %d 个字符", maxKeywordChars)
 	}
 	status = strings.TrimSpace(status)
 	if status != "" {
@@ -129,9 +130,9 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Detail, error) {
 
 // CreateInput 是新建项目的输入。
 type CreateInput struct {
-	ProjectCode string
-	ProjectName string
-	Description *string
+	ProjectCode string  `json:"project_code"`
+	ProjectName string  `json:"project_name"`
+	Description *string `json:"description"`
 }
 
 // Create 新建项目，连同根文件夹和归类根。编码重复 409 `conflict`。
@@ -144,9 +145,9 @@ func (s *Service) Create(ctx context.Context, operatorID uuid.UUID, in CreateInp
 	if err != nil {
 		return nil, err
 	}
-	desc, err := normalizeDescription(in.Description)
+	desc, err := names.OptionalText(in.Description, maxDescriptionChars, "项目说明")
 	if err != nil {
-		return nil, err
+		return nil, httpx.Invalid("%s", err)
 	}
 	p := &projectRow{ID: db.NewID(), ProjectCode: code, ProjectName: name, Description: desc, CreatedBy: operatorID,
 		RootFolderID: db.NewID(), CategoryRootID: db.NewID()}
@@ -195,8 +196,8 @@ func (s *Service) Update(ctx context.Context, operatorID, id uuid.UUID, in Updat
 		name = &n
 	}
 	if in.Description != nil {
-		if desc, err = normalizeDescription(in.Description); err != nil {
-			return nil, err
+		if desc, err = names.OptionalText(in.Description, maxDescriptionChars, "项目说明"); err != nil {
+			return nil, httpx.Invalid("%s", err)
 		}
 	}
 	if in.Status != nil {
@@ -243,7 +244,7 @@ func (s *Service) Update(ctx context.Context, operatorID, id uuid.UUID, in Updat
 			after.ProjectName = *name
 			b["project_name"], a["project_name"] = before.ProjectName, *name
 		}
-		if in.Description != nil && !equalPtr(desc, before.Description) {
+		if in.Description != nil && !names.SameOptional(desc, before.Description) {
 			after.Description = desc
 			b["description"], a["description"] = before.Description, desc
 		}
@@ -323,7 +324,7 @@ func (s *Service) GetAccess(ctx context.Context, id uuid.UUID) (*Access, error) 
 
 // SetAccess 整体替换项目授权。重复的 id 去掉；有不存在的用户或角色 400。只锁项目行，不拿树锁。
 func (s *Service) SetAccess(ctx context.Context, operatorID, id uuid.UUID, userIDs, roleIDs []uuid.UUID) (*Access, error) {
-	userIDs, roleIDs = dedupSorted(userIDs), dedupSorted(roleIDs)
+	userIDs, roleIDs = xslices.SortedIDs(userIDs), xslices.SortedIDs(roleIDs)
 	if len(userIDs) > maxAccessEntries || len(roleIDs) > maxAccessEntries {
 		return nil, httpx.Invalid("一次最多授权 %d 个人、%d 个角色", maxAccessEntries, maxAccessEntries)
 	}
@@ -346,7 +347,7 @@ func (s *Service) SetAccess(ctx context.Context, operatorID, id uuid.UUID, userI
 		if err != nil {
 			return err
 		}
-		if sameIDs(userIDsOf(before), userIDs) && sameIDs(roleIDsOf(before), roleIDs) {
+		if slices.Equal(userIDsOf(before), userIDs) && slices.Equal(roleIDsOf(before), roleIDs) {
 			out = before
 			return nil // 没有变化
 		}
@@ -408,7 +409,7 @@ func userIDsOf(a *Access) []uuid.UUID {
 	for _, u := range a.Users {
 		out = append(out, u.ID)
 	}
-	return dedupSorted(out)
+	return xslices.SortedIDs(out)
 }
 
 func roleIDsOf(a *Access) []uuid.UUID {
@@ -416,17 +417,8 @@ func roleIDsOf(a *Access) []uuid.UUID {
 	for _, r := range a.Roles {
 		out = append(out, r.ID)
 	}
-	return dedupSorted(out)
+	return xslices.SortedIDs(out)
 }
-
-// dedupSorted 去重排序；返回值不为 nil（空集合在 SQL 里是 '{}'，不是 NULL）。
-func dedupSorted(ids []uuid.UUID) []uuid.UUID {
-	out := append([]uuid.UUID{}, ids...)
-	slices.SortFunc(out, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
-	return slices.Compact(out)
-}
-
-func sameIDs(a, b []uuid.UUID) bool { return slices.Equal(a, b) }
 
 func normalizeName(v string) (string, error) {
 	name, err := names.NormalizeProjectName(v)
@@ -436,36 +428,9 @@ func normalizeName(v string) (string, error) {
 	return name, nil
 }
 
-// normalizeDescription：去掉首尾空白，空的当作没有；最长 500 个字符。
-func normalizeDescription(v *string) (*string, error) {
-	if v == nil {
-		return nil, nil
-	}
-	d := strings.TrimSpace(*v)
-	if d == "" {
-		return nil, nil
-	}
-	if utf8.RuneCountInString(d) > maxDescriptionRunes {
-		return nil, httpx.Invalid("项目说明最长 %d 个字符", maxDescriptionRunes)
-	}
-	return &d, nil
-}
-
 func checkStatus(v string) (string, error) {
 	if v != StatusActive && v != StatusArchived {
 		return "", httpx.Invalid("项目状态只能是 active 或 archived")
 	}
 	return v, nil
-}
-
-func equalPtr(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
-// recheckStream 复核实时通道的会话和项目授权。
-func (s *Service) recheckStream(ctx context.Context, token string, projectID uuid.UUID) error {
-	return s.auth.RecheckProject(ctx, token, projectID)
 }

@@ -8,7 +8,7 @@ package storage
 // GET …/{id}/migrate 查这个存储最近一次迁移（进度、失败清单）；POST …/{id}/migrate/cancel 取消。列表里每个存储另外带
 // migration（最近一次迁出）和 incoming_migration（正在迁入）的摘要。
 //
-// 后台任务 job_type = storage_migrate（internal/platform/jobs 的执行器：领取、心跳、重试、回收、单实例都是它的），一个
+// 后台任务 job_type = storage_migrate（internal/platform/jobs 的执行器：领取、心跳、重试、启动时回收都是它的），一个
 // 任务一行 background_jobs，没有业务表（不改表结构）：
 //   - payload：源、目标（id 和建任务时的名字）；cancel（取消接口记下的）；state（断点：cursor、total、migrated、failed、
 //     失败清单、audit_mark）。导出的 payload 写后不改，迁移的 state、cancel 由这里改，别的键不动；
@@ -42,7 +42,7 @@ package storage
 //     的 UPDATE，引用它的快照一起改（封面按"旧封面 key → 新封面 key"对应；有快照的封面不在复制过的里面——理论上不会
 //     有——就回滚，重读重来，再不行记失败）。
 //   - 复制文件（复用源文件当前快照的对象）：复制的事务在存储配置行之后拿同一把内容锁（项目, sha256），锁内重读源快照
-//     （folder.CopyEntry）。迁移改位置也先拿这把锁：复制先拿到时，迁移的 UPDATE 在它提交后才执行（READ COMMITTED，
+//     （folder.CopyFolderFile）。迁移改位置也先拿这把锁：复制先拿到时，迁移的 UPDATE 在它提交后才执行（READ COMMITTED，
 //     拿到锁后的语句看得到它刚插入的快照），新快照一起改掉；迁移先拿到时，复制在锁内重读到的已经是目标存储的位置。
 //     所以不会有新快照指向一个已经迁走的位置而被漏掉。
 //   - 上传、重扫（查重拿内容锁，同项目同 sha256）：它们只写默认存储；断网重试命中返回已有文件，内容重复 409，都不新建
@@ -92,8 +92,6 @@ const (
 	actionMigrateStart  = "migrate_start"
 	actionMigrateCancel = "migrate_cancel"
 	actionMigrateEnd    = "migrate_end"
-	// actionSnapshotMigrate 是每个改了位置的快照（target_type file_snapshot）。
-	actionSnapshotMigrate = "storage_migrate"
 )
 
 // 默认值。
@@ -157,7 +155,7 @@ func MigrateTmpDir(base string) string {
 	return filepath.Join(base, "migrate")
 }
 
-// SweepMigrateTmp 启动时删掉迁移临时目录里上次留下的文件（进程被杀时没删的）。只有拿到后台任务单实例锁的进程调用。
+// SweepMigrateTmp 启动时删掉迁移临时目录里上次留下的文件（进程被杀时没删的）。执行器启动时调用。
 func SweepMigrateTmp(base string, log *slog.Logger) {
 	dir := MigrateTmpDir(base)
 	entries, err := os.ReadDir(dir)
@@ -289,8 +287,6 @@ type migrateState struct {
 // ---------------------------------------------------------------------------
 // 接口
 
-func errMigrateState(msg string) *httpx.Error { return httpx.Conflict(httpx.CodeInvalidState, msg) }
-
 var errNoMigration = httpx.NewError(http.StatusNotFound, httpx.CodeNotFound, "这个存储还没有迁移记录")
 
 // Start 建迁移任务：把存储 sourceID 里的原图和封面迁到 targetID。
@@ -345,14 +341,14 @@ func (m *Migrator) Start(ctx context.Context, operatorID, sourceID, targetID uui
 			return err
 		}
 		if len(active) > 0 {
-			return errMigrateState("已有存储迁移在进行，请等它完成或取消")
+			return httpx.InvalidState("已有存储迁移在进行，请等它完成或取消")
 		}
 		total, err := countSnapshots(ctx, tx, sourceID)
 		if err != nil {
 			return err
 		}
 		if total == 0 {
-			return errMigrateState("这个存储里没有文件，不用迁移")
+			return httpx.InvalidState("这个存储里没有文件，不用迁移")
 		}
 		// audit_mark 从现在的最大审计 id 起：这次迁移的审计都在它之后，补数时不用从头扫审计。
 		mark, err := maxAuditID(ctx, tx)
@@ -427,10 +423,10 @@ func (m *Migrator) Cancel(ctx context.Context, operatorID, sourceID uuid.UUID) (
 			return err
 		}
 		if jobID == uuid.Nil {
-			return errMigrateState("这个存储没有进行中的迁移")
+			return httpx.InvalidState("这个存储没有进行中的迁移")
 		}
 		if p.Cancel != nil {
-			return errMigrateState("迁移已经在取消了")
+			return httpx.InvalidState("迁移已经在取消了")
 		}
 		p.Cancel = &migrateCancel{RequestedAt: time.Now().UTC(), RequestedBy: operatorID}
 		if err := setPayloadKey(ctx, tx, jobID, "cancel", p.Cancel); err != nil {

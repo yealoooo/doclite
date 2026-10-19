@@ -77,13 +77,6 @@ func (s *Subscription) Close() {
 	}
 }
 
-// Resyncs 是这个订阅因为积压溢出收到 resync 的次数（测试、日志用）。
-func (s *Subscription) Resyncs() int {
-	s.bus.mu.Lock()
-	defer s.bus.mu.Unlock()
-	return s.resyncs
-}
-
 // Publish 把事件发给对应项目的订阅者，不阻塞。事务里的写操作要在提交之后才调用（见 [Bus.InTx]）。
 func (b *Bus) Publish(evs ...Event) {
 	if len(evs) == 0 {
@@ -145,13 +138,6 @@ func (b *Bus) Close() {
 	b.closed = true
 	close(b.done)
 	b.subs = map[uuid.UUID]map[*Subscription]struct{}{}
-}
-
-// Subscribers 是某个项目当前的订阅数（测试用）。
-func (b *Bus) Subscribers(projectID uuid.UUID) int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.subs[projectID])
 }
 
 // Pending 收集一个事务里要发的事件，提交之后由 [Bus.InTx] 发出。
