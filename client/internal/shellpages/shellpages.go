@@ -21,8 +21,6 @@ const Prefix = "/shell/"
 const (
 	// ViewGate 是启动时的关口：页面自己按设置和探测结果决定显示什么。
 	ViewGate = ""
-	// ViewConnect：还没有配置服务器地址。
-	ViewConnect = "connect"
 	// ViewBlocked：客户端不能打开界面（导航保护没装上，reason 写原因），没有可点的按钮。
 	ViewBlocked = "blocked"
 )

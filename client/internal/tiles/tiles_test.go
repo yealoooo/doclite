@@ -41,10 +41,6 @@ func TestDZIMath(t *testing.T) {
 	if cols, rows := Grid(1024, 513); cols != 2 || rows != 2 {
 		t.Errorf("Grid(1024, 513) = %d×%d", cols, rows)
 	}
-	// 2480×3508：第 12 级 5×7、第 11 级 3×4、第 10 级 2×2、第 0–9 级各 1 块。
-	if got := TileCount(2480, 3508); got != 35+12+4+10 {
-		t.Errorf("TileCount(2480, 3508) = %d", got)
-	}
 }
 
 // 存的 3×2 灰度图（a b c / d e f），各方向转正后的样子。
@@ -89,11 +85,19 @@ func TestOrientation(t *testing.T) {
 	}
 }
 
-func TestHalve(t *testing.T) {
+// 逐级减半；封面的 Shrink 按 2ⁿ 的方块取平均后再转正。
+func TestHalveAndShrink(t *testing.T) {
 	src := &level{w: 3, h: 3, ch: 1, pix: []byte{0, 10, 20, 30, 40, 50, 60, 70, 80}}
 	got := halve(src)
 	if got.w != 2 || got.h != 2 || !bytes.Equal(got.pix, []byte{20, 35, 65, 80}) {
 		t.Errorf("halve = %d×%d %v", got.w, got.h, got.pix)
+	}
+	// 存的 4×2，方向 6 转正后 2×4；缩到不小于 1×2：2×2 的方块取平均（25、45），再转正成 1×2。
+	gray := image.NewGray(image.Rect(0, 0, 4, 2))
+	copy(gray.Pix, []byte{0, 10, 20, 30, 40, 50, 60, 70})
+	img, err := Shrink(context.Background(), gray, 6, 1, 2)
+	if g, ok := img.(*image.Gray); err != nil || !ok || g.Rect.Dx() != 1 || g.Rect.Dy() != 2 || !bytes.Equal(g.Pix, []byte{25, 45}) {
+		t.Errorf("Shrink = %v %v", img, err)
 	}
 }
 
@@ -149,7 +153,7 @@ func TestGenerateSmall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.MaxLevel != 11 || res.TileCount != TileCount(1100, 600) || res.Bytes <= 0 {
+	if res.MaxLevel != 11 || res.TileCount != 6+2+10 || res.Bytes <= 0 {
 		t.Fatalf("结果不对：%+v", res)
 	}
 	for _, c := range []struct{ l, x, y, w, h int }{{11, 0, 0, 513, 513}, {11, 2, 1, 77, 89}, {10, 1, 0, 39, 300}, {0, 0, 0, 1, 1}} {
@@ -221,7 +225,7 @@ func TestGenerateSmall(t *testing.T) {
 	plan, _ = NewPlan(srcPath)
 	_, err = plan.Generate(context.Background(), out, Options{MaxOutputBytes: 1000})
 	var te *Error
-	if !errors.As(err, &te) || te.Code != CodeTooLarge {
+	if !errors.As(err, &te) || te.Code != imgdecode.KindTooLarge {
 		t.Errorf("输出超出上限应为 too_large，实际 %v", err)
 	}
 
@@ -230,7 +234,7 @@ func TestGenerateSmall(t *testing.T) {
 	if err := os.WriteFile(junk, []byte("GIF89a……"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewPlan(junk); !errors.As(err, &te) || te.Code != CodeUnsupportedFormat {
+	if _, err := NewPlan(junk); !errors.As(err, &te) || te.Code != imgdecode.KindUnsupportedFormat {
 		t.Errorf("GIF 应为 unsupported_format，实际 %v", err)
 	}
 }

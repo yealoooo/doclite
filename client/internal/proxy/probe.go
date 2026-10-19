@@ -28,7 +28,7 @@ type ProbeResult struct {
 
 const probeTimeout = 8 * time.Second
 
-// Probe 探测一个服务器（server 是规整过的 origin：web 服务的入口，或者 server 本身，客户端只经它访问 `/api`）：
+// Probe 探测一个服务器（server 是规整过的 origin：server 的接口地址，客户端只经它访问 `/api`）：
 //   - `GET /api/health` 要返回 200 和 `{status, version}`（不用登录、不检查客户端版本）；
 //   - `GET /api/shell/latest` 给最低、最新版本和下载地址（server 还没有这个接口时 404，跳过）；
 //   - 再用不带会话的 `GET /api/me` 问一次 server 收不收这个客户端版本：server 的版本检查在所有 `/api`（health、
@@ -45,7 +45,7 @@ func (p *Proxy) Probe(ctx context.Context, server string) *ProbeResult {
 	}
 	status, body, err := p.probeGet(ctx, server+"/api/health")
 	if err != nil {
-		return fail(describeNetError(err))
+		return fail(DescribeNetError(err))
 	}
 	if status != http.StatusOK {
 		return fail(fmt.Sprintf("%s/api/health 返回 HTTP %d，不像是 Doclite 服务器", server, status))

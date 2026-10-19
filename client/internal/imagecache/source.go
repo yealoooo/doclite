@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"doclite/client/internal/proxy"
 )
 
 // 来源记录（requirements 第 6 节"图片缓存"）：壳只用这个快照最近一次出现在 `POST /api/files/batch` 或
@@ -52,12 +54,8 @@ type Sources struct {
 	m      map[string]*sourceRec // snapshot_id → 记录
 }
 
-// 会话变化、要清空记录的请求。
-const (
-	loginPath  = "/api/auth/login"
-	logoutPath = "/api/auth/logout"
-	batchPath  = "/api/files/batch"
-)
+// batchPath 是 `POST /api/files/batch`。
+const batchPath = "/api/files/batch"
 
 // imageFields 是 batch、snapshots 里和取图有关的字段（server/internal/file/view.go 的 ImageFields）。
 type imageFields struct {
@@ -76,11 +74,11 @@ func (s *Sources) Observe(server, method, path string, status int, body []byte) 
 	defer s.mu.Unlock()
 	s.syncServer(server)
 	switch {
-	case method == http.MethodPost && path == loginPath:
+	case method == http.MethodPost && path == proxy.LoginPath:
 		if status >= 200 && status < 300 {
 			s.clearLocked()
 		}
-	case method == http.MethodPost && path == logoutPath:
+	case method == http.MethodPost && path == proxy.LogoutPath:
 		// 不论结果（代理这时已经清空了 Cookie 罐）。
 		s.clearLocked()
 	case status != http.StatusOK:
@@ -123,6 +121,12 @@ func isSnapshotsPath(p string) bool {
 	return ok && tail == "snapshots" && IsUUID(fid)
 }
 
+// IsSourceRequest：这个请求的响应里有图片来源（`POST /api/files/batch`、`GET /api/files/<fid>/snapshots`），
+// 要交给 [Service.Observe]（cmd/devshell 也用它挑要看的响应）。
+func IsSourceRequest(method, path string) bool {
+	return (method == http.MethodPost && path == batchPath) || (method == http.MethodGet && isSnapshotsPath(path))
+}
+
 // Lookup 取一个快照的记录（要求 file_id 也对得上）。server 和记录所属的不同时（换了服务器）先清空。
 func (s *Sources) Lookup(server, fileID, snapshotID string) (Source, bool) {
 	s.mu.Lock()
@@ -133,20 +137,6 @@ func (s *Sources) Lookup(server, fileID, snapshotID string) (Source, bool) {
 		return Source{}, false
 	}
 	return r.Source, true
-}
-
-// Clear 清空记录。
-func (s *Sources) Clear() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.clearLocked()
-}
-
-// Len 是记录的快照数。
-func (s *Sources) Len() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.m)
 }
 
 func (s *Sources) syncServer(server string) {

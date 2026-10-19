@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"doclite/client/internal/proxy"
 )
 
 const (
@@ -107,23 +110,23 @@ func TestSources(t *testing.T) {
 		t.Errorf("snapshots 没记对：%+v %v", src, ok)
 	}
 	// 登录失败不清空，登录成功清空。
-	s.Observe(server, "POST", loginPath, 401, nil)
-	if s.Len() != 2 {
-		t.Errorf("登录失败不该清空，还剩 %d", s.Len())
+	s.Observe(server, "POST", proxy.LoginPath, 401, nil)
+	if len(s.m) != 2 {
+		t.Errorf("登录失败不该清空，还剩 %d", len(s.m))
 	}
-	s.Observe(server, "POST", loginPath, 200, nil)
-	if s.Len() != 0 {
+	s.Observe(server, "POST", proxy.LoginPath, 200, nil)
+	if len(s.m) != 0 {
 		t.Error("登录成功应清空")
 	}
 	// 退出登录清空。
 	s.Observe(server, "POST", batchPath, 200, batchBody(item(fid, sid, "http://c")))
-	s.Observe(server, "POST", logoutPath, 204, nil)
-	if s.Len() != 0 {
+	s.Observe(server, "POST", proxy.LogoutPath, 204, nil)
+	if len(s.m) != 0 {
 		t.Error("退出登录应清空")
 	}
 	// 换服务器清空。
 	s.Observe(server, "POST", batchPath, 200, batchBody(item(fid, sid, "http://c")))
-	if _, ok := s.Lookup("http://other", fid, sid); ok || s.Len() != 0 {
+	if _, ok := s.Lookup("http://other", fid, sid); ok || len(s.m) != 0 {
 		t.Error("换了服务器还能查到")
 	}
 }
@@ -137,7 +140,7 @@ func TestSourcesLimit(t *testing.T) {
 		body = append(body, item(fid, ids[i], "http://c"))
 	}
 	s.Observe("", "POST", batchPath, 200, batchBody(body...))
-	if n := s.Len(); n != maxSources+1-(maxSources+1)/10 {
+	if n := len(s.m); n != maxSources+1-(maxSources+1)/10 {
 		t.Fatalf("超出后应丢掉最早的 1/10，还剩 %d", n)
 	}
 	if _, ok := s.Lookup("", fid, ids[0]); ok {
@@ -156,34 +159,6 @@ func hex12(i int) string {
 		i /= 16
 	}
 	return string(b)
-}
-
-func TestPickEvictions(t *testing.T) {
-	mk := func(s string, size, access int64) *entry {
-		return &entry{SnapshotID: s, Kind: KindCover, Size: size, Access: access}
-	}
-	list := []*entry{mk("a", 40, 3), mk("b", 30, 1), mk("c", 20, 2), mk("d", 10, 4)}
-	// 占用 100，删到 50 以下：先删最久没访问的 b（30）、c（20）。
-	got := pickEvictions(list, 100, 50, "")
-	if len(got) != 2 || got[0].SnapshotID != "b" || got[1].SnapshotID != "c" {
-		t.Errorf("淘汰了 %v", keys(got))
-	}
-	// 刚存的 b 不删：删 c、a。
-	got = pickEvictions(list, 100, 50, "b.cover")
-	if len(got) != 2 || got[0].SnapshotID != "c" || got[1].SnapshotID != "a" {
-		t.Errorf("保留 b 时淘汰了 %v", keys(got))
-	}
-	if got := pickEvictions(list, 100, 100, ""); got != nil {
-		t.Errorf("没超出时不该淘汰：%v", keys(got))
-	}
-}
-
-func keys(es []*entry) []string {
-	var out []string
-	for _, e := range es {
-		out = append(out, e.key())
-	}
-	return out
 }
 
 // 存入超出上限时按最近访问淘汰到 90%，刚存的不删；按项目清空；清空之后拿到的 token 才能存。
@@ -249,5 +224,15 @@ func TestStoreLRU(t *testing.T) {
 	}
 	if !st2.has(entryKey("s7", KindCover)) || st2.total != 100 {
 		t.Errorf("重新打开后：%v 占用 %d", st2.entries, st2.total)
+	}
+	// 启动之前就有、又不在索引里的文件删掉（索引里的、启动以后新存的不碰）。
+	orphan := filepath.Join(dir, fid, sid+".original.jpg")
+	_ = os.WriteFile(orphan, []byte("x"), 0o600)
+	st2.sweep(time.Now().Add(time.Second))
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Error("索引外的文件没删")
+	}
+	if _, err := os.Stat(filepath.Join(dir, fid, "s7.cover.jpg")); err != nil {
+		t.Error("索引里的文件被删了")
 	}
 }

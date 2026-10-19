@@ -100,7 +100,7 @@ func TestChangeServerConfirm(t *testing.T) {
 	if err := s.changeServer(ctx, b); err != nil || saved() != b || px.Server() != b || len(asked) != 2 {
 		t.Fatalf("确认了才改：%v %q %v", err, saved(), asked)
 	}
-	s.smoke = newSmokeRun(s, &SmokeOptions{})
+	newSmokeRun(s, &SmokeOptions{}).install()
 	if err := s.changeServer(ctx, c); err != nil || saved() != c || len(asked) != 2 {
 		t.Fatalf("自检时不该问：%v %q %v", err, saved(), asked)
 	}

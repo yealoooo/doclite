@@ -3,7 +3,6 @@ package upload
 import (
 	"bytes"
 	"image"
-	"image/color"
 	"image/jpeg"
 	"path/filepath"
 	"testing"
@@ -54,8 +53,8 @@ func boxLuma(img image.Image, b image.Rectangle, fx, fy float64) int {
 	return sum / n
 }
 
-// 封面尺寸：长边 400、不放大、短边按比例；方向 6 的 JPEG 转正后是竖的；JPEG 压缩的 TIFF 也有封面（颜色的比较见
-// imgdecode 的 consumers_test.go）；多页 TIFF 不带封面。
+// 封面尺寸：长边 400、不放大、短边按比例；方向 6 的 JPEG 转正后是竖的；透明铺白；JPEG 压缩的 TIFF 也有封面（颜色的
+// 比较见 imgdecode 的 consumers_test.go）；多页 TIFF 不带封面。转正、铺白和切块是同一套代码（tiles 的 TestOrientation）。
 func TestCoverSamples(t *testing.T) {
 	cases := []struct {
 		file string
@@ -95,79 +94,4 @@ func TestCoverSamples(t *testing.T) {
 			}
 		})
 	}
-}
-
-// 封面方向：8 种 EXIF 方向转正后，标记点都回到左上角；透明部分铺白；小图不放大。
-func TestEncodeCoverOrientation(t *testing.T) {
-	// 转正后的图：宽 60、高 90，左上角 10×10 是黑块，其余白色。按每种方向反推出文件里存的样子。
-	const ow, oh = 60, 90
-	upright := image.NewRGBA(image.Rect(0, 0, ow, oh))
-	for y := 0; y < oh; y++ {
-		for x := 0; x < ow; x++ {
-			c := color.RGBA{255, 255, 255, 255}
-			if x < 10 && y < 10 {
-				c = color.RGBA{0, 0, 0, 255}
-			}
-			upright.SetRGBA(x, y, c)
-		}
-	}
-	for o := 1; o <= 8; o++ {
-		stored := unorient(upright, o)
-		data, err := EncodeCover(stored, o)
-		if err != nil {
-			t.Fatalf("方向 %d：%v", o, err)
-		}
-		img := checkCover(t, data, ow, oh) // 小图不放大：封面就是 60×90
-		if l := luma(img, 3, 3); l > 60 {
-			t.Errorf("方向 %d：左上角应该是黑的，亮度 %d", o, l)
-		}
-		if l := luma(img, ow-3, oh-3); l < 200 {
-			t.Errorf("方向 %d：右下角应该是白的，亮度 %d", o, l)
-		}
-	}
-	// 透明铺白。
-	clear := image.NewNRGBA(image.Rect(0, 0, 20, 20))
-	data, err := EncodeCover(clear, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if l := luma(checkCover(t, data, 20, 20), 10, 10); l < 245 {
-		t.Errorf("透明部分应该铺白，亮度 %d", l)
-	}
-}
-
-// unorient 按 EXIF 方向的定义（第 0 行、第 0 列在转正后的哪一边）从转正后的图 up 造出文件里存的图，
-// 不借助 orient，两边各写各的，方向公式写错了测试能发现。
-func unorient(up *image.RGBA, o int) *image.RGBA {
-	w, h := up.Bounds().Dx(), up.Bounds().Dy()
-	sw, sh := w, h
-	if o >= 5 {
-		sw, sh = h, w
-	}
-	stored := image.NewRGBA(image.Rect(0, 0, sw, sh))
-	for y := 0; y < sh; y++ {
-		for x := 0; x < sw; x++ {
-			var ux, uy int
-			switch o {
-			case 1: // 第 0 行在上、第 0 列在左
-				ux, uy = x, y
-			case 2: // 上、右
-				ux, uy = w-1-x, y
-			case 3: // 下、右
-				ux, uy = w-1-x, h-1-y
-			case 4: // 下、左
-				ux, uy = x, h-1-y
-			case 5: // 第 0 行在左、第 0 列在上
-				ux, uy = y, x
-			case 6: // 右、上
-				ux, uy = w-1-y, x
-			case 7: // 右、下
-				ux, uy = w-1-y, h-1-x
-			case 8: // 左、下
-				ux, uy = y, h-1-x
-			}
-			stored.SetRGBA(x, y, up.RGBAAt(ux, uy))
-		}
-	}
-	return stored
 }

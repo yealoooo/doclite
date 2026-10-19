@@ -125,13 +125,7 @@ func (s *Shell) registerCommands() {
 		if err != nil {
 			return nil, err
 		}
-		if s.smoke != nil {
-			// 自检不打开系统浏览器（不抢焦点），只记下地址，smoke_external_check 再核对（smokeflow.go）。
-			s.smoke.recordExternal(u.String())
-			s.log.Info("自检：open_external 只记下地址", "host", u.Host)
-			return nil, nil
-		}
-		if err := s.app.Browser.OpenURL(u.String()); err != nil {
+		if err := s.openURL(u.String()); err != nil {
 			return nil, proxy.InternalDetail("打开系统浏览器失败", err)
 		}
 		return nil, nil
@@ -169,7 +163,7 @@ type ShellInfo struct {
 	Version string `json:"version"`
 	// WebVersion 是嵌入的界面的版本（web 产物包的清单，client/WEB_VERSION）；没有嵌入界面时为 null。
 	WebVersion *string `json:"web_version"`
-	// ServerURL 是已配置的服务器地址（web 服务的入口，也可以是 server 本身）；还没配置时为 null。
+	// ServerURL 是已配置的服务器地址（server 的接口地址）；还没配置时为 null。
 	ServerURL *string `json:"server_url"`
 	DataDir   string  `json:"data_dir"`
 	Platform  string  `json:"platform"`
@@ -222,15 +216,11 @@ func (s *Shell) osVersionText() *string {
 
 // changeServer 是页面要换服务器地址（set_server）。页面证明不了是用户在操作（页面和客户端自带的页面同源，区分不出
 // 是谁调的），所以已经配置过地址、又要改成别的地址时，由壳弹系统确认框（"从 A 改为 B"），用户点了才改。首次配置、
-// 地址没变时不弹；--smoke 时跳过（自检自己换地址）。
+// 地址没变时不弹；--smoke 时不弹（自检自己换地址，见 smokeRun.install）。
 func (s *Shell) changeServer(ctx context.Context, server string) error {
 	current := s.proxy.Server()
-	if current != "" && current != server && s.smoke == nil {
-		confirm := s.confirmServer
-		if confirm == nil {
-			confirm = s.confirmServerDialog
-		}
-		ok, err := confirm(ctx, current, server)
+	if current != "" && current != server {
+		ok, err := s.confirmServer(ctx, current, server)
 		if err != nil {
 			return proxy.InternalDetail("没能弹出确认框", err)
 		}
@@ -279,10 +269,18 @@ func (s *Shell) applyServer(server string) error {
 	}
 	s.log.Info("换了服务器，会话已清空", "server", server)
 	s.setSessionState(func() { s.authRequired, s.upgradeRequired = false, false })
-	if s.smoke != nil {
-		s.smoke.serverChanged(server)
+	if s.onServerChanged != nil {
+		s.onServerChanged(server)
 	}
 	return nil
+}
+
+// openURLInBrowser 用系统浏览器打开地址（open_external）。
+func (s *Shell) openURLInBrowser(url string) error {
+	if s.app == nil {
+		return errors.New("应用还没起来")
+	}
+	return s.app.Browser.OpenURL(url)
 }
 
 // checkExternalURL：open_external 只打开 http、https 的地址（导出物、原图的预签名下载地址，升级的下载地址），

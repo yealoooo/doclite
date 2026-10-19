@@ -169,7 +169,7 @@ func TestSplitUTF8(t *testing.T) {
 	}
 }
 
-// Probe：只要 /api/health 通就连得上（web 服务的入口和 server 本身都行，不要求 GET / 是网页）；要不要升级看
+// Probe：只要 /api/health 通就连得上（不要求 GET / 是网页）；要不要升级看
 // /api/shell/latest，没有这个接口时看不带会话的 /api/me 回不回 426。
 func TestProbe(t *testing.T) {
 	latest, minVersion := true, "0.3.0"

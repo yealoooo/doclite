@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,20 +19,25 @@ import (
 // 热文件夹（requirements 第 6 节，用户决定 2026-09-27）：只监控一个目录，对应 server 上的一个目标文件夹（可换）；
 // 根目录里的文件传到目标文件夹本身，子文件夹逐层按名字建（见 process.go 的 resolveFolder）。
 //
-//   - 发现文件：fsnotify 的事件只作提示（去抖 300 毫秒后重新扫描整个目录），另外定时全量扫描兜底（默认 15 秒）。
-//     内存里记着已入队文件的大小和修改时间（每次定时扫描从库里重读），没变的不碰库。忽略规则见 ignore.go；
-//     不跟随符号链接，最多 32 层；只收 jpg、jpeg、tif、tiff、png。
+//   - 发现文件：fsnotify 的事件只作提示（去抖 300 毫秒后只重新列出有事件的目录，新出现的子目录整个列出），另外
+//     定时全量扫描兜底（有目录事件时 60 秒，没有时 15 秒）。内存里记着已入队文件的大小和修改时间（开始运行时从库里读
+//     一次，之后随入队、删除更新），没变的不碰库。列目录的规则见 walk.go（和上传按钮选的文件夹一样）；只收 jpg、jpeg、
+//     tif、tiff、png。
 //   - 写完判定：每 500 毫秒看一次"等待写入完成"的项（settle.go 的 Judge）：写完了进排队；60 秒还不完整记失败；
 //     写完之前文件不见了从队列删掉。
 //   - 换目标只影响之后发现的文件；暂停 = 停监控 + 队列不再开始热文件夹的项（正在传的传完），配置里记 running，
 //     壳重启后按它恢复；服务器换了热文件夹停下（目标属于原来的服务器）。
 
-// DefaultScanInterval 是定时全量扫描的间隔。
-const DefaultScanInterval = 15
+// PollIntervalSecs 是没有目录事件时定时全量扫描的间隔（秒，hotfolder 状态里的 scan_interval_secs）。
+const PollIntervalSecs = 15
 
 const (
-	settleEvery = 500 * time.Millisecond
-	eventDelay  = 300 * time.Millisecond
+	// fullScanEvery 是有目录事件时兜底的全量扫描间隔。
+	fullScanEvery = 60 * time.Second
+	settleEvery   = 500 * time.Millisecond
+	eventDelay    = 300 * time.Millisecond
+	// enqueueBatch：扫描发现的文件每这么多个一个事务入队。
+	enqueueBatch = 500
 )
 
 // HotFolder 是热文件夹。
@@ -86,13 +92,6 @@ func (h *HotFolder) statusLocked() HotStatus {
 	return st
 }
 
-// Configured：设置过热文件夹。
-func (h *HotFolder) Configured() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.cfg != nil
-}
-
 func (h *HotFolder) emit() {
 	h.e.ev.HotfolderChanged(h.Status())
 }
@@ -102,7 +101,7 @@ func (h *HotFolder) Restore() {
 	h.mu.Lock()
 	cfg := h.cfg
 	h.mu.Unlock()
-	if cfg == nil || !cfg.Running {
+	if cfg == nil || !cfg.AutoStart {
 		return
 	}
 	if _, err := h.Start(); err != nil {
@@ -125,10 +124,7 @@ func (h *HotFolder) Set(watchDir, targetFolderID string) (HotStatus, error) {
 	h.mu.Lock()
 	running := h.running
 	cfg := HotConfig{WatchDir: filepath.Clean(watchDir), TargetFolderID: targetFolderID, ServerURL: server,
-		ScanIntervalSecs: DefaultScanInterval, Running: running}
-	if h.cfg != nil && h.cfg.ScanIntervalSecs > 0 {
-		cfg.ScanIntervalSecs = h.cfg.ScanIntervalSecs
-	}
+		ScanIntervalSecs: PollIntervalSecs, AutoStart: running}
 	if err := h.e.store.SetHotConfig(context.Background(), cfg); err != nil {
 		h.mu.Unlock()
 		return HotStatus{}, err
@@ -184,7 +180,7 @@ func (h *HotFolder) Start() (HotStatus, error) {
 		h.setError(err.Error())
 		return HotStatus{}, err
 	}
-	cfg.Running = true
+	cfg.AutoStart = true
 	if err := h.e.store.SetHotConfig(context.Background(), cfg); err != nil {
 		return HotStatus{}, err
 	}
@@ -202,9 +198,9 @@ func (h *HotFolder) Start() (HotStatus, error) {
 func (h *HotFolder) Pause() (HotStatus, error) {
 	h.stopRun()
 	h.mu.Lock()
-	if h.cfg != nil && h.cfg.Running {
+	if h.cfg != nil && h.cfg.AutoStart {
 		cfg := *h.cfg
-		cfg.Running = false
+		cfg.AutoStart = false
 		if err := h.e.store.SetHotConfig(context.Background(), cfg); err != nil {
 			h.mu.Unlock()
 			return HotStatus{}, err
@@ -217,7 +213,7 @@ func (h *HotFolder) Pause() (HotStatus, error) {
 	return h.Status(), nil
 }
 
-// Shutdown：壳退出时停下（不改配置里的 running，下次启动照样恢复）。
+// Shutdown：壳退出时停下（不改配置里的 AutoStart，下次启动照样恢复）。
 func (h *HotFolder) Shutdown() { h.stopRun() }
 
 func (h *HotFolder) setError(msg string) {
@@ -259,9 +255,18 @@ func (h *HotFolder) stopRun() {
 // run 是监控的主循环。
 func (h *HotFolder) run(ctx context.Context, cfg HotConfig) {
 	server := cfg.ServerURL
-	interval := time.Duration(max(cfg.ScanIntervalSecs, 1)) * time.Second
 	sc := &hotScan{h: h, cfg: cfg, watched: map[string]bool{}}
 	settle := map[int64]*Settle{}
+
+	known, err := h.e.store.KnownPaths(ctx, server, SourceHotfolder)
+	if err != nil {
+		// 读不出来就从空的开始：每个文件都去库里查一次（慢一些，结果一样）。
+		h.log.Error("热文件夹：读已入队的文件失败", "err", err)
+		known = map[string]fileSig{}
+	}
+	sc.known = &knownPaths{m: known}
+	h.e.setKnown(sc.known)
+	defer h.e.setKnown(nil)
 
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -276,25 +281,35 @@ func (h *HotFolder) run(ctx context.Context, cfg HotConfig) {
 
 	var events <-chan fsnotify.Event
 	var errs <-chan error
+	interval := time.Duration(PollIntervalSecs) * time.Second
 	if sc.watcher != nil {
 		events, errs = sc.watcher.Events, sc.watcher.Errors
+		interval = fullScanEvery
 	}
 	scanTick := time.NewTicker(interval)
 	defer scanTick.Stop()
+	serverTick := time.NewTicker(time.Duration(PollIntervalSecs) * time.Second)
+	defer serverTick.Stop()
 	settleTick := time.NewTicker(settleEvery)
 	defer settleTick.Stop()
 	var delay <-chan time.Time
+	// dirty 是有事件、等着重新列出的目录。
+	dirty := map[string]bool{}
 
-	sc.full(ctx)
+	sc.scan(ctx, nil)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case _, ok := <-events:
+		case ev, ok := <-events:
 			if !ok {
 				events = nil
 				continue
 			}
+			if ev.Has(fsnotify.Remove) || ev.Has(fsnotify.Rename) {
+				sc.unwatch(ev.Name)
+			}
+			dirty[filepath.Dir(ev.Name)] = true
 			if delay == nil {
 				delay = time.After(eventDelay)
 			}
@@ -306,25 +321,54 @@ func (h *HotFolder) run(ctx context.Context, cfg HotConfig) {
 			h.log.Warn("目录事件监控出错", "err", err)
 		case <-delay:
 			delay = nil
-			sc.scan(ctx, false)
-		case <-scanTick.C:
+			dirs := dirty
+			dirty = map[string]bool{}
+			sc.scan(ctx, dirs)
+		case <-serverTick.C:
 			if cur := h.e.api.Server(); cur != server {
 				h.log.Warn("服务器地址换了，热文件夹停下", "from", server, "to", cur)
 				go h.serverChanged()
 				return
 			}
-			sc.full(ctx)
+		case <-scanTick.C:
+			sc.scan(ctx, nil)
 		case <-settleTick.C:
 			h.settle(ctx, server, settle, sc)
 		}
 	}
 }
 
-// serverChanged：服务器地址换了（目标文件夹属于原来的服务器），停下并提示。配置里的 running 不改：换回原来的
+// serverChanged：服务器地址换了（目标文件夹属于原来的服务器），停下并提示。配置里的 AutoStart 不改：换回原来的
 // 服务器后壳重启时照样恢复。
 func (h *HotFolder) serverChanged() {
 	h.stopRun()
 	h.setError("服务器地址换了，热文件夹已停止：目标文件夹属于原来的服务器，请重新选择目标文件夹")
+}
+
+// knownPaths 是已入队文件（path_key）的大小和修改时间。扫描、写完判定在监控协程里改它，上传队列删掉热文件夹的行时
+// 从别的协程拿掉（[Engine.forgetKnown]），所以带锁。
+type knownPaths struct {
+	mu sync.Mutex
+	m  map[string]fileSig
+}
+
+func (k *knownPaths) same(key string, sig fileSig) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	old, ok := k.m[key]
+	return ok && old == sig
+}
+
+func (k *knownPaths) set(key string, sig fileSig) {
+	k.mu.Lock()
+	k.m[key] = sig
+	k.mu.Unlock()
+}
+
+func (k *knownPaths) forget(key string) {
+	k.mu.Lock()
+	delete(k.m, key)
+	k.mu.Unlock()
 }
 
 // hotScan 是一次运行里扫描用的状态。
@@ -332,29 +376,27 @@ type hotScan struct {
 	h       *HotFolder
 	cfg     HotConfig
 	watcher *fsnotify.Watcher
+	// watched 是加了目录事件监控的目录。
 	watched map[string]bool
-	// known：已入队文件（path_key）的大小和修改时间。
-	known map[string]fileSig
+	known   *knownPaths
 }
 
-// full 是定时的全量扫描：先从库里重读已入队的文件（文件不见了被删掉的行、别处改过的行都会对上）。
-func (sc *hotScan) full(ctx context.Context) {
-	sc.scan(ctx, true)
-}
-
-func (sc *hotScan) scan(ctx context.Context, reload bool) {
-	h := sc.h
-	if reload || sc.known == nil {
-		known, err := h.e.store.KnownPaths(ctx, sc.cfg.ServerURL, SourceHotfolder)
-		if err != nil {
-			if ctx.Err() == nil {
-				h.log.Error("热文件夹：读队列库失败", "err", err)
-			}
-			return
+// unwatch：目录被删、改名了，它和它下面的目录不再算在监控里（fsnotify 自己会撤掉）。
+func (sc *hotScan) unwatch(dir string) {
+	prefix := dir + string(filepath.Separator)
+	for d := range sc.watched {
+		if d == dir || strings.HasPrefix(d, prefix) {
+			delete(sc.watched, d)
 		}
-		sc.known = known
 	}
-	st, err := os.Stat(sc.cfg.WatchDir)
+}
+
+// scan 列出目录、把新的和变了的文件加入队列。dirs 为 nil 时是全量扫描；否则只重新列出这几个目录（有事件的），
+// 其中没加监控的子目录（新出现的）整个列出。
+func (sc *hotScan) scan(ctx context.Context, dirs map[string]bool) {
+	h := sc.h
+	root := sc.cfg.WatchDir
+	st, err := os.Stat(root)
 	if err != nil || !st.IsDir() {
 		msg := "监控目录不存在或读不了，等它恢复后自动继续"
 		h.mu.Lock()
@@ -367,78 +409,85 @@ func (sc *hotScan) scan(ctx context.Context, reload bool) {
 		}
 		return
 	}
+	var pending []LocalFile
 	found := 0
-	sc.walk(ctx, sc.cfg.WatchDir, "", 0, &found)
+	collect := func(f LocalFile) {
+		if !SupportedImage(f.Path) || sc.known.same(PathKey(f.Path), fileSig{size: f.Size, mtime: f.MtimeNS}) {
+			return
+		}
+		pending = append(pending, f)
+		if len(pending) >= enqueueBatch {
+			found += sc.enqueue(ctx, pending)
+			pending = pending[:0]
+		}
+	}
+	if dirs == nil {
+		WalkImages(root, "", 0, sc.enter(ctx, ""), collect)
+	} else {
+		for dir := range dirs {
+			rel, err := filepath.Rel(root, dir)
+			if err != nil || (dir != root && !sc.watched[dir]) {
+				continue // 不在监控里（已经删掉了，或者是被忽略的目录）
+			}
+			depth := 0
+			if rel == "." {
+				rel = ""
+			} else {
+				rel = filepath.ToSlash(rel)
+				depth = strings.Count(rel, "/") + 1
+			}
+			WalkImages(dir, rel, depth, sc.enter(ctx, dir), collect)
+		}
+	}
+	found += sc.enqueue(ctx, pending)
 	if ctx.Err() != nil {
 		return
 	}
 	h.mu.Lock()
 	h.errMsg = ""
-	if reload {
+	if dirs == nil {
 		h.lastScan = nowMS()
 		h.scans++
 	}
 	h.mu.Unlock()
-	if reload || found > 0 {
+	if dirs == nil || found > 0 {
 		h.emit()
 	}
 }
 
-// walk 列出 dir（相对根目录 rel，第 depth 层）里的文件和子目录。
-func (sc *hotScan) walk(ctx context.Context, dir, rel string, depth int, found *int) {
-	if ctx.Err() != nil {
-		return
-	}
-	if sc.watcher != nil && !sc.watched[dir] {
-		if err := sc.watcher.Add(dir); err == nil {
+// enter 是 WalkImages 进每个目录之前的检查：停下了就不再往下；给没监控的目录加上监控。只列出有事件的目录时
+// （start 不为空），已经在监控里的子目录不再列出（它们自己有事件）。
+func (sc *hotScan) enter(ctx context.Context, start string) func(dir string) bool {
+	return func(dir string) bool {
+		if ctx.Err() != nil {
+			return false
+		}
+		if sc.watched[dir] {
+			return start == "" || dir == start
+		}
+		if sc.watcher != nil && sc.watcher.Add(dir) == nil {
 			sc.watched[dir] = true
 		}
+		return true
 	}
-	entries, err := os.ReadDir(dir)
+}
+
+// enqueue 把扫描发现的一批文件加入队列（一个事务），记进 known。返回加入的个数。
+func (sc *hotScan) enqueue(ctx context.Context, files []LocalFile) int {
+	if len(files) == 0 || ctx.Err() != nil {
+		return 0
+	}
+	added, _, err := sc.h.e.enqueue(ctx, sc.cfg.ServerURL, SourceHotfolder, files, sc.cfg.TargetFolderID)
 	if err != nil {
-		return
+		if ctx.Err() == nil {
+			sc.h.log.Error("热文件夹：加入队列失败", "err", err)
+		}
+		return 0
 	}
-	for _, ent := range entries {
-		name := ent.Name()
-		if ent.Type()&fs.ModeSymlink != 0 || IgnoredName(name, ent.IsDir()) {
-			continue
-		}
-		info, err := ent.Info()
-		if err != nil || hiddenOrSystem(info) {
-			continue
-		}
-		path := filepath.Join(dir, name)
-		if ent.IsDir() {
-			if depth < MaxDepth {
-				sub := name
-				if rel != "" {
-					sub = rel + "/" + name
-				}
-				sc.walk(ctx, path, sub, depth+1, found)
-			}
-			continue
-		}
-		if !info.Mode().IsRegular() || !SupportedImage(name) {
-			continue
-		}
-		key := PathKey(path)
-		sig := fileSig{size: info.Size(), mtime: info.ModTime().UnixNano()}
-		if old, ok := sc.known[key]; ok && old == sig {
-			continue
-		}
-		it, _, err := sc.h.e.upsert(ctx, sc.cfg.ServerURL, SourceHotfolder,
-			LocalFile{Path: path, RelDir: rel, Size: sig.size, MtimeNS: sig.mtime}, sc.cfg.TargetFolderID)
-		if err != nil {
-			if ctx.Err() == nil {
-				sc.h.log.Error("热文件夹：加入队列失败", "err", err)
-			}
-			continue
-		}
-		sc.known[key] = sig
-		if it != nil {
-			*found++
-		}
+	for _, f := range files {
+		sc.known.set(PathKey(f.Path), fileSig{size: f.Size, mtime: f.MtimeNS})
 	}
+	return len(added)
 }
 
 // settle 推进"等待写入完成"的项。
@@ -459,11 +508,8 @@ func (h *HotFolder) settle(ctx context.Context, server string, state map[int64]*
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				// 写完之前不见了（扫描软件的临时文件改名、用户删了）：从队列删掉。
-				h.e.remove(it)
+				h.e.remove(it) // 也从 known 里拿掉
 				delete(state, it.ID)
-				if sc.known != nil {
-					delete(sc.known, PathKey(it.LocalPath))
-				}
 			}
 			continue
 		}
@@ -474,9 +520,7 @@ func (h *HotFolder) settle(ctx context.Context, server string, state map[int64]*
 		if size != it.Size || mtime != it.MtimeNS {
 			it.Size, it.MtimeNS = size, mtime
 			dirty = true
-			if sc.known != nil {
-				sc.known[PathKey(it.LocalPath)] = fileSig{size: size, mtime: mtime}
-			}
+			sc.known.set(PathKey(it.LocalPath), fileSig{size: size, mtime: mtime})
 		}
 		switch v {
 		case Ready:

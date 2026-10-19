@@ -10,9 +10,10 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
+
+	"doclite/client/internal/proxy"
 )
 
 // Session 是和页面共用的会话（proxy.Proxy 实现）：同一个服务器、同一个 Cookie 罐、同一套请求头
@@ -161,6 +162,7 @@ func parseAPIError(status int, data []byte) *APIError {
 	return e
 }
 
+// describeNetError：取消、60 秒没有进展另说，其余同会话代理（proxy.DescribeNetError）。
 func describeNetError(ctx context.Context, err error) string {
 	if ctx.Err() != nil {
 		if errors.Is(context.Cause(ctx), errStalled) {
@@ -168,22 +170,7 @@ func describeNetError(ctx context.Context, err error) string {
 		}
 		return "请求已取消"
 	}
-	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() {
-		return "连接服务器超时"
-	}
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "connection refused"), strings.Contains(msg, "actively refused"):
-		return "服务器拒绝连接（服务没有运行，或端口不对）"
-	case strings.Contains(msg, "no such host"):
-		return "找不到这个服务器（主机名不对，或网络不通）"
-	case strings.Contains(msg, "no route to host"), strings.Contains(msg, "network is unreachable"):
-		return "网络不通，连不到服务器"
-	case strings.Contains(msg, "connection reset"), strings.Contains(msg, "EOF"), strings.Contains(msg, "broken pipe"):
-		return "和服务器的连接被断开"
-	}
-	return "无法连接服务器：" + msg
+	return proxy.DescribeNetError(err)
 }
 
 func jsonBody(v any) (io.Reader, int64) {
@@ -319,6 +306,35 @@ func (c *Client) Upload(ctx context.Context, expect, path string, in UploadInput
 	}
 	ing.Raw = out
 	return &ing, nil
+}
+
+// uploadDroppingCover 是 [Client.Upload]；server 不收封面（400 invalid_cover）时去掉封面再传一次（封面可以缺，
+// 不能因封面丢页；不算重试次数），dropped 收到 server 的说明。上传队列和重扫件共用。
+func (c *Client) uploadDroppingCover(ctx context.Context, expect, path string, in UploadInput, progress func(sent int64),
+	dropped func(msg string)) (*Ingested, error) {
+	for {
+		ing, err := c.Upload(ctx, expect, path, in, progress)
+		var ae *APIError
+		if err != nil && in.Cover != nil && errors.As(err, &ae) && ae.Code == "invalid_cover" {
+			in.Cover = nil
+			dropped(ae.Message)
+			continue
+		}
+		return ing, err
+	}
+}
+
+// probeSession：上传时网络出错，先问一次 GET /api/me（10 秒）：会话失效（401）、要升级（426）或许可证挡住
+// （403，M7-1）时返回那个错误，否则 nil（按网络错误处理）。上传队列和重扫件共用。
+func (c *Client) probeSession(ctx context.Context, server string) *APIError {
+	mctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var me *APIError
+	if errors.As(c.Me(mctx, server), &me) && (me.Status == http.StatusUnauthorized ||
+		me.Status == http.StatusUpgradeRequired || licenseBlocked(me)) {
+		return me
+	}
+	return nil
 }
 
 // progressReader 数已发出的原图字节数，记下最后一次有进展的时间。

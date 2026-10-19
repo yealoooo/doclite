@@ -27,7 +27,7 @@ web（界面）和 client（桌面客户端，壳）是两个独立的模块（r
 
 **界面随客户端打包，版本跟客户端走**（requirements 1.3，参照 Element）。web 构建出带版本号的产物包（`npm run release` → `web/release/doclite-web-<版本>.tar.gz`，包里是 `manifest.json` 和 `dist/`）；客户端用 `client/WEB_VERSION` 记要用的 web 版本，打包时取这个产物包（`DOCLITE_WEB_ARTIFACT` 指定的文件，没给就找 `../web/release/doclite-web-<WEB_VERSION>.tar.gz`），核对清单里的版本后嵌进可执行文件（`cmd/webartifact`）。客户端不读 web 的源码；拆仓库以后改成从发布地址下载这个包。改界面要升级客户端。
 
-客户端里配置的"服务器地址"是 **web 服务的入口**（和浏览器用的同一个地址，部署时是 web 的 nginx 容器，开发时是 vite），也可以直接是 server 本身：客户端只经它访问 `/api`。
+客户端里配置的"服务器地址"是 **server 的接口地址**（本地开发是 `http://127.0.0.1:9080`）：客户端只经它访问 `/api`，不依赖网页服务。
 
 WebView 里页面的地址是壳的资产服务器（macOS `wails://localhost`，Windows `http://wails.localhost`），按路径分：
 
@@ -61,7 +61,8 @@ const rt = await import('/wails/runtime.js')
 const result = await rt.Call.ByName('doclite/client/internal/shell.Bridge.Invoke', '命令名', { /* 参数 */ })
 ```
 
-- 参数是 JSON 对象，键名照下面的表（多数是 camelCase，沿用上一版）；没有参数的传 `{}`；
+- 参数是 JSON 对象，键名照下面的表；没有参数的传 `{}`；
+- **命名：参数 camelCase，结果和事件的数据 snake_case**（沿用上一版，新命令照此）；
 - 失败时运行时抛出 `RuntimeError`，壳给的错误在它的 `cause` 里：`{kind, message}`。`message` 是给人看的中文，可以直接提示；
 - `kind`：
 
@@ -123,7 +124,7 @@ Wails 的运行时在 `POST /wails/runtime` 上不只有绑定方法，还有 Br
 {
   version: string              // 客户端的版本（client/VERSION），也就是 X-Client-Version
   web_version: string | null   // 嵌入的界面的版本（web 产物包的清单，client/WEB_VERSION），没嵌入界面时 null
-  server_url: string | null    // 已配置的地址（web 服务的入口，或 server 本身），没配置时 null
+  server_url: string | null    // 已配置的地址（server 的接口地址），没配置时 null
   data_dir: string             // 本机数据目录（只用来显示）
   platform: string             // macos、windows……
   arch?: string                // 处理器架构 amd64、arm64……（M7-11 起有）
@@ -133,7 +134,7 @@ Wails 的运行时在 `POST /wails/runtime` 上不只有绑定方法，还有 Br
 }
 ```
 
-`ProbeResult`：`GET /api/health` 要 200 和 `{status, version}`（只要它通就算连得上，web 服务的入口和 server 本身都行）；再查 `GET /api/shell/latest`（最低、最新版本和下载地址，server 没有这个接口时 404，跳过）；最后用**不带会话**的 `GET /api/me` 问 server 收不收这个客户端版本——server 的版本检查在所有 `/api`（health、shell 除外）最外层、鉴权之前，版本过低回 426 `client_upgrade_required`（details 带最低版本、最新版本、下载地址），收的话是 401。
+`ProbeResult`：`GET /api/health` 要 200 和 `{status, version}`（只要它通就算连得上）；再查 `GET /api/shell/latest`（最低、最新版本和下载地址，server 没有这个接口时 404，跳过）；最后用**不带会话**的 `GET /api/me` 问 server 收不收这个客户端版本——server 的版本检查在所有 `/api`（health、shell 除外）最外层、鉴权之前，版本过低回 426 `client_upgrade_required`（details 带最低版本、最新版本、下载地址），收的话是 401。
 
 ```ts
 {
@@ -187,7 +188,7 @@ req = {
   - `ItemStatus`：`waiting`、`queued`、`uploading`、`done`、`duplicate`、`failed`；
   - `QueueStatus`：`{server_url, paused: {reason: 'auth_required' | 'upgrade_required', message, details, since} | null, paused_sources: string[], stats: {waiting, queued, uploading, done, duplicate, failed, retrying, total}, running}`；
   - `QueueItem`：`{id, source, server_url, local_path, file_name, rel_dir, target_folder_id, folder_id, size, mtime_ns, sha256, status, attempts, next_attempt_at, file_id, server_file_name, sort_no, cover_status: 'included' | 'not_generated' | 'rejected' | null, cover_reason, error_code, error_message, warnings: string[], duplicate_of: {file_id?, folder_path?, file_name?} | null, created_at, updated_at, finished_at}`（时间是 Unix 毫秒）；
-  - `HotFolderStatus`：`{config: {watch_dir, target_folder_id, server_url, scan_interval_secs, running} | null, running, watching, error, last_scan_at, scans}`。
+  - `HotFolderStatus`：`{config: {watch_dir, target_folder_id, server_url, scan_interval_secs, running} | null, running, watching, error, last_scan_at, scans}`。`config.running` 是"壳重启后自动开始"（Go 里叫 `AutoStart`，JSON 沿用旧名）；外面的 `running` 是现在在不在运行。`config.scan_interval_secs` 总是 15：目录事件不可用（`watching` 为 false）时每 15 秒全量扫描一次（有目录事件时只重新列出有变化的目录，另外每 60 秒全量扫描兜底）。
 
 ### 重扫件（能力 `rescan`）
 
@@ -209,7 +210,7 @@ req = {
 
 ### 托盘（能力 `tray`）
 
-`tray_status` → `{created, error, close_to_tray, tooltip, status_line, counts_line, toggle: 'pause' | 'start' | 'unavailable' | null, close_check: {ok, error} | null}`。
+`tray_status` → `{created, error, close_to_tray, tooltip, status_line, counts_line, toggle: 'pause' | 'start' | 'unavailable', close_check: {ok, error} | null}`。
 
 ### 图片缓存和切块（能力 `images`）
 
@@ -241,7 +242,7 @@ req = {
 |---|---|---|
 | `upload:item` | `QueueItem` | `upload` |
 | `upload:item-removed` | `{id}` | `upload` |
-| `upload:progress` | `{id, sent, size}`（上传中最多每 200 毫秒一次） | `upload` |
+| `upload:progress` | `{id, sent, size}`（上传中约每 250 毫秒一次） | `upload` |
 | `upload:state` | `QueueStatus` | `upload` |
 | `upload:auth-required` | 无 | `upload` |
 | `upload:upgrade-required` | `{details}`（426 的 details） | `upload` |

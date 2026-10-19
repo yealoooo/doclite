@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -186,11 +185,8 @@ func (s *Shell) registerUploadCommands() {
 		if a.Mode != "files" && a.Mode != "folder" {
 			return nil, proxy.InvalidRequest("mode 只能是 files 或 folder")
 		}
-		var paths []string
-		if p, ok := s.smokePickForUpload(a.Mode); ok {
-			// 自检的主流程：用复制好的样本代替系统对话框（smokeflow.go）。
-			paths = p
-		} else if paths, err = s.pickForUpload(a.Mode); err != nil {
+		paths, err := s.pickUpload(a.Mode)
+		if err != nil {
 			return nil, proxy.InternalDetail("打不开系统对话框", err)
 		}
 		res := PickResult{Added: []int64{}, Skipped: []upload.Skipped{}}
@@ -234,14 +230,6 @@ func (s *Shell) openDialog() *application.OpenFileDialogStruct {
 	return d
 }
 
-// smokePickForUpload：自检准备了主流程的样本时，返回代替系统对话框的路径。
-func (s *Shell) smokePickForUpload(mode string) ([]string, bool) {
-	if s.smoke == nil {
-		return nil, false
-	}
-	return s.smoke.flowUploadPaths(mode)
-}
-
 // pickForUpload 用系统对话框选文件（可多选）或一个文件夹。取消时返回空。
 func (s *Shell) pickForUpload(mode string) ([]string, error) {
 	d := s.openDialog().CanCreateDirectories(false).ShowHiddenFiles(false).ResolvesAliases(true)
@@ -275,45 +263,21 @@ func collectFiles(paths []string) ([]upload.LocalFile, []upload.Skipped) {
 	return files, skipped
 }
 
-// collectFolder：选的文件夹连同它本身按相对路径逐层建子文件夹（和浏览器的"上传文件夹"一样）；忽略规则同热文件夹
-// （隐藏、系统、临时文件，不跟随符号链接，≤ 32 层）。不支持的扩展名放进 skipped。
+// collectFolder：选的文件夹连同它本身按相对路径逐层建子文件夹（和浏览器的"上传文件夹"一样）；列目录的规则同热文件夹
+// （upload.WalkImages：隐藏、系统、临时文件不传，不跟随符号链接，≤ 32 层）。不支持的扩展名、读不了的文件夹放进 skipped。
 func collectFolder(root string) ([]upload.LocalFile, []upload.Skipped) {
 	var files []upload.LocalFile
 	skipped := []upload.Skipped{}
-	var walk func(dir, rel string, depth int)
-	walk = func(dir, rel string, depth int) {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			skipped = append(skipped, upload.Skipped{Path: dir, Reason: "读不了这个文件夹"})
+	bad := upload.WalkImages(root, filepath.Base(filepath.Clean(root)), 1, nil, func(f upload.LocalFile) {
+		if !upload.SupportedImage(f.Path) {
+			skipped = append(skipped, upload.Skipped{Path: f.Path, Reason: "不支持的文件类型（只收 jpg、jpeg、tif、tiff、png）"})
 			return
 		}
-		for _, ent := range entries {
-			name := ent.Name()
-			if ent.Type()&fs.ModeSymlink != 0 || upload.IgnoredName(name, ent.IsDir()) {
-				continue
-			}
-			info, err := ent.Info()
-			if err != nil {
-				continue
-			}
-			path := filepath.Join(dir, name)
-			if ent.IsDir() {
-				if depth < upload.MaxDepth {
-					walk(path, rel+"/"+name, depth+1)
-				}
-				continue
-			}
-			if !info.Mode().IsRegular() {
-				continue
-			}
-			if !upload.SupportedImage(name) {
-				skipped = append(skipped, upload.Skipped{Path: path, Reason: "不支持的文件类型（只收 jpg、jpeg、tif、tiff、png）"})
-				continue
-			}
-			files = append(files, upload.LocalFile{Path: path, RelDir: rel, Size: info.Size(), MtimeNS: info.ModTime().UnixNano()})
-		}
+		files = append(files, f)
+	})
+	for _, dir := range bad {
+		skipped = append(skipped, upload.Skipped{Path: dir, Reason: "读不了这个文件夹"})
 	}
-	walk(root, filepath.Base(filepath.Clean(root)), 1)
 	return files, skipped
 }
 

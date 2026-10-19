@@ -48,14 +48,3 @@ func TileSpan(i, n int) (lo, hi int) {
 	start := i * TileSize
 	return max(0, start-Overlap), min(n, start+TileSize+Overlap)
 }
-
-// TileCount 是整个金字塔的块数。
-func TileCount(width, height int) int {
-	maxLevel := MaxLevel(width, height)
-	n := 0
-	for l := 0; l <= maxLevel; l++ {
-		cols, rows := Grid(LevelSize(width, height, maxLevel, l))
-		n += cols * rows
-	}
-	return n
-}

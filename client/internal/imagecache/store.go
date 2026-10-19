@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,8 +27,12 @@ import (
 //	    └── <snapshot_id>.tiles/        原图分块：<级>/<x>_<y>.<jpg|png>，索引里算一项
 //
 // 按 snapshot_id 存（快照不会变，不需要失效）。索引是 JSON 加内存：改动后 2 秒写盘，只改了访问时间的 30 秒写盘，
-// 退出时写盘。不做索引损坏重建和启动对账（requirements 的简化）：索引读不出来时改名为 index.json.bad、从空的开始；
-// 索引外的文件（例如崩溃前没来得及记进索引的）不计入占用，同一张图再下载时会覆盖它，"全部清空"会删掉它们。
+// 退出时写盘。不做索引损坏重建（requirements 的简化）：索引读不出来时改名为 index.json.bad、从空的开始。
+// 索引外的文件（崩溃前没来得及记进索引的、Windows 上淘汰时正被读着删不掉的）不计入占用：删不掉的记下来，之后每次
+// 写索引时再删；启动时在后台删掉启动之前就有、又不在索引里的（sweep），"全部清空"也会删掉它们。
+//
+// 锁：mu 只管内存里的索引（存入、淘汰、清空只改 map，删文件在 mu 外）；写索引时在 mu 里取一份快照，编码和写盘
+// 在 mu 外，writeMu 让写盘一个一个来。
 
 // 种类。
 const (
@@ -81,20 +86,25 @@ func (e *entry) relPath() string {
 }
 
 type indexFile struct {
-	Version    int      `json:"version"`
-	LimitBytes int64    `json:"limit_bytes"`
-	Entries    []*entry `json:"entries"`
+	Version    int     `json:"version"`
+	LimitBytes int64   `json:"limit_bytes"`
+	Entries    []entry `json:"entries"`
 }
 
 // token 是存入时核对的"清空代数"：开始下载、切块时取一个，存入时代数变了（这段时间里清空过）就不存。
 type token struct{ all, project uint64 }
 
-// store 是索引和文件。所有改动（存入、淘汰、清空、改上限）都在 mu 里做。
+// store 是索引和文件。
 type store struct {
 	dir string
 	log *slog.Logger
 
-	mu       sync.Mutex
+	// writeMu 让写索引一个一个来（见文件开头）。
+	writeMu sync.Mutex
+
+	mu sync.Mutex
+	// pending 是删不掉的文件（之后写索引时再删）。
+	pending  []string
 	entries  map[string]*entry
 	total    int64
 	limit    int64
@@ -133,8 +143,9 @@ func openStore(dir string, log *slog.Logger) (*store, error) {
 		if idx.LimitBytes >= MinLimit && idx.LimitBytes <= MaxLimit {
 			s.limit = idx.LimitBytes
 		}
-		for _, e := range idx.Entries {
-			if e == nil || e.Size < 0 || (e.Kind != KindCover && e.Kind != KindOriginal && e.Kind != KindTiles) {
+		for i := range idx.Entries {
+			e := &idx.Entries[i]
+			if e.Size < 0 || (e.Kind != KindCover && e.Kind != KindOriginal && e.Kind != KindTiles) {
 				continue
 			}
 			if _, dup := s.entries[e.key()]; dup {
@@ -145,10 +156,69 @@ func openStore(dir string, log *slog.Logger) (*store, error) {
 		}
 	}
 	// 能不能写：先写一次索引（新建的目录、只读的目录在这里就能发现）。
-	if err := s.writeIndexLocked(); err != nil {
+	s.dirty = true
+	if err := s.flush(); err != nil {
 		return nil, fmt.Errorf("写不了缓存索引：%w", err)
 	}
+	go s.sweep(time.Now())
 	return s, nil
+}
+
+// sweep 删掉索引外的缓存文件：<file_id>/ 下不在索引里、而且是启动之前就有的（启动以后新存的不碰）；空了的
+// <file_id> 目录一起删掉。在后台跑一次。
+func (s *store) sweep(started time.Time) {
+	dirs, err := os.ReadDir(s.dir)
+	if err != nil {
+		return
+	}
+	removed := 0
+	for _, d := range dirs {
+		if !d.IsDir() || !IsUUID(d.Name()) {
+			continue
+		}
+		fdir := filepath.Join(s.dir, d.Name())
+		ents, err := os.ReadDir(fdir)
+		if err != nil {
+			continue
+		}
+		left := 0
+		for _, ent := range ents {
+			key, ok := keyOfName(ent.Name())
+			info, err := ent.Info()
+			if !ok || err != nil || !info.ModTime().Before(started) || s.has(key) {
+				left++
+				continue
+			}
+			if os.RemoveAll(filepath.Join(fdir, ent.Name())) != nil {
+				left++
+				continue
+			}
+			removed++
+		}
+		if left == 0 {
+			_ = os.Remove(fdir) // 只删空目录：刚好有新存的就删不掉
+		}
+	}
+	if removed > 0 {
+		s.log.Info("删掉了索引外的缓存文件", "count", removed)
+	}
+}
+
+// keyOfName 是缓存文件名（<snapshot_id>.cover.jpg、<snapshot_id>.original.<ext>、<snapshot_id>.tiles）对应的索引键。
+func keyOfName(name string) (string, bool) {
+	sid, rest, ok := strings.Cut(name, ".")
+	if !ok || !IsUUID(sid) {
+		return "", false
+	}
+	switch {
+	case rest == "cover.jpg":
+		return entryKey(sid, KindCover), true
+	case strings.HasPrefix(rest, "original."):
+		return entryKey(sid, KindOriginal), true
+	case rest == "tiles":
+		return entryKey(sid, KindTiles), true
+	}
+	return "", false
 }
 
 func (s *store) tmpDir() string { return filepath.Join(s.dir, "tmp") }
@@ -190,52 +260,87 @@ func (s *store) token(projectID string) token {
 }
 
 // put 把临时文件（或目录）src 存成 e：改名到位、记进索引，超出上限时按最近访问淘汰到 90%（刚存的这项不删）。
-// 拿到 tok 之后清空过这个项目（或全部）时不存，返回 false（src 留给调用方处理）。
+// 拿到 tok 之后清空过这个项目（或全部）时不存，返回 false（src 留给调用方处理）。改名、删文件都在 mu 外。
 func (s *store) put(e *entry, src string, tok token) (bool, error) {
+	key, dst := e.key(), s.path(e)
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if tok.all != s.clearAll || tok.project != s.clears[e.ProjectID] {
+	if !s.validLocked(e, tok) {
+		s.mu.Unlock()
 		return false, nil
 	}
-	dst := s.path(e)
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return false, err
-	}
-	key := e.key()
 	if old, ok := s.entries[key]; ok {
 		s.total -= old.Size
 		delete(s.entries, key)
+		s.dirty = true
+	}
+	s.mu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return false, err
 	}
 	_ = os.RemoveAll(dst) // 索引外的旧文件（见文件开头）
 	if err := os.Rename(src, dst); err != nil {
-		s.dirty = true
+		s.mu.Lock()
 		s.scheduleLocked()
+		s.mu.Unlock()
 		return false, err
+	}
+	s.mu.Lock()
+	if !s.validLocked(e, tok) {
+		// 改名的时候清空了：不存。
+		s.mu.Unlock()
+		s.removeFiles([]string{dst})
+		return false, nil
 	}
 	e.Access = time.Now().UnixMilli()
 	s.entries[key] = e
 	s.total += e.Size
+	var victims []string
 	if s.total > s.limit {
-		s.evictLocked(s.limit*9/10, key)
+		victims = s.evictLocked(s.limit*9/10, key)
 	}
 	s.dirty = true
 	s.scheduleLocked()
+	s.mu.Unlock()
+	s.removeFiles(victims)
 	return true, nil
+}
+
+// validLocked：拿到 tok 之后没有清空过这个项目（或全部）。
+func (s *store) validLocked(e *entry, tok token) bool {
+	return tok.all == s.clearAll && tok.project == s.clears[e.ProjectID]
 }
 
 // remove 删掉一项（文件不见了、索引对不上时）。
 func (s *store) remove(key string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	e, ok := s.entries[key]
 	if !ok {
+		s.mu.Unlock()
 		return
 	}
-	_ = os.RemoveAll(s.path(e))
 	delete(s.entries, key)
 	s.total -= e.Size
 	s.dirty = true
 	s.scheduleLocked()
+	s.mu.Unlock()
+	s.removeFiles([]string{s.path(e)})
+}
+
+// removeFiles 删文件（在 mu 外调用）。删不掉的（Windows 上正被读着）记进 pending，之后写索引时再删。返回删掉的个数。
+func (s *store) removeFiles(paths []string) int {
+	var failed []string
+	for _, p := range paths {
+		if err := os.RemoveAll(p); err != nil {
+			s.log.Warn("删不掉缓存文件，稍后再删", "path", p, "err", err)
+			failed = append(failed, p)
+		}
+	}
+	if len(failed) > 0 {
+		s.mu.Lock()
+		s.pending = append(s.pending, failed...)
+		s.mu.Unlock()
+	}
+	return len(paths) - len(failed)
 }
 
 // pickEvictions 按最近访问从旧到新挑要删的项，直到占用不超过 target；keep 这一项不删。
@@ -264,59 +369,66 @@ func pickEvictions(entries []*entry, total, target int64, keep string) []*entry 
 	return out
 }
 
-func (s *store) evictLocked(target int64, keep string) {
+// evictLocked 按最近访问从索引里拿掉一些项，直到占用不超过 target（keep 这一项不拿）；返回要删的文件（调用方在
+// mu 外删）。
+func (s *store) evictLocked(target int64, keep string) []string {
 	list := make([]*entry, 0, len(s.entries))
 	for _, e := range s.entries {
 		list = append(list, e)
 	}
 	victims := pickEvictions(list, s.total, target, keep)
+	paths := make([]string, 0, len(victims))
 	for _, e := range victims {
-		if err := os.RemoveAll(s.path(e)); err != nil {
-			// 删不掉（Windows 上正被读着）：照样从索引里拿掉，文件留在索引外（见文件开头）。
-			s.log.Warn("淘汰缓存时删不掉文件", "path", s.path(e), "err", err)
-		}
+		paths = append(paths, s.path(e))
 		delete(s.entries, e.key())
 		s.total -= e.Size
 	}
 	if len(victims) > 0 {
 		s.log.Info("缓存超出上限，按最近访问淘汰", "removed", len(victims), "total", s.total, "limit", s.limit)
 	}
+	return paths
 }
 
 // ClearReport 是 cache_clear 的结果。
 type ClearReport struct {
 	RemovedFiles int   `json:"removed_files"`
 	RemovedBytes int64 `json:"removed_bytes"`
-	// FailedFiles 是删不掉的项数（例如被别的程序占着）；它们留在索引里，下次再试。
+	// FailedFiles 是删不掉的项数（例如被别的程序占着）；它们已经不在索引里，之后写索引时再删。
 	FailedFiles int `json:"failed_files"`
 }
 
 // clear 清空一个项目（projectID 为空表示全部）。在途的下载、切块在存入时发现代数变了，不再存。
 // 全部清空时连索引外的文件一起删（每个 <file_id> 目录整个删掉）。
 func (s *store) clear(projectID string) ClearReport {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var rep ClearReport
+	s.mu.Lock()
 	if projectID == "" {
 		s.clearAll++
 	} else {
 		s.clears[projectID]++
 	}
 	dirs := map[string]bool{}
+	var paths []string
 	for key, e := range s.entries {
 		if projectID != "" && e.ProjectID != projectID {
 			continue
 		}
 		dirs[e.FileID] = true
-		if err := os.RemoveAll(s.path(e)); err != nil {
-			rep.FailedFiles++
-			continue
-		}
-		rep.RemovedFiles++
+		paths = append(paths, s.path(e))
 		rep.RemovedBytes += e.Size
 		s.total -= e.Size
 		delete(s.entries, key)
 	}
+	// 删掉空了的 <file_id> 目录；全部清空时删掉没有索引项的整个目录。
+	inUse := map[string]bool{}
+	for _, e := range s.entries {
+		inUse[e.FileID] = true
+	}
+	s.dirty = true
+	s.mu.Unlock()
+
+	rep.RemovedFiles = s.removeFiles(paths)
+	rep.FailedFiles = len(paths) - rep.RemovedFiles
 	if projectID == "" {
 		if list, err := os.ReadDir(s.dir); err == nil {
 			for _, d := range list {
@@ -326,37 +438,37 @@ func (s *store) clear(projectID string) ClearReport {
 			}
 		}
 	}
-	// 删掉空了的 <file_id> 目录；全部清空时删掉没有索引项的整个目录。
-	inUse := map[string]bool{}
-	for _, e := range s.entries {
-		inUse[e.FileID] = true
-	}
 	for d := range dirs {
-		p := filepath.Join(s.dir, d)
 		if inUse[d] {
 			continue
 		}
+		p := filepath.Join(s.dir, d)
 		if projectID == "" {
 			_ = os.RemoveAll(p)
 		} else {
 			_ = os.Remove(p)
 		}
 	}
-	s.dirty = true
-	_ = s.flushLocked()
+	if err := s.flush(); err != nil {
+		s.log.Warn("写缓存索引失败", "err", err)
+	}
 	return rep
 }
 
 // setLimit 改上限，超出时立即淘汰到 90%。
 func (s *store) setLimit(limit int64) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.limit = limit
+	var victims []string
 	if s.total > limit {
-		s.evictLocked(limit*9/10, "")
+		victims = s.evictLocked(limit*9/10, "")
 	}
 	s.dirty = true
-	_ = s.flushLocked()
+	s.mu.Unlock()
+	s.removeFiles(victims)
+	if err := s.flush(); err != nil {
+		s.log.Warn("写缓存索引失败", "err", err)
+	}
 }
 
 // usage 是占用的统计。
@@ -413,47 +525,56 @@ func (s *store) scheduleLocked() {
 	s.timerAt = at
 	s.timer = time.AfterFunc(delay, func() {
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		s.timer = nil
-		if err := s.flushLocked(); err != nil {
+		s.mu.Unlock()
+		if err := s.flush(); err != nil {
 			s.log.Warn("写缓存索引失败", "err", err)
 		}
 	})
 }
 
-func (s *store) flushLocked() error {
+// flush 有改动时写索引（见文件开头的"锁"），顺带再删一次之前删不掉的文件。
+func (s *store) flush() error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.mu.Lock()
+	pending := s.pending
+	s.pending = nil
 	if !s.dirty && !s.touched {
+		s.mu.Unlock()
+		s.removeFiles(pending)
 		return nil
 	}
-	if err := s.writeIndexLocked(); err != nil {
-		return err
+	idx := indexFile{Version: indexVersion, LimitBytes: s.limit, Entries: make([]entry, 0, len(s.entries))}
+	for _, e := range s.entries {
+		idx.Entries = append(idx.Entries, *e) // 副本：访问时间在 mu 里会改
 	}
 	s.dirty, s.touched = false, false
-	return nil
-}
+	s.mu.Unlock()
 
-func (s *store) writeIndexLocked() error {
-	idx := indexFile{Version: indexVersion, LimitBytes: s.limit, Entries: make([]*entry, 0, len(s.entries))}
-	for _, e := range s.entries {
-		idx.Entries = append(idx.Entries, e)
-	}
+	s.removeFiles(pending)
 	data, err := json.Marshal(idx)
-	if err != nil {
-		return err
+	if err == nil {
+		err = appdata.WriteFileAtomic(filepath.Join(s.dir, indexName), data, 0o600)
 	}
-	return appdata.WriteFileAtomic(filepath.Join(s.dir, indexName), data, 0o600)
+	if err != nil {
+		s.mu.Lock()
+		s.dirty = true
+		s.mu.Unlock()
+	}
+	return err
 }
 
 // close 退出时写盘。
 func (s *store) close() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.closed = true
 	if s.timer != nil {
 		s.timer.Stop()
 		s.timer = nil
 	}
-	if err := s.flushLocked(); err != nil {
+	s.mu.Unlock()
+	if err := s.flush(); err != nil {
 		s.log.Warn("退出时写缓存索引失败", "err", err)
 	}
 }

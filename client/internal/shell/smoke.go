@@ -2,6 +2,7 @@ package shell
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +14,7 @@ import (
 
 // SmokeOptions 是 `--smoke` 的参数（main.go 从环境变量读）：
 //
-//	DOCLITE_SMOKE_SERVER        服务器地址（必填；web 服务的入口或 server 本身，客户端只经它访问 /api）
+//	DOCLITE_SMOKE_SERVER        服务器地址（必填；server 的接口地址）
 //	DOCLITE_SMOKE_USERNAME      账号（要至少能进一个项目，sse 一步要订阅项目的实时通道）
 //	DOCLITE_SMOKE_PASSWORD
 //	DOCLITE_SMOKE_TIMEOUT_SECS  整个自检的时限，默认 120
@@ -171,6 +172,41 @@ func (r *smokeRun) config() SmokeConfig {
 	c.Flow = smokeFlowConfig()
 	r.s.imageSmokeConfig(&c)
 	return c
+}
+
+// install 把会碰到用户桌面的动作换成自检用的（Run 里建好 smokeRun 后马上调）：系统对话框改用主流程准备好的
+// 文件和目录（smokeflow.go；还没准备时照常弹）、重扫件用 DOCLITE_SMOKE_RESCAN_PATH，不打开系统浏览器（只记下地址，
+// smoke_external_check 再核对）和文件管理器，换服务器地址不弹确认框。
+func (r *smokeRun) install() {
+	s := r.s
+	pickUpload, pickHotDir := s.pickUpload, s.pickHotDir
+	s.pickUpload = func(mode string) ([]string, error) {
+		if p, ok := r.flowUploadPaths(mode); ok {
+			return p, nil
+		}
+		return pickUpload(mode)
+	}
+	s.pickHotDir = func() (string, error) {
+		if d, ok := r.flowHotDir(); ok {
+			return d, nil
+		}
+		return pickHotDir()
+	}
+	if path := os.Getenv(smokeRescanPathEnv); path != "" {
+		s.pickRescan = func() (string, error) { return path, nil }
+	}
+	s.openURL = func(url string) error {
+		r.recordExternal(url)
+		s.log.Info("自检：open_external 只记下地址")
+		return nil
+	}
+	s.openDir = func(string) error {
+		s.log.Info("自检：open_local_dir 不打开文件管理器")
+		return nil
+	}
+	s.confirmServer = func(context.Context, string, string) (bool, error) { return true, nil }
+	s.onServerChanged = r.serverChanged
+	s.closeCheck = r.closeCheckResult
 }
 
 // start：应用起来后开始计时，1.5 秒后模拟一次关窗，同时开始按段往下走。

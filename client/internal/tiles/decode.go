@@ -12,50 +12,36 @@ import (
 	"doclite/client/internal/imgdecode"
 )
 
-// 错误码（imagecache 把它们作为 422 的 code 交给页面，见 web/src/lib/viewer/load-original.ts 的 shellMessage）。
-const (
-	CodeTooLarge          = "too_large"          // 超出内存或输出的上限
-	CodeTimeout           = "timeout"            // 切得太久
-	CodeUnsupportedFormat = "unsupported_format" // 不是 JPEG、PNG、经典 TIFF
-	CodeUnsupported       = "unsupported"        // 格式认得，但这种写法解不了（例如多页 TIFF、12 位的 JPEG）
-	CodeCorrupt           = "corrupt"            // 文件坏了
-	CodeIO                = "io"                 // 读写本机文件出错（不是文件本身的问题）
-)
+// KindTimeout 是切得太久（ctx 到期）。其余的错误码就是 imgdecode 的 Kind：too_large（另外也表示超出内存或输出的
+// 上限）、unsupported_format、unsupported、corrupt、io（读写本机文件出错）。imagecache 把它们作为 422 的 code 交给
+// 页面（web/src/lib/viewer/load-original.ts 的 shellMessage）。
+const KindTimeout imgdecode.Kind = "timeout"
 
-// Error 是切块失败。Code 见上；除了 io，其余都是这个文件本身的问题，再试也一样。
+// Error 是切块失败。除了 io，其余都是这个文件本身的问题，再试也一样。
 type Error struct {
-	Code    string
+	Code    imgdecode.Kind
 	Message string
 }
 
-func (e *Error) Error() string { return e.Code + ": " + e.Message }
+func (e *Error) Error() string { return string(e.Code) + ": " + e.Message }
 
 // Permanent：文件本身的问题（再试也一样），调用方可以记住、不再反复尝试。
-func (e *Error) Permanent() bool { return e.Code != CodeIO }
+func (e *Error) Permanent() bool { return e.Code != imgdecode.KindIO }
 
-func fail(code, format string, args ...any) *Error {
+func fail(code imgdecode.Kind, format string, args ...any) *Error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, args...)}
 }
 
-// decodeError 把 imgdecode 的错误换成切块的错误码（取消就是超时：切块的 ctx 只有超时）。
+// decodeError 把 imgdecode 的错误换成切块的错误（取消就是超时：切块的 ctx 只有超时）。
 func decodeError(err error) *Error {
 	var de *imgdecode.Error
 	if !errors.As(err, &de) {
-		return fail(CodeIO, "%v", err)
+		return fail(imgdecode.KindIO, "%v", err)
 	}
-	switch de.Kind {
-	case imgdecode.KindCanceled:
+	if de.Kind == imgdecode.KindCanceled {
 		return timeoutError()
-	case imgdecode.KindUnsupportedFormat:
-		return fail(CodeUnsupportedFormat, "%s", de.Msg)
-	case imgdecode.KindUnsupported:
-		return fail(CodeUnsupported, "%s", de.Msg)
-	case imgdecode.KindTooLarge:
-		return fail(CodeTooLarge, "%s", de.Msg)
-	case imgdecode.KindIO:
-		return fail(CodeIO, "%s", de.Msg)
 	}
-	return fail(CodeCorrupt, "%s", de.Msg)
+	return &Error{Code: de.Kind, Message: de.Msg}
 }
 
 // Mode 是块的颜色：gray 灰度（JPEG）、rgb 彩色（JPEG）、bilevel 1 位黑白（PNG）。
@@ -168,32 +154,36 @@ func (p *Plan) decode(ctx context.Context) (image.Image, error) {
 	return img, nil
 }
 
-func timeoutError() *Error { return fail(CodeTimeout, "切块超时") }
+func timeoutError() *Error { return fail(KindTimeout, "切块超时") }
 
 // toLevel 把解码出来的图转成金字塔的最高一级：按方向转正，合成到白底，灰度和黑白 1 个通道、彩色 3 个通道。
 // 方向是 1、本来就是紧凑的灰度图时直接用它的像素，不再复制一份。
 func toLevel(ctx context.Context, img image.Image, ch, orientation int) (*level, error) {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
-	ow, oh := imgdecode.OrientedSize(orientation, w, h)
+	if g, ok := img.(*image.Gray); ok && ch == 1 && (orientation < 2 || orientation > 8) && g.Stride == w && len(g.Pix) >= w*h {
+		return &level{w: w, h: h, ch: 1, pix: g.Pix[:w*h]}, nil
+	}
+	return placeRows(ctx, w, h, ch, orientation, rowReader(img, ch))
+}
+
+// placeRows 逐行读存的像素（read 写 w×ch 个字节），按方向放到转正后的位置（不认识的方向按 1）。
+func placeRows(ctx context.Context, w, h, ch, orientation int, read func(y int, dst []byte)) (*level, error) {
 	if orientation < 1 || orientation > 8 {
 		orientation = 1
 	}
-	if g, ok := img.(*image.Gray); ok && ch == 1 && orientation == 1 && g.Stride == w && len(g.Pix) >= w*h {
-		return &level{w: w, h: h, ch: 1, pix: g.Pix[:w*h]}, nil
-	}
+	ow, oh := imgdecode.OrientedSize(orientation, w, h)
 	out := make([]byte, ow*oh*ch)
 	row := make([]byte, w*ch)
-	read := rowReader(img, ch)
 	for y := 0; y < h; y++ {
 		if y%256 == 0 && ctx.Err() != nil {
 			return nil, timeoutError()
 		}
-		read(y, row)
 		if orientation == 1 {
-			copy(out[y*w*ch:], row)
+			read(y, out[y*w*ch:(y+1)*w*ch])
 			continue
 		}
+		read(y, row)
 		p, step := imgdecode.RowPlacement(orientation, w, h, ow, y)
 		for x := 0; x < w; x++ {
 			copy(out[p*ch:p*ch+ch], row[x*ch:x*ch+ch])

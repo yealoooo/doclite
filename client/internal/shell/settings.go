@@ -109,7 +109,7 @@ func dirSize(ctx context.Context, root, skip string) (int64, int) {
 	return size, count
 }
 
-// openLocalDir 是 open_local_dir：按名字算出目录，交给系统的文件管理器打开。自检时不打开（不抢焦点），只记日志。
+// openLocalDir 是 open_local_dir：按名字算出目录，交给系统的文件管理器打开（自检时不打开，见 smokeRun.install）。
 func (s *Shell) openLocalDir(name string) error {
 	path, ok := localDirPath(s.cfg.DataDir, name)
 	if !ok {
@@ -122,15 +122,7 @@ func (s *Shell) openLocalDir(name string) error {
 	if err != nil {
 		return proxy.InternalDetail("打不开这个目录", err)
 	}
-	if s.smoke != nil {
-		s.log.Info("自检：open_local_dir 不打开文件管理器", "dir", name)
-		return nil
-	}
-	open := s.openDir
-	if open == nil {
-		open = s.openDirInFileManager
-	}
-	if err := open(path); err != nil {
+	if err := s.openDir(path); err != nil {
 		return proxy.InternalDetail("没能打开文件管理器", err)
 	}
 	s.log.Info("用文件管理器打开本机目录", "dir", name)

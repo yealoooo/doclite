@@ -3,7 +3,7 @@ package shell
 // M6-2：重扫件上传 `pick_and_rescan {fileId}`（requirements 第 6 节"重扫件上传"，web/src/lib/rescan.ts）：
 // 系统对话框选一个文件 → 查文件尾 → 算 sha → 封面 → 上传到 POST /api/files/{fid}/rescan，同步返回结果；不进上传队列，
 // 同时只做一个。期间发 `rescan:progress {file_id, phase, sent, size}`（上传中最多每 200 毫秒一次）。
-// `--smoke` 时用环境变量 DOCLITE_SMOKE_RESCAN_PATH 的文件代替对话框（只在自检进程里），自检多一步 rescan。
+// `--smoke` 时用环境变量 DOCLITE_SMOKE_RESCAN_PATH 的文件代替对话框（smokeRun.install），自检多一步 rescan。
 
 import (
 	"context"
@@ -56,6 +56,13 @@ func smokeRescanConfig() SmokeRescan {
 	return c
 }
 
+// pickRescanDialog 用系统对话框选一个重扫件。取消时返回空。
+func (s *Shell) pickRescanDialog() (string, error) {
+	return s.openDialog().SetTitle("选择重扫件（一张）").CanChooseFiles(true).CanChooseDirectories(false).
+		ShowHiddenFiles(false).ResolvesAliases(true).AddFilter("图片（JPEG、PNG、TIFF）", imageFilter).
+		PromptForSingleSelection()
+}
+
 func (s *Shell) registerRescanCommands() {
 	u := s.uploads
 
@@ -74,17 +81,9 @@ func (s *Shell) registerRescanCommands() {
 		}
 		defer u.rescanBusy.Store(false)
 
-		var path string
-		if s.smoke != nil && os.Getenv(smokeRescanPathEnv) != "" {
-			path = os.Getenv(smokeRescanPathEnv)
-		} else {
-			p, err := s.openDialog().SetTitle("选择重扫件（一张）").CanChooseFiles(true).CanChooseDirectories(false).
-				ShowHiddenFiles(false).ResolvesAliases(true).AddFilter("图片（JPEG、PNG、TIFF）", imageFilter).
-				PromptForSingleSelection()
-			if err != nil {
-				return nil, proxy.InternalDetail("打不开系统对话框", err)
-			}
-			path = p
+		path, err := s.pickRescan()
+		if err != nil {
+			return nil, proxy.InternalDetail("打不开系统对话框", err)
 		}
 		if path == "" {
 			return upload.RescanOutcome{Cancelled: true}, nil

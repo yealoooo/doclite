@@ -155,7 +155,7 @@ func webProxy(target *url.URL, origin string, images *imagecache.Service, log *s
 		ModifyResponse: func(res *http.Response) error {
 			res.Header.Del("Content-Security-Policy")
 			req := res.Request
-			if res.StatusCode != http.StatusOK || !observed(req.Method, req.URL.Path) {
+			if res.StatusCode != http.StatusOK || !imagecache.IsSourceRequest(req.Method, req.URL.Path) {
 				return nil
 			}
 			body, err := io.ReadAll(io.LimitReader(res.Body, maxObserved))
@@ -169,19 +169,6 @@ func webProxy(target *url.URL, origin string, images *imagecache.Service, log *s
 		},
 		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
-}
-
-// observed：要记来源的响应（和壳一样：POST /api/files/batch、GET /api/files/<fid>/snapshots）。
-func observed(method, p string) bool {
-	if method == http.MethodPost && p == "/api/files/batch" {
-		return true
-	}
-	rest, ok := strings.CutPrefix(p, "/api/files/")
-	if !ok || method != http.MethodGet {
-		return false
-	}
-	fid, tail, ok := strings.Cut(rest, "/")
-	return ok && tail == "snapshots" && imagecache.IsUUID(fid)
 }
 
 func hostname(hostport string) string {

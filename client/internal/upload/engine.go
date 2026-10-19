@@ -59,6 +59,8 @@ type Engine struct {
 	last       QueueStatus
 	stateTimer *time.Timer
 	started    bool
+	// known 是热文件夹运行时记着的已入队文件（hotfolder.go）；删掉热文件夹的行时从里面拿掉，文件再出现时重新入队。
+	known *knownPaths
 }
 
 // NewEngine 建调度器（还没开始，见 [Engine.Start]）。热文件夹这个来源一开始是暂停的（热文件夹开始运行时打开）。
@@ -73,12 +75,6 @@ func NewEngine(store *Store, api *Client, log *slog.Logger, ev Events) *Engine {
 	}
 }
 
-// Store 是队列库。
-func (e *Engine) Store() *Store { return e.store }
-
-// API 是发请求的客户端。
-func (e *Engine) API() *Client { return e.api }
-
 // Start 开始调度。
 func (e *Engine) Start() {
 	e.mu.Lock()
@@ -88,9 +84,53 @@ func (e *Engine) Start() {
 	}
 	e.started = true
 	e.mu.Unlock()
-	e.wg.Add(1)
+	e.wg.Add(2)
 	go e.loop()
+	go e.purge()
 	e.markDirty()
+}
+
+// purgeAfter：已入库、内容重复的项结束这么久以后，本地文件也不在了，就从库里删掉（库只增不减）。
+const purgeAfter = 30 * 24 * time.Hour
+
+// purge 在启动时删掉早就结束、本地文件已经不在了的项。
+func (e *Engine) purge() {
+	defer e.wg.Done()
+	purged, err := e.store.PurgeFinished(e.ctx, nowMS()-purgeAfter.Milliseconds())
+	if err != nil {
+		if e.ctx.Err() == nil {
+			e.log.Warn("上传队列：清理早已结束的项失败", "err", err)
+		}
+		return
+	}
+	if len(purged) == 0 {
+		return
+	}
+	for _, p := range purged {
+		e.forgetKnown(p.Source, p.PathKey)
+	}
+	e.log.Info("上传队列：清理了早已结束、本地文件也不在了的项", "count", len(purged))
+	e.markDirty()
+}
+
+// setKnown 记下热文件夹运行时的已入队文件（停下时传 nil）。
+func (e *Engine) setKnown(k *knownPaths) {
+	e.mu.Lock()
+	e.known = k
+	e.mu.Unlock()
+}
+
+// forgetKnown：热文件夹的一行被删掉了，下次扫描时这个文件（如果又出现）重新入队。
+func (e *Engine) forgetKnown(source, pathKey string) {
+	if source != SourceHotfolder {
+		return
+	}
+	e.mu.Lock()
+	k := e.known
+	e.mu.Unlock()
+	if k != nil {
+		k.forget(pathKey)
+	}
 }
 
 // Stop 停止调度，最多等 timeout 让正在传的停下来（没传完的下次启动时从头再来：库里"上传中"回到"排队"）。
@@ -331,20 +371,12 @@ func (e *Engine) save(it *Item) {
 	e.markDirty()
 }
 
-func (e *Engine) insert(ctx context.Context, it *Item) error {
-	if err := e.store.Insert(ctx, it); err != nil {
-		return err
-	}
-	e.ev.ItemChanged(it)
-	e.markDirty()
-	return nil
-}
-
 func (e *Engine) remove(it *Item) {
 	if err := e.store.Delete(context.Background(), it.ID); err != nil {
 		e.log.Error("上传队列：删除失败", "id", it.ID, "err", err)
 		return
 	}
+	e.forgetKnown(it.Source, PathKey(it.LocalPath))
 	e.ev.ItemRemoved(it.ID)
 	e.markDirty()
 }
@@ -421,21 +453,21 @@ type Skipped struct {
 	Reason string `json:"reason"`
 }
 
-// upsert 把一个本机文件放进队列：同一个服务器下一个本地路径只有一行。没有就新加；大小和修改时间没变不重传；
-// 变了当新内容（重置这一行，server 上按同名自动改名）。返回加入（或重新开始）的项；没加入时 reason 是原因。
-func (e *Engine) upsert(ctx context.Context, server, source string, f LocalFile, target string) (*Item, string, error) {
+// upsert 把一个本机文件放进队列（在 tx 里）：同一个服务器下一个本地路径只有一行。没有就新加；大小和修改时间没变
+// 不重传；变了当新内容（重置这一行，server 上按同名自动改名）。返回加入（或重新开始）的项；没加入时 reason 是原因。
+func upsert(ctx context.Context, tx *Store, server, source string, f LocalFile, target string) (*Item, string, error) {
 	status := StatusQueued
 	if source == SourceHotfolder {
 		status = StatusWaiting
 	}
-	old, err := e.store.FindByPath(ctx, server, f.Path)
+	old, err := tx.FindByPath(ctx, server, f.Path)
 	if err != nil {
 		return nil, "", err
 	}
 	if old == nil {
 		it := &Item{Source: source, ServerURL: server, LocalPath: f.Path, FileName: baseName(f.Path), RelDir: f.RelDir,
 			TargetFolderID: target, Size: f.Size, MtimeNS: f.MtimeNS, Status: status, Warnings: []string{}}
-		return it, "", e.insert(ctx, it)
+		return it, "", tx.Insert(ctx, it)
 	}
 	unchanged := old.Size == f.Size && old.MtimeNS == f.MtimeNS
 	switch {
@@ -453,27 +485,50 @@ func (e *Engine) upsert(ctx context.Context, server, source string, f LocalFile,
 	old.Source, old.FileName, old.RelDir, old.TargetFolderID = source, baseName(f.Path), f.RelDir, target
 	old.Size, old.MtimeNS = f.Size, f.MtimeNS
 	resetResult(old, status)
-	e.save(old)
-	return old, "", nil
+	return old, "", tx.Update(ctx, old)
+}
+
+// enqueue 把一批本机文件放进队列（一个事务；出错时整批不加），之后逐项发 upload:item（页面的列表靠它更新）。
+func (e *Engine) enqueue(ctx context.Context, server, source string, files []LocalFile, target string) (added []*Item, skipped []Skipped, err error) {
+	err = e.store.InTx(ctx, func(tx *Store) error {
+		for _, f := range files {
+			it, reason, err := upsert(ctx, tx, server, source, f, target)
+			if err != nil {
+				return err
+			}
+			if it == nil {
+				skipped = append(skipped, Skipped{Path: f.Path, Reason: reason})
+				continue
+			}
+			added = append(added, it)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, it := range added {
+		e.ev.ItemChanged(it)
+	}
+	if len(added) > 0 {
+		e.markDirty()
+		e.Wake()
+	}
+	return added, skipped, nil
 }
 
 // Enqueue 把上传按钮选的文件加入队列（直接排队），传到 target（选文件夹时 RelDir 是相对路径，逐层建子文件夹）。
 func (e *Engine) Enqueue(ctx context.Context, files []LocalFile, target string) (added []int64, skipped []Skipped, err error) {
-	server := e.api.Server()
-	added, skipped = []int64{}, []Skipped{}
-	for _, f := range files {
-		it, reason, err := e.upsert(ctx, server, SourceManual, f, target)
-		if err != nil {
-			return added, skipped, err
-		}
-		if it == nil {
-			skipped = append(skipped, Skipped{Path: f.Path, Reason: reason})
-			continue
-		}
+	items, skipped, err := e.enqueue(ctx, e.api.Server(), SourceManual, files, target)
+	if err != nil {
+		return nil, nil, err
+	}
+	added = make([]int64, 0, len(items))
+	for _, it := range items {
 		added = append(added, it.ID)
 	}
-	if len(added) > 0 {
-		e.Wake()
+	if skipped == nil {
+		skipped = []Skipped{}
 	}
 	return added, skipped, nil
 }

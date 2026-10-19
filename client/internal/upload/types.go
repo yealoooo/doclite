@@ -111,10 +111,11 @@ type HotConfig struct {
 	WatchDir       string `json:"watch_dir"`
 	TargetFolderID string `json:"target_folder_id"`
 	// ServerURL 是目标文件夹所属的服务器。
-	ServerURL        string `json:"server_url"`
-	ScanIntervalSecs int    `json:"scan_interval_secs"`
-	// Running：壳重启后是否自动开始。
-	Running bool `json:"running"`
+	ServerURL string `json:"server_url"`
+	// ScanIntervalSecs 总是 [PollIntervalSecs]（页面在目录事件不可用时显示"每 N 秒扫描一次"）。
+	ScanIntervalSecs int `json:"scan_interval_secs"`
+	// AutoStart：壳重启后是否自动开始（JSON 沿用旧名 running）。
+	AutoStart bool `json:"running"`
 }
 
 // HotStatus 是 hotfolder_* 命令的结果和 hotfolder:state 事件的内容。

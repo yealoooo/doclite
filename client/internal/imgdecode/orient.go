@@ -1,7 +1,5 @@
 package imgdecode
 
-import "image"
-
 // 方向（EXIF / TIFF 的 Orientation，1–8；internal/imagehdr 读出，PNG 一律 1）：文件里存的像素 (x, y)（存的宽高 w×h）
 // 转正后落在哪里。5–8 转正后宽高交换。和 server（imagehdr 交换宽高）、封面（requirements 5.6）的规则一致：
 //
@@ -53,24 +51,4 @@ func RowPlacement(orientation, w, h, ow, y int) (start, step int) {
 	}
 	x1, y1 := OrientPoint(orientation, w, h, 1, y)
 	return start, (y1*ow + x1) - start
-}
-
-// OrientRGBA 按方向把 RGBA 图转正（1 和不认识的方向原样返回）。
-func OrientRGBA(src *image.RGBA, orientation int) *image.RGBA {
-	if orientation < 2 || orientation > 8 {
-		return src
-	}
-	b := src.Bounds()
-	w, h := b.Dx(), b.Dy()
-	ow, oh := OrientedSize(orientation, w, h)
-	dst := image.NewRGBA(image.Rect(0, 0, ow, oh))
-	for y := 0; y < h; y++ {
-		row := src.Pix[src.PixOffset(b.Min.X, b.Min.Y+y):]
-		p, step := RowPlacement(orientation, w, h, ow, y)
-		for x := 0; x < w; x++ {
-			copy(dst.Pix[p*4:p*4+4], row[x*4:x*4+4])
-			p += step
-		}
-	}
-	return dst
 }

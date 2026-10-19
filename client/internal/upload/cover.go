@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/color"
 	"image/jpeg"
 	"time"
 
@@ -14,6 +13,7 @@ import (
 
 	"doclite/client/internal/imagehdr"
 	"doclite/client/internal/imgdecode"
+	"doclite/client/internal/tiles"
 )
 
 // 封面的规格（requirements 5.6"封面"，用户决定 2026-09-28；server 的校验在 server/internal/file/cover.go）：
@@ -92,31 +92,20 @@ func CoverSize(w, h int) (int, int) {
 }
 
 // EncodeCover 把解码好的原图（文件里存的方向）缩小、按 orientation（EXIF / TIFF 的方向 1–8）转正、透明铺白，
-// 编成 JPEG。先缩小再转正（转的是 400 像素的小图）。
+// 编成 JPEG。先按 2ⁿ 取平均缩到封面的 2–4 倍并转正（tiles.Shrink，和切块同一套读像素、转正的代码），再用 CatmullRom
+// 缩到封面尺寸。
 func EncodeCover(src image.Image, orientation int) ([]byte, error) {
 	b := src.Bounds()
-	sw, sh := b.Dx(), b.Dy()
-	if sw <= 0 || sh <= 0 {
+	if b.Dx() <= 0 || b.Dy() <= 0 {
 		return nil, errors.New("图片是空的")
 	}
-	// 转正后的尺寸和封面尺寸；方向 5–8 时宽高交换。
-	ow, oh := sw, sh
-	if orientation >= 5 && orientation <= 8 {
-		ow, oh = sh, sw
+	cw, ch := CoverSize(imgdecode.OrientedSize(orientation, b.Dx(), b.Dy()))
+	small, err := tiles.Shrink(context.Background(), src, orientation, 2*cw, 2*ch)
+	if err != nil {
+		return nil, err
 	}
-	cw, ch := CoverSize(ow, oh)
-	tw, th := cw, ch
-	if orientation >= 5 && orientation <= 8 {
-		tw, th = ch, cw
-	}
-	small := image.NewRGBA(image.Rect(0, 0, tw, th))
-	draw.Draw(small, small.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
-	op := draw.Over
-	if o, ok := src.(interface{ Opaque() bool }); ok && o.Opaque() {
-		op = draw.Src
-	}
-	draw.CatmullRom.Scale(small, small.Bounds(), src, b, op, nil)
-	out := imgdecode.OrientRGBA(small, orientation)
+	out := image.NewRGBA(image.Rect(0, 0, cw, ch))
+	draw.CatmullRom.Scale(out, out.Bounds(), small, small.Bounds(), draw.Src, nil)
 	for _, q := range []int{CoverQuality, 60, 45} {
 		var buf bytes.Buffer
 		if err := jpeg.Encode(&buf, out, &jpeg.Options{Quality: q}); err != nil {

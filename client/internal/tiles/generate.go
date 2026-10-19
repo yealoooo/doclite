@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"doclite/client/internal/imgdecode"
 )
 
 // Options 是一次切块的上限。
@@ -61,7 +63,7 @@ func (p *Plan) Generate(ctx context.Context, outDir string, opt Options) (*Resul
 		runtime.GC()
 	}
 	if lv.w != p.Width || lv.h != p.Height {
-		return nil, fail(CodeCorrupt, "转正后是 %d×%d，文件头算出的是 %d×%d", lv.w, lv.h, p.Width, p.Height)
+		return nil, fail(imgdecode.KindCorrupt, "转正后是 %d×%d，文件头算出的是 %d×%d", lv.w, lv.h, p.Width, p.Height)
 	}
 	workers := opt.Workers
 	if workers <= 0 {
@@ -115,7 +117,7 @@ var bilevelPalette = color.Palette{color.Gray{Y: 0}, color.Gray{Y: 255}}
 // level 写一级的全部块（几个协程并行编码）。
 func (w *writer) level(lv *level, l int, top bool) error {
 	if err := os.MkdirAll(filepath.Join(w.dir, strconv.Itoa(l)), 0o755); err != nil {
-		return fail(CodeIO, "建不了块目录：%v", err)
+		return fail(imgdecode.KindIO, "建不了块目录：%v", err)
 	}
 	cols, rows := Grid(lv.w, lv.h)
 	jobs := make(chan [2]int)
@@ -223,14 +225,14 @@ func (w *writer) tile(ctx context.Context, enc *tileEncoder, lv *level, l, x, y 
 		}
 	}
 	if err != nil {
-		return fail(CodeIO, "编码块 %d/%d_%d 失败：%v", l, x, y, err)
+		return fail(imgdecode.KindIO, "编码块 %d/%d_%d 失败：%v", l, x, y, err)
 	}
 	total := w.bytes.Add(int64(enc.buf.Len()))
 	if w.limit > 0 && total > w.limit {
-		return fail(CodeTooLarge, "块合计超过 %d MB", w.limit>>20)
+		return fail(imgdecode.KindTooLarge, "块合计超过 %d MB", w.limit>>20)
 	}
 	if err := os.WriteFile(filepath.Join(w.dir, TilePath(l, x, y, w.ext)), enc.buf.Bytes(), 0o644); err != nil {
-		return fail(CodeIO, "写块失败：%v", err)
+		return fail(imgdecode.KindIO, "写块失败：%v", err)
 	}
 	w.count.Add(1)
 	return nil

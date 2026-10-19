@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -115,20 +114,23 @@ func (c *Client) Rescan(ctx context.Context, server, fileID, path string, progre
 	if cv.Data == nil {
 		out.Cover = &RescanCover{Status: CoverNotGenerated, Reason: strPtr(cv.Reason)}
 	}
-	data := cv.Data
 
+	data := cv.Data
 	conflictRetried := false
 	for {
 		out.Attempts++
 		var last time.Time
 		progress(PhaseUploading, 0, size)
-		ing, err := c.Upload(ctx, server, "/api/files/"+fileID+"/rescan", UploadInput{
+		ing, err := c.uploadDroppingCover(ctx, server, "/api/files/"+fileID+"/rescan", UploadInput{
 			Path: path, FileName: name, SHA256: sha, Size: size, Cover: data,
 		}, func(sent int64) {
 			if now := time.Now(); now.Sub(last) >= rescanProgressEvery && sent < size {
 				last = now
 				progress(PhaseUploading, sent, size)
 			}
+		}, func(msg string) {
+			data = nil
+			out.Cover = &RescanCover{Status: CoverRejected, Reason: strPtr(msg), MS: &ms}
 		})
 		if err == nil {
 			progress(PhaseUploading, size, size)
@@ -137,11 +139,6 @@ func (c *Client) Rescan(ctx context.Context, server, fileID, path string, progre
 		}
 		var ae *APIError
 		if errors.As(err, &ae) {
-			if ae.Code == "invalid_cover" && data != nil {
-				data = nil
-				out.Cover = &RescanCover{Status: CoverRejected, Reason: strPtr(ae.Message), MS: &ms}
-				continue
-			}
 			if ae.Code == "conflict" && !conflictRetried {
 				conflictRetried = true
 				continue
@@ -163,12 +160,7 @@ func (c *Client) Rescan(ctx context.Context, server, fileID, path string, progre
 		msg := err.Error()
 		var ne *NetError
 		if errors.As(err, &ne) {
-			mctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			merr := c.Me(mctx, server)
-			cancel()
-			var me *APIError
-			if errors.As(merr, &me) && (me.Status == http.StatusUnauthorized || me.Status == http.StatusUpgradeRequired ||
-				licenseBlocked(me)) {
+			if me := c.probeSession(ctx, server); me != nil {
 				out.Error = &RescanFailure{Status: me.Status, Code: me.Code, Message: me.Message, Details: me.Details}
 				break
 			}

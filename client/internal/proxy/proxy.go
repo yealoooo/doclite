@@ -161,7 +161,7 @@ func (p *Proxy) Fetch(ctx context.Context, req *Request) (*Response, error) {
 			return nil, Network("请求已取消")
 		}
 		p.log.Warn("请求失败", "method", req.Method, "path", req.Path, "err", err)
-		return nil, Network(describeNetError(err))
+		return nil, Network(DescribeNetError(err))
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
@@ -197,7 +197,7 @@ func (p *Proxy) Stream(ctx context.Context, req *Request, emit func(StreamEvent)
 			p.afterResponse(server, req, nil)
 			if ctx.Err() == nil {
 				p.log.Warn("流式请求失败", "path", req.Path, "err", err)
-				_ = emit(StreamEvent{"event": "error", "kind": KindNetwork, "message": describeNetError(err)})
+				_ = emit(StreamEvent{"event": "error", "kind": KindNetwork, "message": DescribeNetError(err)})
 			}
 			return
 		}
@@ -245,8 +245,8 @@ func (p *Proxy) Stream(ctx context.Context, req *Request, emit func(StreamEvent)
 	return nil
 }
 
-// describeNetError 把连不上的原因写成给人看的一句话。
-func describeNetError(err error) string {
+// DescribeNetError 把连不上的原因写成给人看的一句话（会话代理、上传队列共用）。
+func DescribeNetError(err error) string {
 	var ne net.Error
 	if errors.As(err, &ne) && ne.Timeout() {
 		return "连接服务器超时"
@@ -261,7 +261,9 @@ func describeNetError(err error) string {
 		return "服务器拒绝连接（服务没有运行，或端口不对）"
 	case strings.Contains(msg, "no route to host"), strings.Contains(msg, "network is unreachable"):
 		return "网络不通，连不到服务器"
-	case strings.Contains(msg, "connection reset"), strings.Contains(msg, "EOF"):
+	case strings.Contains(msg, "no such host"):
+		return "找不到这个服务器（主机名不对，或网络不通）"
+	case strings.Contains(msg, "connection reset"), strings.Contains(msg, "EOF"), strings.Contains(msg, "broken pipe"):
 		return "和服务器的连接被断开"
 	}
 	return "无法连接服务器：" + msg

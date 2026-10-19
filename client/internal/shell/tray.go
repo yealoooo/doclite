@@ -160,8 +160,8 @@ func (t *tray) status() TrayStatus {
 		msg := "托盘还没建好"
 		st.Error = &msg
 	}
-	if t.s.smoke != nil {
-		st.CloseCheck = t.s.smoke.closeCheckResult()
+	if t.s.closeCheck != nil {
+		st.CloseCheck = t.s.closeCheck()
 	}
 	return st
 }

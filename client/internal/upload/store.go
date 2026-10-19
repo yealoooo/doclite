@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -87,9 +88,23 @@ CREATE TABLE IF NOT EXISTS hotfolder (
 );
 `
 
+// indexes 是后来加的索引（每次打开都建一遍，不升库的版本号：旧版客户端照样能打开）：等重试的项（统计用）。
+const indexes = `
+CREATE INDEX IF NOT EXISTS upload_items_retrying ON upload_items (server_url)
+	WHERE status = 'queued' AND attempts > 0 AND next_attempt_at IS NOT NULL;
+`
+
+// dbtx 是库或者一个事务（[Store.InTx]）。
+type dbtx interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 // Store 是打开的队列库。
 type Store struct {
 	db   *sql.DB
+	q    dbtx // db，或者 InTx 里的事务
 	lock *os.File
 }
 
@@ -112,7 +127,7 @@ func OpenStore(dir string) (*Store, error) {
 	}
 	// 一个连接：写入天然串行，不会撞 SQLITE_BUSY。
 	db.SetMaxOpenConns(1)
-	s := &Store{db: db, lock: lock}
+	s := &Store{db: db, q: db, lock: lock}
 	if err := s.migrate(); err != nil {
 		s.Close()
 		return nil, err
@@ -132,14 +147,29 @@ func (s *Store) migrate() error {
 	if v > schemaVersion {
 		return fmt.Errorf("上传队列库是更新版本的客户端建的（版本 %d）", v)
 	}
-	if v == schemaVersion {
-		return nil
+	if v < schemaVersion {
+		if _, err := s.db.Exec(schema); err != nil {
+			return err
+		}
+		if _, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+			return err
+		}
 	}
-	if _, err := s.db.Exec(schema); err != nil {
+	_, err := s.db.Exec(indexes)
+	return err
+}
+
+// InTx 在一个事务里做 fn（tx 的方法都在这个事务里；库只有一个连接，fn 里不能再用 s）。fn 出错时回滚。
+func (s *Store) InTx(ctx context.Context, fn func(tx *Store) error) error {
+	t, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
-	_, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion))
-	return err
+	if err := fn(&Store{db: s.db, q: t}); err != nil {
+		_ = t.Rollback()
+		return err
+	}
+	return t.Commit()
 }
 
 // Close 关闭库并释放锁。
@@ -190,7 +220,7 @@ func scanItem(r scanner) (*Item, error) {
 	return &it, nil
 }
 
-func queryItems(ctx context.Context, db *sql.DB, query string, args ...any) ([]*Item, error) {
+func queryItems(ctx context.Context, db dbtx, query string, args ...any) ([]*Item, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -209,7 +239,7 @@ func queryItems(ctx context.Context, db *sql.DB, query string, args ...any) ([]*
 
 // Get 取一项；不存在时返回 nil, nil。
 func (s *Store) Get(ctx context.Context, id int64) (*Item, error) {
-	it, err := scanItem(s.db.QueryRowContext(ctx, `SELECT `+itemCols+` FROM upload_items WHERE id = ?`, id))
+	it, err := scanItem(s.q.QueryRowContext(ctx, `SELECT `+itemCols+` FROM upload_items WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -218,7 +248,7 @@ func (s *Store) Get(ctx context.Context, id int64) (*Item, error) {
 
 // FindByPath 按服务器和本地路径找一项；没有时返回 nil, nil。
 func (s *Store) FindByPath(ctx context.Context, server, localPath string) (*Item, error) {
-	it, err := scanItem(s.db.QueryRowContext(ctx, `SELECT `+itemCols+` FROM upload_items WHERE server_url = ? AND path_key = ?`,
+	it, err := scanItem(s.q.QueryRowContext(ctx, `SELECT `+itemCols+` FROM upload_items WHERE server_url = ? AND path_key = ?`,
 		server, PathKey(localPath)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -248,7 +278,7 @@ func (s *Store) Insert(ctx context.Context, it *Item) error {
 	if it.Warnings == nil {
 		it.Warnings = []string{}
 	}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO upload_items (source, server_url, local_path, path_key, file_name, rel_dir,
+	res, err := s.q.ExecContext(ctx, `INSERT INTO upload_items (source, server_url, local_path, path_key, file_name, rel_dir,
 		rel_key, sort_key, target_folder_id, folder_id, size, mtime_ns, sha256, status, attempts, next_attempt_at, file_id,
 		server_file_name, sort_no, cover_status, cover_reason, error_code, error_message, warnings, duplicate_of, created_at,
 		updated_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -269,7 +299,7 @@ func (s *Store) Update(ctx context.Context, it *Item) error {
 	if it.Warnings == nil {
 		it.Warnings = []string{}
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE upload_items SET source = ?, file_name = ?, rel_dir = ?, rel_key = ?, sort_key = ?,
+	_, err := s.q.ExecContext(ctx, `UPDATE upload_items SET source = ?, file_name = ?, rel_dir = ?, rel_key = ?, sort_key = ?,
 		target_folder_id = ?, folder_id = ?, size = ?, mtime_ns = ?, sha256 = ?, status = ?, attempts = ?, next_attempt_at = ?,
 		file_id = ?, server_file_name = ?, sort_no = ?, cover_status = ?, cover_reason = ?, error_code = ?, error_message = ?,
 		warnings = ?, duplicate_of = ?, updated_at = ?, finished_at = ? WHERE id = ?`,
@@ -282,49 +312,54 @@ func (s *Store) Update(ctx context.Context, it *Item) error {
 
 // Delete 删掉一项。
 func (s *Store) Delete(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM upload_items WHERE id = ?`, id)
+	_, err := s.q.ExecContext(ctx, `DELETE FROM upload_items WHERE id = ?`, id)
 	return err
 }
 
 // Heads 取各组的队首（组 = 服务器 + 目标文件夹 + 子路径；组内按文件名自然顺序，还没结束的——等待写完、排队、
 // 上传中——里最前面的一项），只看 sources 这几个来源（被暂停的来源不参与，不会卡住同一个文件夹里别的来源的项）。
 // 按队首的 id 排序（先发现的组先传）。
+//
+// 每秒跑一次，积压几万项时也要便宜：组只从 upload_items_active 这个部分索引里取（不回表），每组的队首用同一个
+// 索引按 (sort_key, id) 顺序取第一项，最后按主键取整行。
 func (s *Store) Heads(ctx context.Context, server string, sources []string) ([]*Item, error) {
 	if len(sources) == 0 {
 		return nil, nil
 	}
 	ph := strings.TrimSuffix(strings.Repeat("?, ", len(sources)), ", ")
-	args := []any{server}
+	args := []any{}
 	for _, src := range sources {
 		args = append(args, src)
 	}
-	return queryItems(ctx, s.db, `SELECT `+itemCols+` FROM (
-		SELECT *, ROW_NUMBER() OVER (PARTITION BY target_folder_id, rel_key ORDER BY sort_key, id) AS rn
-		FROM upload_items
-		WHERE server_url = ? AND status IN ('waiting', 'queued', 'uploading') AND source IN (`+ph+`)
-	) WHERE rn = 1 ORDER BY id`, args...)
+	args = append(args, server)
+	return queryItems(ctx, s.q, `SELECT `+itemCols+` FROM upload_items WHERE id IN (
+		SELECT (SELECT u.id FROM upload_items u
+			WHERE u.server_url = g.server_url AND u.target_folder_id = g.target_folder_id AND u.rel_key = g.rel_key
+				AND u.status IN ('waiting', 'queued', 'uploading') AND u.source IN (`+ph+`)
+			ORDER BY u.sort_key, u.id LIMIT 1)
+		FROM (SELECT DISTINCT server_url, target_folder_id, rel_key FROM upload_items
+			WHERE server_url = ? AND status IN ('waiting', 'queued', 'uploading')) g
+	) ORDER BY id`, args...)
 }
 
 // WaitingOf 取某个来源等待写完的项。
 func (s *Store) WaitingOf(ctx context.Context, server, source string) ([]*Item, error) {
-	return queryItems(ctx, s.db, `SELECT `+itemCols+` FROM upload_items
+	return queryItems(ctx, s.q, `SELECT `+itemCols+` FROM upload_items
 		WHERE server_url = ? AND status = 'waiting' AND source = ? ORDER BY id`, server, source)
 }
 
-// Stats 统计当前服务器各状态的数量。
+// Stats 统计当前服务器各状态的数量（都走索引：按状态计数用 upload_items_status，等重试的用 upload_items_retrying）。
 func (s *Store) Stats(ctx context.Context, server string) (Stats, error) {
 	var st Stats
-	rows, err := s.db.QueryContext(ctx, `SELECT status, COUNT(*),
-		SUM(CASE WHEN status = 'queued' AND attempts > 0 AND next_attempt_at IS NOT NULL THEN 1 ELSE 0 END)
-		FROM upload_items WHERE server_url = ? GROUP BY status`, server)
+	rows, err := s.q.QueryContext(ctx, `SELECT status, COUNT(*) FROM upload_items WHERE server_url = ? GROUP BY status`, server)
 	if err != nil {
 		return st, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var status Status
-		var n, retrying int
-		if err := rows.Scan(&status, &n, &retrying); err != nil {
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
 			return st, err
 		}
 		switch status {
@@ -332,7 +367,6 @@ func (s *Store) Stats(ctx context.Context, server string) (Stats, error) {
 			st.Waiting = n
 		case StatusQueued:
 			st.Queued = n
-			st.Retrying = retrying
 		case StatusUploading:
 			st.Uploading = n
 		case StatusDone:
@@ -344,7 +378,12 @@ func (s *Store) Stats(ctx context.Context, server string) (Stats, error) {
 		}
 		st.Total += n
 	}
-	return st, rows.Err()
+	if err := rows.Err(); err != nil {
+		return st, err
+	}
+	err = s.q.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_items INDEXED BY upload_items_retrying
+		WHERE server_url = ? AND status = 'queued' AND attempts > 0 AND next_attempt_at IS NOT NULL`, server).Scan(&st.Retrying)
+	return st, err
 }
 
 // maxKeptRows：最近文件之外另外返回的"上传中""失败"最多几项。
@@ -360,10 +399,10 @@ func (s *Store) Recent(ctx context.Context, server string, limit int, statuses [
 			args = append(args, string(st))
 		}
 		args = append(args, limit)
-		return queryItems(ctx, s.db, `SELECT `+itemCols+` FROM upload_items WHERE server_url = ? AND status IN (`+ph+`)
+		return queryItems(ctx, s.q, `SELECT `+itemCols+` FROM upload_items WHERE server_url = ? AND status IN (`+ph+`)
 			ORDER BY id DESC LIMIT ?`, args...)
 	}
-	return queryItems(ctx, s.db, `SELECT `+itemCols+` FROM upload_items WHERE id IN (
+	return queryItems(ctx, s.q, `SELECT `+itemCols+` FROM upload_items WHERE id IN (
 			SELECT id FROM (SELECT id FROM upload_items WHERE server_url = ? ORDER BY id DESC LIMIT ?)
 			UNION SELECT id FROM (SELECT id FROM upload_items WHERE server_url = ? AND status IN ('uploading', 'failed')
 				ORDER BY id DESC LIMIT ?)
@@ -373,14 +412,14 @@ func (s *Store) Recent(ctx context.Context, server string, limit int, statuses [
 // Failed 取当前服务器失败的项；ids 不为空时只要其中的。
 func (s *Store) Failed(ctx context.Context, server string, ids []int64) ([]*Item, error) {
 	if len(ids) == 0 {
-		return queryItems(ctx, s.db, `SELECT `+itemCols+` FROM upload_items WHERE server_url = ? AND status = 'failed' ORDER BY id`, server)
+		return queryItems(ctx, s.q, `SELECT `+itemCols+` FROM upload_items WHERE server_url = ? AND status = 'failed' ORDER BY id`, server)
 	}
 	ph := strings.TrimSuffix(strings.Repeat("?, ", len(ids)), ", ")
 	args := []any{server}
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	return queryItems(ctx, s.db, `SELECT `+itemCols+` FROM upload_items WHERE server_url = ? AND status = 'failed'
+	return queryItems(ctx, s.q, `SELECT `+itemCols+` FROM upload_items WHERE server_url = ? AND status = 'failed'
 		AND id IN (`+ph+`) ORDER BY id`, args...)
 }
 
@@ -392,7 +431,7 @@ func (s *Store) Expedite(ctx context.Context, server string, codes []string) ([]
 	for _, c := range codes {
 		args = append(args, c)
 	}
-	items, err := queryItems(ctx, s.db, `SELECT `+itemCols+` FROM upload_items WHERE server_url = ? AND status = 'queued'
+	items, err := queryItems(ctx, s.q, `SELECT `+itemCols+` FROM upload_items WHERE server_url = ? AND status = 'queued'
 		AND next_attempt_at > ? AND error_code IN (`+ph+`)`, args...)
 	if err != nil || len(items) == 0 {
 		return nil, err
@@ -406,9 +445,9 @@ func (s *Store) Expedite(ctx context.Context, server string, codes []string) ([]
 	return items, nil
 }
 
-// KnownPaths 是某个来源已入队的文件（path_key → 大小、修改时间），热文件夹扫描时没变的不再查库。
+// KnownPaths 是某个来源已入队的文件（path_key → 大小、修改时间）。热文件夹开始运行时读一次，扫描时没变的不再查库。
 func (s *Store) KnownPaths(ctx context.Context, server, source string) (map[string]fileSig, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT path_key, size, mtime_ns FROM upload_items WHERE server_url = ? AND source = ?`,
+	rows, err := s.q.QueryContext(ctx, `SELECT path_key, size, mtime_ns FROM upload_items WHERE server_url = ? AND source = ?`,
 		server, source)
 	if err != nil {
 		return nil, err
@@ -431,10 +470,67 @@ type fileSig struct {
 	size, mtime int64
 }
 
+// Purged 是 [Store.PurgeFinished] 删掉的一项。
+type Purged struct {
+	Source  string
+	PathKey string
+}
+
+// PurgeFinished 删掉 finishedBefore（Unix 毫秒）之前就已入库、内容重复，而且本地文件已经不在了的项（库只增不减）。
+// 本地文件还在的留着：热文件夹、上传按钮靠这一行判断"没变不重传"。
+func (s *Store) PurgeFinished(ctx context.Context, finishedBefore int64) ([]Purged, error) {
+	rows, err := s.q.QueryContext(ctx, `SELECT id, source, local_path FROM upload_items
+		WHERE status IN ('done', 'duplicate') AND finished_at < ?`, finishedBefore)
+	if err != nil {
+		return nil, err
+	}
+	type row struct {
+		id        int64
+		src, path string
+	}
+	var finished []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.src, &r.path); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		finished = append(finished, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// 库只有一个连接：先读完再逐个看本地文件（不占着连接）。
+	var ids []int64
+	var out []Purged
+	for _, r := range finished {
+		if _, err := os.Lstat(r.path); errors.Is(err, fs.ErrNotExist) {
+			ids = append(ids, r.id)
+			out = append(out, Purged{Source: r.src, PathKey: PathKey(r.path)})
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	err = s.InTx(ctx, func(tx *Store) error {
+		for _, id := range ids {
+			if err := tx.Delete(ctx, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FolderOf 查子路径映射到的 folder_id；没有时返回空串。
 func (s *Store) FolderOf(ctx context.Context, server, target, relKey string) (string, error) {
 	var id string
-	err := s.db.QueryRowContext(ctx, `SELECT folder_id FROM folder_map WHERE server_url = ? AND target_folder_id = ? AND rel_key = ?`,
+	err := s.q.QueryRowContext(ctx, `SELECT folder_id FROM folder_map WHERE server_url = ? AND target_folder_id = ? AND rel_key = ?`,
 		server, target, relKey).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
@@ -444,7 +540,7 @@ func (s *Store) FolderOf(ctx context.Context, server, target, relKey string) (st
 
 // SetFolder 记下子路径映射到的 folder_id。
 func (s *Store) SetFolder(ctx context.Context, server, target, relKey, folderID string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO folder_map (server_url, target_folder_id, rel_key, folder_id) VALUES (?, ?, ?, ?)
+	_, err := s.q.ExecContext(ctx, `INSERT INTO folder_map (server_url, target_folder_id, rel_key, folder_id) VALUES (?, ?, ?, ?)
 		ON CONFLICT (server_url, target_folder_id, rel_key) DO UPDATE SET folder_id = excluded.folder_id`,
 		server, target, relKey, folderID)
 	return err
@@ -454,7 +550,7 @@ func (s *Store) SetFolder(ctx context.Context, server, target, relKey, folderID 
 func (s *Store) ForgetFolders(ctx context.Context, server, target, relKey string) error {
 	parts := strings.Split(relKey, "/")
 	for i := range parts {
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM folder_map WHERE server_url = ? AND target_folder_id = ? AND rel_key = ?`,
+		if _, err := s.q.ExecContext(ctx, `DELETE FROM folder_map WHERE server_url = ? AND target_folder_id = ? AND rel_key = ?`,
 			server, target, strings.Join(parts[:i+1], "/")); err != nil {
 			return err
 		}
@@ -465,29 +561,30 @@ func (s *Store) ForgetFolders(ctx context.Context, server, target, relKey string
 // HotConfig 读热文件夹的配置；没有设置过时返回 nil。
 func (s *Store) HotConfig(ctx context.Context) (*HotConfig, error) {
 	var c HotConfig
-	var running int
-	err := s.db.QueryRowContext(ctx, `SELECT watch_dir, target_folder_id, server_url, scan_interval_secs, running FROM hotfolder WHERE id = 1`).
-		Scan(&c.WatchDir, &c.TargetFolderID, &c.ServerURL, &c.ScanIntervalSecs, &running)
+	var autoStart int
+	err := s.q.QueryRowContext(ctx, `SELECT watch_dir, target_folder_id, server_url, running FROM hotfolder WHERE id = 1`).
+		Scan(&c.WatchDir, &c.TargetFolderID, &c.ServerURL, &autoStart)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	c.Running = running != 0
+	c.ScanIntervalSecs = PollIntervalSecs
+	c.AutoStart = autoStart != 0
 	return &c, nil
 }
 
-// SetHotConfig 保存热文件夹的配置。
+// SetHotConfig 保存热文件夹的配置（scan_interval_secs 一列是旧的，照写固定值）。
 func (s *Store) SetHotConfig(ctx context.Context, c HotConfig) error {
-	running := 0
-	if c.Running {
-		running = 1
+	autoStart := 0
+	if c.AutoStart {
+		autoStart = 1
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO hotfolder (id, watch_dir, target_folder_id, server_url, scan_interval_secs, running)
+	_, err := s.q.ExecContext(ctx, `INSERT INTO hotfolder (id, watch_dir, target_folder_id, server_url, scan_interval_secs, running)
 		VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET watch_dir = excluded.watch_dir,
 		target_folder_id = excluded.target_folder_id, server_url = excluded.server_url,
 		scan_interval_secs = excluded.scan_interval_secs, running = excluded.running`,
-		c.WatchDir, c.TargetFolderID, c.ServerURL, c.ScanIntervalSecs, running)
+		c.WatchDir, c.TargetFolderID, c.ServerURL, PollIntervalSecs, autoStart)
 	return err
 }

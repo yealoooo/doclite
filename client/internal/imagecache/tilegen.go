@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"doclite/client/internal/imgdecode"
 	"doclite/client/internal/tiles"
 )
 
@@ -66,7 +67,7 @@ func unavailable(msg string) *httpError {
 }
 
 func unprocessable(e *tiles.Error) *httpError {
-	return &httpError{status: http.StatusUnprocessableEntity, code: e.Code, message: e.Message}
+	return &httpError{status: http.StatusUnprocessableEntity, code: string(e.Code), message: e.Message}
 }
 
 // ensure 拿到切好的分块和它的目录：已经切好就直接给（hit），没有就切（或等正在切的那一次）。
@@ -132,7 +133,8 @@ func (t *tiler) prepare(src Source) PrepareResult {
 	}
 	switch status, e := t.state(src.SnapshotID); status {
 	case "failed":
-		return PrepareResult{Status: status, Code: &e.Code, Message: &e.Message}
+		code := string(e.Code)
+		return PrepareResult{Status: status, Code: &code, Message: &e.Message}
 	case "ready", "generating":
 		return PrepareResult{Status: status}
 	}
@@ -196,7 +198,7 @@ func (t *tiler) generate(src Source) (*tiles.Result, string, *httpError) {
 	path, release, _, herr := t.s.original(context.Background(), src)
 	if herr != nil {
 		if herr.status == http.StatusUnprocessableEntity {
-			return nil, "", t.remember(src.SnapshotID, &tiles.Error{Code: herr.code, Message: herr.message})
+			return nil, "", t.remember(src.SnapshotID, &tiles.Error{Code: imgdecode.Kind(herr.code), Message: herr.message})
 		}
 		return nil, "", herr
 	}
@@ -207,7 +209,7 @@ func (t *tiler) generate(src Source) (*tiles.Result, string, *httpError) {
 		return nil, "", t.tileError(src.SnapshotID, err)
 	}
 	if plan.Estimate > tileMemoryBudget {
-		return nil, "", t.remember(src.SnapshotID, &tiles.Error{Code: tiles.CodeTooLarge,
+		return nil, "", t.remember(src.SnapshotID, &tiles.Error{Code: imgdecode.KindTooLarge,
 			Message: "原图太大，整张解码约要 " + mb(plan.Estimate) + "，超过客户端切块的内存上限 " + mb(tileMemoryBudget)})
 	}
 	t.acquire(plan.Estimate)
@@ -250,7 +252,7 @@ func (t *tiler) tileError(sid string, err error) *httpError {
 		if te.Permanent() {
 			return t.remember(sid, te)
 		}
-		return &httpError{status: http.StatusInternalServerError, code: te.Code, message: te.Message}
+		return &httpError{status: http.StatusInternalServerError, code: string(te.Code), message: te.Message}
 	}
 	return ioError(err)
 }

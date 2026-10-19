@@ -1,5 +1,5 @@
 // Doclite 桌面客户端（壳）。界面随客户端打包（M7-6）：web 的产物包按 WEB_VERSION 指定的版本嵌进来（Taskfile 的
-// frontend 任务用 cmd/webartifact 解到 frontend/）；配置的"服务器地址"是 web 服务的入口（也可以是 server 本身），
+// frontend 任务用 cmd/webartifact 解到 frontend/）；配置的"服务器地址"是 server 的接口地址，
 // 客户端只经它访问 /api。连接服务器、连不上、需要升级几页是客户端自带的（internal/shellpages）。
 // 壳负责会话代理、托盘、单实例、上传队列、热文件夹、本机图片缓存和大图切块（requirements 第 6 节）。
 // 页面和壳之间的约定见 BRIDGE.md。

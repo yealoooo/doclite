@@ -1,19 +1,26 @@
-/* 客户端自带页面的样式：简洁、只用系统字体，不依赖 web。 */
+/* 客户端自带页面的样式：简洁、只用系统字体，不依赖 web（不引用它的文件），配色、字体、卡片宽度照 web 的
+   style.css 和登录页抄一份，两边看起来一样。 */
 :root {
   --bg: #fafafa;
   --card: #fff;
   --fg: #171717;
   --muted: #737373;
-  --border: rgba(0, 0, 0, 0.1);
+  --muted-bg: #f4f4f5;
+  --border: #ebebeb;
+  --input: #e2e2e2;
+  --ring: #0a72ef;
+  --ring-soft: rgba(10, 114, 239, 0.5);
   --primary: #171717;
-  --primary-fg: #fff;
-  --error: #b42318;
-  --error-soft: #fef3f2;
-  --warn: #b54708;
-  --warn-soft: #fffaeb;
-  --info: #175cd3;
-  --info-soft: #eff8ff;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --primary-hover: rgba(23, 23, 23, 0.8);
+  --primary-fg: #fafafa;
+  --destructive: #c62828;
+  --destructive-soft: #fcebeb;
+  --warn: #b45309;
+  --warn-soft: #fcf1df;
+  --info: #0a6cdf;
+  --info-soft: #e9f2fd;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI",
+    "Noto Sans CJK SC", sans-serif;
   font-size: 14px;
   line-height: 1.5;
   color: var(--fg);
@@ -39,7 +46,7 @@ body {
 
 .wrap {
   width: 100%;
-  max-width: 440px;
+  max-width: 360px;
 }
 
 .brand {
@@ -47,7 +54,7 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  margin-bottom: 24px;
+  margin-bottom: 32px;
   text-align: center;
 }
 
@@ -103,7 +110,7 @@ h1 + .muted {
 }
 
 .mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
   word-break: break-all;
 }
 
@@ -119,17 +126,20 @@ label {
 
 input {
   height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
+  padding: 0 10px;
+  border: 1px solid var(--input);
   border-radius: 6px;
   font: inherit;
   color: inherit;
   background: #fff;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-input:focus {
-  outline: 2px solid rgba(23, 92, 211, 0.35);
-  outline-offset: 1px;
+input:focus-visible,
+button:focus-visible {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px var(--ring-soft);
 }
 
 .alert {
@@ -139,8 +149,8 @@ input:focus {
 }
 
 .alert.error {
-  background: var(--error-soft);
-  color: var(--error);
+  background: var(--destructive-soft);
+  color: var(--destructive);
 }
 
 .alert.info {
@@ -167,11 +177,22 @@ button {
   font: inherit;
   font-weight: 500;
   cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+button:hover:not(:disabled) {
+  background: var(--primary-hover);
+  border-color: transparent;
 }
 
 button.secondary {
   background: #fff;
   color: var(--fg);
+  border-color: var(--border);
+}
+
+button.secondary:hover:not(:disabled) {
+  background: var(--muted-bg);
   border-color: var(--border);
 }
 
@@ -187,6 +208,11 @@ button.link {
   background: none;
   color: var(--muted);
   font-weight: 400;
+}
+
+button.link:hover:not(:disabled) {
+  background: none;
+  text-decoration: underline;
 }
 
 button.link.accent {
@@ -220,8 +246,8 @@ button.link.accent {
 }
 
 .badge.error {
-  background: var(--error-soft);
-  color: var(--error);
+  background: var(--destructive-soft);
+  color: var(--destructive);
 }
 
 .badge.warn {

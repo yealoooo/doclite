@@ -70,10 +70,17 @@ type Shell struct {
 	// navGuard：导航保护装上了（macOS）。navBlocked：这个平台必须有导航保护却没装上，界面不开（assets.go）。
 	navGuard   bool
 	navBlocked bool
-	// confirmServer 问用户要不要换服务器地址（nil 时弹系统确认框，见 bridge.go 的 changeServer；测试里换掉）。
-	confirmServer func(ctx context.Context, from, to string) (bool, error)
-	// openDir 用系统的文件管理器打开目录（nil 时用 Wails 的，见 settings.go 的 openLocalDir；测试里换掉）。
-	openDir func(path string) error
+	// 会碰到用户桌面的几个动作（系统对话框、确认框、浏览器、文件管理器）：Run 里填上真的实现，`--smoke` 时
+	// smokeRun.install 换成不弹窗的（smoke.go），测试里直接换掉。命令的实现里没有自检的分支。
+	confirmServer func(ctx context.Context, from, to string) (bool, error) // 换服务器地址前问用户（bridge.go）
+	openDir       func(path string) error                                  // 用文件管理器打开目录（settings.go）
+	openURL       func(url string) error                                   // 用系统浏览器打开地址（bridge.go）
+	pickUpload    func(mode string) ([]string, error)                      // 上传按钮选文件或文件夹（upload.go）
+	pickHotDir    func() (string, error)                                   // 选热文件夹的监控目录（hotfolder.go）
+	pickRescan    func() (string, error)                                   // 选重扫件（rescan.go）
+	// onServerChanged、closeCheck 只在自检时有：换了服务器地址的通知、模拟关窗的结果（tray_status 的 close_check）。
+	onServerChanged func(server string)
+	closeCheck      func() *CloseCheck
 	// osVersion 是系统的名字和版本（shell_info 的 os_version，第一次用到时问 Wails，之后不变）。
 	osVersionOnce sync.Once
 	osVersion     *string
@@ -98,8 +105,11 @@ func Run(cfg Config) (int, error) {
 		s.log.Warn("正式构建不认 FRONTEND_DEVSERVER_URL，只用嵌入的界面")
 	}
 	removeOldWebCache(cfg.DataDir, s.log)
+	s.confirmServer, s.openDir, s.openURL = s.confirmServerDialog, s.openDirInFileManager, s.openURLInBrowser
+	s.pickUpload, s.pickHotDir, s.pickRescan = s.pickForUpload, s.pickHotDirDialog, s.pickRescanDialog
 	if cfg.Smoke != nil {
 		s.smoke = newSmokeRun(s, cfg.Smoke)
+		s.smoke.install()
 	}
 	s.registerCommands()
 	s.proxy.Observe(s.observeResponse)

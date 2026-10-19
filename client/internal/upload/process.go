@@ -255,39 +255,31 @@ func (e *Engine) checkAndUpload(ctx context.Context, it *Item, folderID string, 
 	}
 	e.save(it) // 页面上显示"上传中"、有没有封面
 
-	for {
-		var last time.Time
-		e.ev.Progress(it.ID, 0, it.Size)
-		progress := func(sent int64) {
-			if now := time.Now(); sent >= it.Size || now.Sub(last) >= progressEvery {
-				last = now
-				e.ev.Progress(it.ID, sent, it.Size)
-			}
+	var last time.Time
+	e.ev.Progress(it.ID, 0, it.Size)
+	ing, err := e.api.uploadDroppingCover(ctx, server, "/api/folders/"+folderID+"/files", UploadInput{
+		Path: it.LocalPath, FileName: it.FileName, SHA256: *it.SHA256, Size: it.Size, Cover: data,
+	}, func(sent int64) {
+		if now := time.Now(); sent >= it.Size || now.Sub(last) >= progressEvery {
+			last = now
+			e.ev.Progress(it.ID, sent, it.Size)
 		}
-		ing, err := e.api.Upload(ctx, server, "/api/folders/"+folderID+"/files", UploadInput{
-			Path: it.LocalPath, FileName: it.FileName, SHA256: *it.SHA256, Size: it.Size, Cover: data,
-		}, progress)
-		if err == nil {
-			it.FileID = strPtr(ing.FileID)
-			it.ServerFileName = strPtr(ing.FileName)
-			it.SortNo = int64Ptr(ing.SortNo)
-			it.Warnings = ing.Warnings
-			if it.Warnings == nil {
-				it.Warnings = []string{}
-			}
-			return &result{kind: resDone}
-		}
-		var ae *APIError
-		if errors.As(err, &ae) && ae.Code == "invalid_cover" && data != nil {
-			// 封面可以缺，不能因封面丢页：去掉封面再传一次（不算重试次数）。
-			e.log.Warn("服务器没收封面，去掉封面重传", "id", it.ID, "file", it.FileName, "message", ae.Message)
-			data = nil
-			it.CoverStatus, it.CoverReason = strPtr(CoverRejected), strPtr(ae.Message)
-			e.save(it)
-			continue
-		}
+	}, func(msg string) {
+		e.log.Warn("服务器没收封面，去掉封面重传", "id", it.ID, "file", it.FileName, "message", msg)
+		it.CoverStatus, it.CoverReason = strPtr(CoverRejected), strPtr(msg)
+		e.save(it)
+	})
+	if err != nil {
 		return e.classify(ctx, it, err, true)
 	}
+	it.FileID = strPtr(ing.FileID)
+	it.ServerFileName = strPtr(ing.FileName)
+	it.SortNo = int64Ptr(ing.SortNo)
+	it.Warnings = ing.Warnings
+	if it.Warnings == nil {
+		it.Warnings = []string{}
+	}
+	return &result{kind: resDone}
 }
 
 // resolveFolder 取或建这一项要传到的文件夹：根目录里的文件传到目标文件夹本身；子文件夹逐层按名字建
@@ -356,12 +348,7 @@ func (e *Engine) classify(ctx context.Context, it *Item, err error, upload bool)
 			if r := e.changedDuringUpload(it); r.kind != resFailed {
 				return r
 			}
-			mctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			merr := e.api.Me(mctx, it.ServerURL)
-			cancel()
-			var me *APIError
-			if errors.As(merr, &me) && (me.Status == http.StatusUnauthorized || me.Status == http.StatusUpgradeRequired ||
-				licenseBlocked(me)) {
+			if me := e.api.probeSession(ctx, it.ServerURL); me != nil {
 				return e.classifyAPI(it, me)
 			}
 		}
