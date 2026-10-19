@@ -18,12 +18,13 @@
 //           15 秒，所以这一步最多等 25 秒。Windows 上它同时验证 UU 端口映射能不能传 SSE。
 //           这一步失败时照样跑完后面各步（最后按 failed 结束）；426 和连不上除外，立即停止。
 //   img     加载 img 协议的测试图
-//   img_cache  本机图片缓存（M1-11）：用 batch 取 N 个文件（项目、文件夹、N 由环境变量指定，见 smoke.go），
+//   img_cache  本机图片缓存（M1-11）：用 batch 取 N 个文件（项目、文件夹、N 由环境变量指定，见 smoke.go；默认从根起按层
+//           找第一个有封面的文件夹，演示数据的「格式样本」没有封面），
 //           按 imageSrc 加载封面（壳的 img 协议），每张 naturalWidth > 0；比较这一步前后的缓存计数：
 //           cold（默认，先清空自检目录的缓存）要求全部未命中、每张下载一次；warm 要求全部命中、下载 0 次
 //           （跑过一次 cold 之后再跑，可以先停掉 S3）。最后请求一张不在记录里的图，要求被拒绝（404）。
 //           这一步失败时也照样跑完后面各步（最后按 failed 结束）。
-//   img_direct  （壳还没有取图协议时，M6-1）看图退回到预签名 URL 直连存储：取第一个有文件的文件夹的前几个文件，
+//   img_direct  （壳还没有取图协议时，M6-1）看图退回到预签名 URL 直连存储：取第一个有封面的文件夹的前几个文件，
 //           <img> 加载封面，再像浏览器的原图查看器一样用 fetch（CORS）下载一张原图，核对大小。没有文件时跳过
 //   tiles   原图分块（M2-3）：找一张 CCITT G4 和一张 LZW 的 TIFF（文件名含 g4、lzw；文件夹由环境变量指定，
 //           默认按层找），经 batch 记下来源后，用 XHR 取分块描述（和 OpenSeadragon 一样，验证 CSP 的 connect-src 和
@@ -330,7 +331,15 @@ function expectImageRejected(src: string): Promise<void> {
   })
 }
 
-/** 找要加载封面的文件：指定了文件夹就用它，否则从根起按层找第一个有文件的文件夹。返回前 count 个 file_id。 */
+/** 取一批文件的图片信息（/api/files/batch）。 */
+function fileBatch(fileIds: string[]) {
+  return request<FileBatchResponse>('/api/files/batch', { method: 'POST', body: { file_ids: fileIds }, handle: true })
+}
+
+/**
+ * 找要加载封面的文件：指定了文件夹就用它，否则从根起按层找第一个有封面的文件夹（前 count 个文件里至少一个有封面；
+ * 演示数据的「格式样本」没有封面，跳过它）。返回前 count 个 file_id。
+ */
 async function findFiles(
   rootId: string,
   folder: string | null,
@@ -353,7 +362,8 @@ async function findFiles(
     const { id, path } = queue.shift()!
     const children = await listChildren(id, true)
     if (children.files.length > 0) {
-      return { path, fileIds: children.files.slice(0, count).map((f) => f.file_id) }
+      const fileIds = children.files.slice(0, count).map((f) => f.file_id)
+      if ((await fileBatch(fileIds)).items.some((i) => i.cover_url)) return { path, fileIds }
     }
     for (const f of children.folders) {
       if (f.file_count > 0 || f.folder_count > 0) {
@@ -361,7 +371,7 @@ async function findFiles(
       }
     }
   }
-  throw new Error('项目里没找到有文件的文件夹（先用 seed:files 传几张图，或用 DOCLITE_SMOKE_IMG_FOLDER 指定）')
+  throw new Error('项目里没找到有封面的文件夹（先用 npm run seed 造演示数据，或用 DOCLITE_SMOKE_IMG_FOLDER 指定）')
 }
 
 /** img_cache 一步（M1-11，见文件开头）。 */
@@ -379,11 +389,7 @@ async function checkImageCache(opts: SmokeConfig['image_cache']) {
     throw new Error(opts.project ? `这个账号进不了项目 ${opts.project}` : '这个账号没有能进的项目')
   }
   const found = await findFiles(project.root_folder_id, opts.folder, opts.count)
-  const batch = await request<FileBatchResponse>('/api/files/batch', {
-    method: 'POST',
-    body: { file_ids: found.fileIds },
-    handle: true,
-  })
+  const batch = await fileBatch(found.fileIds)
   const items = batch.items.filter((i) => i.cover_url)
   if (items.length === 0) {
     throw new Error(`文件夹 ${found.path || '（根）'} 的前 ${found.fileIds.length} 个文件都没有封面`)
@@ -977,11 +983,7 @@ async function checkImageDirect(opts: SmokeConfig['image_cache']) {
   } catch {
     return { skipped: `项目 ${project.project_code} 里没有文件` }
   }
-  const batch = await request<FileBatchResponse>('/api/files/batch', {
-    method: 'POST',
-    body: { file_ids: found.fileIds },
-    handle: true,
-  })
+  const batch = await fileBatch(found.fileIds)
   const covers = batch.items.map((i) => imageSrc(i, 'cover')).filter((src): src is string => !!src)
   const widths = await Promise.all(covers.map(loadCover))
   const original = batch.items.find((i) => i.original_url)

@@ -244,9 +244,9 @@ DOCLITE_BACKGROUND=1 client/bin/Doclite.app/Contents/MacOS/Doclite --smoke
 | `DOCLITE_SMOKE_SERVER`、`DOCLITE_SMOKE_USERNAME`、`DOCLITE_SMOKE_PASSWORD` | 服务器地址（web 的入口或 server 本身）和账号（账号至少能进一个项目） |
 | `DOCLITE_SMOKE_TIMEOUT_SECS` | 整个自检的时限，默认 120（加上 pages 和主流程要 300 以上） |
 | `DOCLITE_SMOKE_PAGES=1` | 另外逐个打开菜单里的页面 |
-| `DOCLITE_SMOKE_RESCAN_PATH`、`_FILE_ID`、`_PROJECT`、`_EXPECT` | 设了 PATH 才跑 rescan 一步：用这个本机文件重扫（不设 FILE_ID 取待重扫列表第一个；EXPECT 是 `done` 或 `incomplete`）。重扫件的内容在项目里不能重复 |
+| `DOCLITE_SMOKE_RESCAN_PATH`、`_FILE_ID`、`_PROJECT`、`_EXPECT` | 设了 PATH 才跑 rescan 一步：用这个本机文件重扫（不设 FILE_ID 取待重扫列表第一个；EXPECT 是 `done` 或 `incomplete`）。重扫件的内容在项目里不能重复（可以用 `sips -s formatOptions 63 <样本>.jpg --out <新文件>.jpg` 重新压缩一张）。演示数据里有 2 页待重扫，每跑一次 `done` 用掉一页 |
 | `DOCLITE_SMOKE_CACHE` | img_cache、tiles 两步：`cold`（默认，先清空自检的缓存，要求全部下载、现切）或 `warm`（要求全部命中；先跑一次 cold） |
-| `DOCLITE_SMOKE_IMG_PROJECT`、`_IMG_FOLDER`、`_IMG_COUNT` | img_cache 一步取哪个项目、文件夹（从项目根起，`/` 分隔）的前几个文件（默认第一个有文件的文件夹、8 个） |
+| `DOCLITE_SMOKE_IMG_PROJECT`、`_IMG_FOLDER`、`_IMG_COUNT` | img_cache 一步取哪个项目、文件夹（从项目根起，`/` 分隔）的前几个文件（默认从根起按层找第一个有封面的文件夹、8 个；演示数据里是「盒 WS-2025-002」的那 1 页散页，要多几张可以指定 `2025 文书档案/盒 WS-2025-001/办公室2024年度工作总结`） |
 | `DOCLITE_SMOKE_TILES_PROJECT`、`_TILES_FOLDER`、`_TILES_FILES` | tiles、viewer 两步：默认找文件名含 g4、lzw 的 TIFF；`_TILES_FILES` 指定文件夹里的几个文件（逗号分隔，第一个给 viewer 看，含 JPEG 压缩 TIFF 的列表见 roadmap M6-3b） |
 | `DOCLITE_SMOKE_FLOW_SAMPLES` | 设了才跑主流程五步（M6-4）：本机样本文件夹（单页 JPEG、PNG、TIFF，按文件名取前 2 × COUNT 个）。壳复制一份、每个文件写进本次独有的注释（内容不重复）：壳里上传（`pick_and_enqueue_upload` 用复制的文件夹代替系统对话框）→ 热文件夹（`hotfolder_pick_dir` 用准备好的空文件夹，壳再往里放文件）→ 分给自己、在查看器里看原图、逐页通过 → 把这两个文件夹整个归档、锁定 → 导出，下载地址经 `open_external` 交给壳（自检里不打开系统浏览器），壳用 HTTP 下载核对 zip。账号要有扫描、审核分配、审核、归类、导出菜单（admin）；server 要在执行导出。每次在项目里留下一个「<FOLDER>/自检 <时间>」文件夹和两件锁定的条目 |
 | `DOCLITE_SMOKE_FLOW_PROJECT`、`_FOLDER`、`_COUNT`、`_FORMAT` | 主流程的项目（默认第一个能进的）、上级文件夹（默认「客户端自检」）、两种上传各几个（默认 3）、导出格式（`pdf` 默认或 `images`）。归类节点按档号模板用到的层级找或建：全宗 `ZJ`「客户端自检」/ `WS` / `2026` / `Y` / `ZJ` |
