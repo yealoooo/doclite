@@ -176,23 +176,23 @@ cd web && INIT_ADMIN_PASSWORD=<管理员密码> npm run screenshots -- --spec sc
 - `INIT_ADMIN_PASSWORD`（`INIT_ADMIN_USERNAME`）是管理员的密码，和启动 server 用同一组变量；演示账号的密码 `demo123456`（`DEMO_PASSWORD` 可改）。`SHOTS_TMP` 是脚本的临时目录（默认系统临时目录）。
 - 几个较早的脚本直接 `psql` 读审计（M7-3 之后有 `GET /api/system/audit-logs`，新脚本用接口）：要 `psql` 在 PATH 里，`DATABASE_URL` 指向同一个库（远程的 `doclite_dev`，连接串在 `server/.env`）。
 
-**准备数据**：先有 `npm run seed` 的演示数据（见[演示数据和重建开发库](#演示数据和重建开发库)）；m1-organize、m1-scan、m3-dashboard、m3-catalog-info 直接用它。另有几个较早的脚本要自己的文件夹（M1 验收、M2-5 到 M2-7、M2 验收……），脚本开头写了 `seed:files` 命令（那里的 `$S`、`$U` 是 bash 写法，zsh 里要把参数写全）：
+**准备数据**：先有 `npm run seed` 的演示数据（见[演示数据和重建开发库](#演示数据和重建开发库)）；m1-organize、m1-scan、m1-accept、m3-dashboard、m3-catalog-info 直接用它，m2-accept 在它上面自己建要用的文件夹。另有几个较早的脚本要自己的文件夹（M2-5 到 M2-7……），脚本开头写了 `seed:files` 命令（那里的 `$S`、`$U` 是 bash 写法，zsh 里要把参数写全）：
 
 ```sh
 npm run seed:files -- --base http://127.0.0.1:9080 --user demo_scanner:demo123456 --project DEMO-A --folder "M2-5 分配演示" --count 12
 ```
 
-`seed:files` 往一个文件夹里传 N 张合成的扫描页（PNG + 客户端规格的封面，路径不存在就逐层建，按页码顺序上传，可以重跑；`--remark` 写原件位置）。m2-viewer、m2-viewer-lan 用「格式样本」，缺的样本第一次运行时自己建在「M2-4 查看器样本」下（对比样本、17 MB 的超出预算样本；m2-viewer 里 200 MB 的那几张另建约 210 MB 的「200 MB 切换」，建议在临时库上跑，或用 `--only` 跳过）。m2-accept 还要「M1 验收演示」「M2-3 分块实测」（200 MB 的 TIFF）这些不再造的数据，新库上跑不了。M9-3 删掉了依赖旧演示数据的 m1-files（2000 页的文件夹）和 m4-export（M4-5 的导出演示数据）。
+`seed:files` 往一个文件夹里传 N 张合成的扫描页（PNG + 客户端规格的封面，路径不存在就逐层建，按页码顺序上传，可以重跑；`--remark` 写原件位置）。m2-viewer、m2-viewer-lan 用「格式样本」，缺的样本第一次运行时自己建在「M2-4 查看器样本」下（对比样本、17 MB 的超出预算样本；m2-viewer 里 200 MB 的那几张另建约 210 MB 的「200 MB 切换」，建议在临时库上跑，或用 `--only` 跳过）。M9-3 删掉了依赖旧演示数据的 m1-files（2000 页的文件夹）和 m4-export（M4-5 的导出演示数据）。
 
 **几个特别的脚本**：
 
 - `m1-upload-lan`、`m2-viewer-lan`：要用局域网地址打开（非安全上下文）。只在跑这一步时开 `DOCLITE_SERVER=http://127.0.0.1:9080 npm run preview -- --host --port 24173 --strictPort`，`--base http://$(ipconfig getifaddr en0):24173`。
-- `m1-accept`：`ACCEPT_DEMO` 指定热文件夹演示的文件夹（5 个盒 × 100 页，没有时用 `seed:files` 造）。
-- `m2-accept`：要先建「M2 验收演示 <日期>」（脚本开头有命令）；只能走一遍，再跑换一个文件夹（`M2_ACCEPT_FOLDER`）。
+- `m1-accept`：上传、整理在 DEMO-A 根下的临时文件夹里做（做完软删除）；看封面、权限几张核对 seed 的「2025 文书档案」和 seed 的授权。
+- `m2-accept`：每跑一次在 DEMO-A 根下建一个新的「M2 验收演示 <时间>」（4 个盒 26 页）走一遍审核循环，可以重跑；大图两步用「M2-8 大图样本」（第一次运行时上传 G4 样本、生成 200 MB 的无压缩 TIFF，之后复用）；最后核对 seed 的文件夹计数没变。
 - `m9-catalog`（M9-2，归类页的主流程）：每跑一次在 DEMO-A 建一套新的「M9 归档演示 <时间>」文件夹和全宗 Z<时间>，走一遍归档（拖放、预览）→ 文件目录的封存提示 → 解除封存 → 在文件目录里改 → 重新归档（对比）→ 锁定、批量锁定；要 `npm run seed` 的 DEMO-A 和 demo_scanner（必填的著录项脚本自己填）。M3 的归类脚本（m3-catalog、m3-workbench、m3-accept）随待归类池、按页挂接一起删了。
 - `m7-storage-migrate`：server 要在执行后台任务（迁移在它里面执行）；要有第二个桶 `doclite-migrate-test`（本机 S3 里已经建好）。脚本自己起一个转发到 SeaweedFS 的慢速代理当"源"存储的 server 地址（让迁移持续几秒），每跑一次在 DEMO-A 的「M7-2 迁移演示」下传一批文件，迁到「M7-2 迁移演示·目标」，跑完"源"迁空并停用。
 - 壳的部分（`m1-shell`、`m1-scan`、`m1-cache` 和 `m1-organize`、`m2-rescan`、`m2-viewer`、`m2-review`、`m2-accept` 里名字带 `shell` 的几张）：`--base` 要指向 **devshell**（见下面）。这几张用 `http://wails.localhost:<端口>` 打开页面（`lib/client.ts` 的 `isShell()` 认 Windows 上 WebView2 的这个地址，Chrome 把 `*.localhost` 解析到本机），在页面脚本运行前注入 Wails 桥的模拟（`scripts/lib/wails-mock.mjs`：拦下 `/wails/runtime` 的命令调用、`_wails.dispatchWailsEvent` 推事件、`_wails.streamFactory` 给实时通道），正式前端代码不改。
-- `m2-accept`：`M2_ACCEPT_SHELL_MOCK=1` 时壳模式审核那两步用上面的模拟（否则改在浏览器里做）；`M2_ACCEPT_SHELL=client/bin/Doclite.app/Contents/MacOS/Doclite`、`M2_ACCEPT_SERVER=<网页的入口>`（vite 的地址；不设时用 `--base`）时壳重扫、壳的大图两步跑打包的客户端 `--smoke`（隔离的数据目录、后台模式），不设时壳重扫改用接口模拟。
+- `m2-accept`：`M2_ACCEPT_SHELL_MOCK=1` 时壳模式审核那两步用上面的模拟（否则改在浏览器里做）；`M2_ACCEPT_SHELL=client/bin/Doclite.app/Contents/MacOS/Doclite`（先 `npm run release`、`wails3 package` 打一个新的）、`M2_ACCEPT_SERVER=<服务器地址>`（server 的接口地址，或 vite 的地址；不设时用 `--base`）时壳重扫、壳的大图两步跑打包的客户端 `--smoke`（`SHOTS_TMP` 下隔离的 `HOME` 和数据目录、后台模式，取图和切块用 seed 的文件夹），不设时壳重扫改用接口模拟、壳的大图跳过。
 
 **devshell**（`client/cmd/devshell`，截图脚本的开发服务器，不打包）：一个端口上做打包的客户端的资产服务器做的事，只是界面从 `-web` 指定的 web 入口（vite dev 或 preview）现取（截图测的是 web 的源码，不是嵌入的产物包）——`/shell/` 是客户端自带的页面（`internal/shellpages`）、`/wails/runtime.js` 是 Wails 的运行时、`/api/` 转给 web 入口（它再转给 server）、取图地址 `/shell/img/…` 用客户端的 Go 代码（`internal/imagecache`、`internal/tiles`）现场下载、缓存、切块；壳模式的地址和客户端一样加 CSP。桥（命令、事件、流）由截图脚本在页面里模拟。浏览器的那些截图也可以照常经它跑。
 

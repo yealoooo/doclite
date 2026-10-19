@@ -3,9 +3,9 @@
 //   npm run screenshots -- --spec scripts/shots/m1-accept.mjs --base http://127.0.0.1:<web 端口>
 //
 // --base 是 web 的入口（vite preview 或 dev，/api 代理到 server；M7-5 起 server 不托管界面）。
-// 账号来自 npm run seed：demo_scanner（个人授权 DEMO-A）、demo_reviewer（审核员角色授权 DEMO-B；M2-5 起另有 DEMO-A 的个人
-// 授权）、demo_noproject（归类员角色、没有授权；M3-5 起 demo_cataloger 授权进了 DEMO-A，改用它）。accept-perm-reviewer
-// 要用 admin 读各项目的授权（INIT_ADMIN_PASSWORD，默认 change-me-now）。
+// 账号和数据来自 npm run seed（M9-3）：demo_scanner（个人授权 DEMO-A）、demo_reviewer（个人授权 DEMO-A，审核员角色授权
+// DEMO-B）、demo_noproject（归类员角色、没有授权；M3-5 起 demo_cataloger 授权进了 DEMO-A，改用它）。accept-perm-scanner、
+// accept-perm-reviewer 要用 admin 读各项目和授权（INIT_ADMIN_PASSWORD，默认 change-me-now）。
 //
 // - accept-upload：在 DEMO-A 根下建临时文件夹"M1-14 浏览器上传和整理 <时间>"，用"上传文件夹"（注入合成的
 //   File 列表，和选择框同一段代码）传 scripts/samples 里的样本：JPEG（彩色、灰度）、PNG（带 alpha、1 位）、
@@ -14,13 +14,13 @@
 // - accept-organize：把 PNG 移到 JPEG 下面，删除 TIFF 里的一个文件，再删除 JPEG（连同 PNG）。断言：路径编码换了
 //   前缀；目录树和计数正确；batch 把删掉的文件都放进 missing；被删文件的日志接口返回 404，剩下的文件日志只有 upload。
 //   最后一行 `ACCEPT_IDS {...}` 给外面的 SQL 核对（file_logs、audit_logs、path_code）。after 里软删除临时文件夹。
-// - accept-demo-folder / accept-demo-box：热文件夹演示的文件夹（默认 DEMO-A 根下最新的"M1 验收演示 …"，可用
-//   ACCEPT_DEMO 指定名字）有 5 个盒，每盒 100 页；打开第 3 个盒看封面。没有热文件夹演示的数据时可以用 seed:files 造
-//   （M5-3：npm run seed:files -- --base … --user demo_scanner:demo123456 --project DEMO-A --folder "M1 验收演示 <日期>/盒 01"
-//   --count 100，盒 01–05 各一次）。
-// - accept-perm-scanner / -reviewer / -cataloger：三个人看到的项目不同（切换器截图）；直接调别人项目的接口返回 403，
-//   审核员能进的项目正好是授权给他的（个人授权或他的角色被授权，按 admin 读到的授权算；M3-8 起不再写死"只有 DEMO-B"），
-//   demo_noproject 用 batch 取 DEMO-A 的文件全部落在 missing（batch 登录即可，只返回能进的项目里的文件）。截图名
+// - accept-demo-folder / accept-demo-box：seed 的「2025 文书档案」（原来是热文件夹演示的「M1 验收演示」5 盒 × 100 页，
+//   M9-3 起不再造）：核对两个盒和盒 WS-2025-001 的 5 个子文件夹的页数（3、4、2、5、3）同 seed，再打开其中页数最多的
+//   子文件夹看封面（图标视图，封面全部显示）。
+// - accept-perm-scanner / -reviewer / -cataloger：三个人看到的项目不同（切换器截图）；直接调别人项目的接口返回 403
+//   （demo_scanner 读 DEMO-B 的根文件夹），审核员能进的项目正好是授权给他的（个人授权或他的角色被授权，按 admin 读到的
+//   授权算；seed 之后是 DEMO-A 个人授权 + DEMO-B 角色授权，库里另有没授权给他的项目时再核对读它 403），demo_noproject
+//   用 batch 取 DEMO-A 的文件全部落在 missing（batch 登录即可，只返回能进的项目里的文件）。截图名
 //   accept-perm-cataloger 不变。
 //
 // 样本原来每次现场调上一版的 gen-samples（Rust）生成；M5-3 起读提交的样本（M7-5 起是 web 自己的 scripts/samples，见
@@ -111,6 +111,11 @@ async function samples3() {
   }
   return map
 }
+
+/** npm run seed 造的「2025 文书档案」（scripts/seed.mjs 的 BOX1、BOX2）。 */
+const SEED_YEAR = '2025 文书档案'
+const SEED_BOXES = ['盒 WS-2025-001', '盒 WS-2025-002']
+const SEED_BOX1_PAGES = [3, 4, 2, 5, 3]
 
 const KINDS = {
   JPEG: ['jpeg-rgb', 'jpeg-gray'],
@@ -255,19 +260,19 @@ export default {
       delay: 500,
       async prepare(page) {
         state.a ??= await project(page, 'DEMO-A')
-        const root = await get(page, `/api/folders/${state.a.root_folder_id}/children`)
-        const wanted = process.env.ACCEPT_DEMO
-        const demoFolder = wanted
-          ? root.folders.find((f) => f.folder_name === wanted)
-          : root.folders.filter((f) => f.folder_name.startsWith('M1 验收演示')).at(-1)
-        assert(demoFolder, '找不到热文件夹演示的文件夹（M1 验收演示 …）')
+        const demoFolder = await childByName(page, state.a.root_folder_id, SEED_YEAR)
+        assert(demoFolder, `DEMO-A 根下找不到「${SEED_YEAR}」，先跑 npm run seed`)
         const ch = await get(page, `/api/folders/${demoFolder.id}/children`)
-        const boxes = ch.folders.map((f) => `${f.folder_name}:${f.file_count}`)
-        assert(ch.folders.length === 5 && ch.folders.every((f) => f.file_count === 100), `应有 5 个盒、每盒 100 页：${boxes}`)
-        console.log(`  ${demoFolder.folder_name}：${boxes.join('，')}`)
+        const names = ch.folders.map((f) => f.folder_name)
+        assert(JSON.stringify(names) === JSON.stringify(SEED_BOXES), `「${SEED_YEAR}」里应正好有 ${SEED_BOXES}：${names}`)
+        // 盒 001 的 5 个子文件夹（每个一件）的页数同 seed。
+        const subs = (await get(page, `/api/folders/${ch.folders[0].id}/children`)).folders
+        const counts = subs.map((f) => f.file_count)
+        assert(JSON.stringify(counts) === JSON.stringify(SEED_BOX1_PAGES), `${SEED_BOXES[0]} 的子文件夹页数应为 ${SEED_BOX1_PAGES}：${counts}`)
+        console.log(`  ${demoFolder.folder_name}：${ch.folders.map((f) => `${f.folder_name}（${f.folder_count} 个子文件夹）`).join('，')}；${SEED_BOXES[0]} 各件 ${counts.join('、')} 页`)
         state.demoFolder = demoFolder
-        state.box3 = ch.folders[2]
-        state.demoBox = (await get(page, `/api/folders/${state.box3.id}/children`)).files.map((f) => f.file_id)
+        state.box = subs.reduce((a, b) => (b.file_count > a.file_count ? b : a))
+        state.demoBox = (await get(page, `/api/folders/${state.box.id}/children`)).files.map((f) => f.file_id)
         await openFolder(page, demoFolder.id)
       },
     },
@@ -278,13 +283,13 @@ export default {
       waitFor: '[data-testid=files-page]',
       delay: 800,
       async prepare(page) {
-        assert(state.box3, '上一张（accept-demo-folder）没成功')
-        await openFolder(page, state.box3.id)
+        assert(state.box, '上一张（accept-demo-folder）没成功')
+        await openFolder(page, state.box.id)
         await page.click('[data-testid=view-icons]')
         await waitCovers(page)
         const s = await page.$$eval('[data-testid=file-cover]', (els) => els.map((e) => e.dataset.coverState))
         assert(s.length > 0 && s.every((x) => x === 'loaded'), `封面没有全部显示：${[...new Set(s)]}`)
-        console.log(`  ${state.box3.folder_name}：可见的 ${s.length} 张封面都显示了（浏览器里走预签名 URL）`)
+        console.log(`  ${state.box.folder_name}：可见的 ${s.length} 张封面都显示了（浏览器里走预签名 URL）`)
       },
     },
     {
@@ -297,8 +302,14 @@ export default {
         const codes = (await get(page, '/api/projects')).map((p) => p.project_code)
         assert(codes.join() === 'DEMO-A', `demo_scanner 能进的项目应只有 DEMO-A：${codes}`)
         state.a ??= await project(page, 'DEMO-A')
+        // 越权：用 admin 取 DEMO-B 的根文件夹，demo_scanner 读它应 403（seed 之后 demo_reviewer 两个项目都能进）。
+        const admin = await apiLogin(new URL(page.url()).origin, adminUser, adminPassword)
+        const b = (await admin('GET', '/api/projects')).find((p) => p.project_code === 'DEMO-B')
+        assert(b, '找不到 DEMO-B，先跑 npm run seed')
+        const r = await call(page, 'GET', `/api/folders/${b.root_folder_id}/children`, undefined, [403])
+        assert(r.status === 403, `demo_scanner 读 DEMO-B 的根文件夹应 403：${r.status}`)
         await openSwitcher(page)
-        console.log(`  demo_scanner（个人授权）：${codes}`)
+        console.log(`  demo_scanner（个人授权）：${codes}；读 DEMO-B 的根文件夹 → ${r.status} ${r.data.code}`)
       },
     },
     {
@@ -331,12 +342,17 @@ export default {
         }
         const got = list.map((p) => p.project_code).sort()
         assert(JSON.stringify(got) === JSON.stringify(want.sort()), `demo_reviewer 能进的项目应正好是授权给他的 ${want}：${got}`)
-        assert(want.includes('DEMO-B'), 'demo_reviewer 应经审核员角色能进 DEMO-B')
-        assert(outside, '应至少有一个没授权给 demo_reviewer 的项目（npm run seed 之外的，例如 M37-SET）')
-        const r = await call(page, 'GET', `/api/folders/${outside.root_folder_id}/children`, undefined, [403])
-        assert(r.status === 403, `demo_reviewer 读没授权的 ${outside.project_code} 的根文件夹应 403：${r.status}`)
+        assert(how.includes('DEMO-A（个人授权）'), `demo_reviewer 应有 DEMO-A 的个人授权（npm run seed）：${how}`)
+        assert(how.includes('DEMO-B（审核员角色授权）'), `demo_reviewer 应经审核员角色能进 DEMO-B（npm run seed）：${how}`)
+        // seed 只有 DEMO-A、DEMO-B，都授权给了 demo_reviewer；库里另有没授权给他的项目时（别的脚本建的）再核对 403。
+        let denied = '库里没有没授权给他的项目（越权的 403 见 accept-perm-scanner）'
+        if (outside) {
+          const r = await call(page, 'GET', `/api/folders/${outside.root_folder_id}/children`, undefined, [403])
+          assert(r.status === 403, `demo_reviewer 读没授权的 ${outside.project_code} 的根文件夹应 403：${r.status}`)
+          denied = `读没授权的 ${outside.project_code} 的根文件夹 → ${r.status} ${r.data.code}`
+        }
         await openSwitcher(page)
-        console.log(`  demo_reviewer：${how.join('、')}；读没授权的 ${outside.project_code} 的根文件夹 → ${r.status} ${r.data.code}`)
+        console.log(`  demo_reviewer：${how.join('、')}；${denied}`)
       },
     },
     {

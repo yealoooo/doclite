@@ -9,29 +9,28 @@
 //
 // --base 指向 devshell（client/cmd/devshell，壳模式的两步要用；不跑壳模式时也可以是 vite preview）。
 // 壳的几步（M2_ACCEPT_SHELL）用打包的壳跑 `--smoke`：数据目录用 SHOTS_TMP 下的隔离目录（DOCLITE_DATA_DIR，另设隔离的
-// HOME），不碰 ~/Library/Application Support/Doclite，后台模式不抢焦点；服务器地址是 M2_ACCEPT_SERVER（客户端填的是
-// 网页的入口；默认同 --base 的 origin，vite 和 devshell 都可以当入口）。没给 M2_ACCEPT_SHELL 时，壳的重扫改用接口模拟（带 content_sha256，同壳的
-// 字段），壳的大图一步跳过。壳的 viewer 一步要求窗口看得见：被别的窗口挡住时这一步失败，记下来，不算这张截图失败。
+// HOME），不碰 ~/Library/Application Support/Doclite，后台模式不抢焦点；服务器地址是 M2_ACCEPT_SERVER（server 的接口地址；
+// 默认同 --base 的 origin，vite 和 devshell 都会把 /api 转给 server），取图、切块用 seed 的文件夹（SMOKE_IMG_FOLDER、
+// SMOKE_TILES_FOLDER）。壳要用当前的代码打（cd web && npm run release，cd client && wails3 package）。没给 M2_ACCEPT_SHELL
+// 时，壳的重扫改用接口模拟（带 content_sha256，同壳的字段），壳的大图一步跳过。壳的 viewer 一步要求窗口看得见：被别的窗口挡住时这一步失败，记下来，不算这张截图失败。
 //
-// 演示数据（只能走一遍；再跑要换一个新的文件夹）：DEMO-A 下「M2 验收演示 <日期>」（M2_ACCEPT_FOLDER 指定名字，默认取
-// 根下最新的一个），4 个盒共 100 页、全部待分配，demo_scanner 上传：
-//   T="M2 验收演示 2026-10-08"; U="--base http://127.0.0.1:<端口> --user demo_scanner:demo123456 --project DEMO-A"
-//   先用接口（或文件目录页）在 DEMO-A 根下建「$T」并写备注，再：
-//   npm run seed:files -- $U --folder "$T/盒 01" --count 30 --low-dpi 2 --remark "3 号库 B 架 2 层 · 盒 01（1–30 页）"
-//   npm run seed:files -- $U --folder "$T/盒 02" --count 30 --remark "3 号库 B 架 2 层 · 盒 02（31–60 页）"
-//   npm run seed:files -- $U --folder "$T/盒 03" --count 20 --remark "3 号库 B 架 3 层 · 盒 03（61–80 页）"
-//   npm run seed:files -- $U --folder "$T/盒 04" --count 20 --no-cover 1 --remark "3 号库 B 架 3 层 · 盒 04（81–100 页）"
-// 要求 demo_manager、demo_reviewer、demo_reviewer2、demo_scanner 能进 DEMO-A（密码 demo123456，DEMO_PASSWORD 可覆盖）。
-// 别的演示文件夹（M1、M2-3 到 M2-7）不改：第一张记下它们的状态计数，最后一张核对没变。
+// 演示数据：每跑一次由脚本自己在 DEMO-A 根下建「M2 验收演示 <时间>」（demo_scanner 用接口上传合成的扫描页，同 seed:files；
+// M9-3 起不再要求先手工造，页数从 100 减到 26，够把每一步走到）：
+//   盒 01 8 页（第 2 页 150 DPI）、盒 02 6 页、盒 03 8 页、盒 04 4 页（第 1 页无封面），全部待分配，各盒带原件位置的备注。
+// 大图的两步用「M2-8 大图样本」（第一次运行时建好，之后复用、不删）：a4-g4-1bit.tif（scripts/samples 的 tiff-g4-1bit.tif，
+// A4 300 DPI 的 CCITT G4）、a3-600-none-rgb.tif（现场生成的 A3 600 DPI 无压缩 RGB，约 200 MB）。
+// 要求 npm run seed 的账号和授权：demo_manager、demo_reviewer、demo_reviewer2、demo_scanner 都有 DEMO-A 的个人授权
+// （密码 demo123456，DEMO_PASSWORD 可覆盖）。seed 的文件夹（「2025 文书档案」「格式样本」）不改：第一张记下它们的状态计数，
+// 最后一张核对没变。
 //
 // 截图（按顺序执行，后面的用前面的结果；文件名都以 m2-accept- 开头）：
-//  1. m2-accept-assign：demo_manager 在 /review-assign 按文件夹把 100 页分给 demo_reviewer（确认框"含子文件夹，共 100 个
-//     待分配"，中途另存 m2-accept-assign-confirm）；接口核对 100 个文件各一行 open、assign_review 日志。
-//  2. m2-accept-reassign：在盒 03 全选 20 页，批量改派给 demo_reviewer2；接口核对旧行 cancelled、新行 open、reassign_review。
-//  3. m2-accept-review-browser：demo_reviewer 在浏览器的 /review 只用键盘审完 80 页（A 通过，R → 数字勾原因 → Tab 写
+//  1. m2-accept-assign：demo_manager 在 /review-assign 按文件夹把 26 页分给 demo_reviewer（确认框"含子文件夹，共 26 个
+//     待分配"，中途另存 m2-accept-assign-confirm）；接口核对 26 个文件各一行 open、assign_review 日志。
+//  2. m2-accept-reassign：在盒 03 全选 8 页，批量改派给 demo_reviewer2；接口核对旧行 cancelled、新行 open、reassign_review。
+//  3. m2-accept-review-browser：demo_reviewer 在浏览器的 /review 只用键盘审完 18 页（A 通过，R → 数字勾原因 → Tab 写
 //     说明 → Enter 驳回），驳回 4 页；接口核对每个文件的结论、原因、说明、所审快照和日志。
 //  4. m2-accept-review-shell：demo_reviewer2 在壳模式（Wails 桥的模拟，分块由 devshell 用客户端的 Go 代码现场切）只用键盘审完
-//     20 页，驳回 3 页；断言用的是分块、给下一张调了 prepare_tiles。打包的壳里的键盘操作没法自动化，写在给用户的演示步骤里。
+//     8 页，驳回 3 页；断言用的是分块、给下一张调了 prepare_tiles。打包的壳里的键盘操作没法自动化，写在给用户的演示步骤里。
 //  5. m2-accept-rescan-browser：demo_scanner 在浏览器的 /scan 待重扫列表里重扫 3 页（2 页回到 demo_reviewer、1 页回到
 //     demo_reviewer2）；接口核对 v2 快照、封面、自动再分配（assigned_by 沿用驳回那一行）和 rescan 日志。
 //  6. m2-accept-rescan-shell：打包的壳 `--smoke` 的 rescan 一步各重扫 1 页（demo_reviewer、demo_reviewer2 各一页）；核对同上，
@@ -47,18 +46,21 @@
 // 11. m2-accept-final：demo_reviewer 对比后通过这一页。
 // 12. m2-accept-restore：用 `GET /api/files/{fid}/logs`、`/reviews`、`/snapshots` 还原 3 个文件的全过程并断言（A：驳回 → 浏览器
 //     重扫 → 通过 → 撤回 → 再通过；B：改派 → 驳回 → 壳重扫 → 通过；C：改派 → 驳回 → 审核人停用后重扫 → 负责人重新分配 → 通过），
-//     打印一行 `ACCEPT_IDS {...}` 给外面的 SQL 核对；核对别的演示文件夹的计数没变。截图是 C 在 /review-assign 右栏的日志。
-// 13. m2-accept-big-browser-g4、m2-accept-big-browser-200mb：浏览器（独立的上下文）打开 DEMO-A/M2-3 分块实测 的 G4 TIFF（a4-g4-1bit.tif）、
+//     打印一行 `ACCEPT_IDS {...}` 给外面的 SQL 核对；核对 seed 的文件夹的计数没变。截图是 C 在 /review-assign 右栏的日志。
+// 13. m2-accept-big-browser-g4、m2-accept-big-browser-200mb：浏览器（独立的上下文）打开 DEMO-A/M2-8 大图样本 的 G4 TIFF（a4-g4-1bit.tif）、
 //     a3-600-none-rgb.tif，记下到画完的耗时和渲染进程的内存峰值。
 // 14. m2-accept-big-shell：打包的壳 `--smoke`（cold，tiles + viewer 两步只对这一个文件）各打开这两张，记下切块耗时、viewer
-//     画完的耗时、壳进程和 WebKit 的 WebContent 进程的内存峰值。截图只是 M2-3 分块实测 文件夹。
+//     画完的耗时、壳进程和 WebKit 的 WebContent 进程的内存峰值。截图只是 M2-8 大图样本 文件夹。
 
 import { spawn, execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { makeScanPage } from '../lib/scan-pages.mjs'
+import jpeg from 'jpeg-js'
+
+import { coverSize, makeScanPage } from '../lib/scan-pages.mjs'
+import { sample } from '../lib/upload-samples.mjs'
 import {
   apiClient,
   apiOrigin,
@@ -80,7 +82,20 @@ const adminPassword = process.env.INIT_ADMIN_PASSWORD ?? 'change-me-now'
 const demoPassword = process.env.DEMO_PASSWORD ?? 'demo123456'
 const PROJECT = 'DEMO-A'
 const DEMO_PREFIX = 'M2 验收演示 '
-const BOXES = ['盒 01', '盒 02', '盒 03', '盒 04']
+/** 演示文件夹的 4 个盒：页数、哪几页低 DPI / 无封面（页码从 1 起）、备注（原件位置）。 */
+const BOX_SPEC = [
+  ['盒 01', 8, { lowDpi: [2] }, '3 号库 B 架 2 层 · 盒 01（1–8 页）'],
+  ['盒 02', 6, {}, '3 号库 B 架 2 层 · 盒 02（9–14 页）'],
+  ['盒 03', 8, {}, '3 号库 B 架 3 层 · 盒 03（15–22 页）'],
+  ['盒 04', 4, { noCover: [1] }, '3 号库 B 架 3 层 · 盒 04（23–26 页）'],
+]
+const BOXES = BOX_SPEC.map(([name]) => name)
+const PAGES = Object.fromEntries(BOX_SPEC.map(([name, n]) => [name, n]))
+const TOTAL = BOX_SPEC.reduce((s, [, n]) => s + n, 0)
+/** 盒 03 改派给 demo_reviewer2，其余的 demo_reviewer 审。 */
+const REV2_BOX = '盒 03'
+/** npm run seed 造的文件夹（DEMO-A 根下）：脚本不改，前后核对计数。 */
+const SEED_FOLDERS = ['2025 文书档案', '格式样本']
 const MANAGER = 'demo_manager'
 const REV1 = 'demo_reviewer'
 const REV2 = 'demo_reviewer2'
@@ -96,30 +111,40 @@ const SHELL = process.env.M2_ACCEPT_SHELL ?? ''
  * 浏览器里由同一个人做同样的键盘审核和接口核对，只是不核对分块和 prepare_tiles，后面的步骤照常接着做。
  */
 const SHELL_MOCK = process.env.M2_ACCEPT_SHELL_MOCK === '1'
-const BENCH_FOLDER = 'M2-3 分块实测'
-// M2-3 分块实测 里的 G4 样本：Go 版的 doclite_dev 里是 300 DPI 的 a4-g4-1bit.tif（上一版是 a4-600-g4.tif）；重建过、名字不同时
-// 用 M2_ACCEPT_BIG_G4 指定。
-const BIG_G4 = process.env.M2_ACCEPT_BIG_G4 ?? 'a4-g4-1bit.tif'
+/** 大图样本（M9-3 起脚本自己建，代替原来手工造的「M2-3 分块实测」）：G4 用 scripts/samples 的 A4 300 DPI 样本，200 MB 的现场生成。 */
+const BENCH_FOLDER = 'M2-8 大图样本'
+const BIG_G4 = 'a4-g4-1bit.tif'
 const BIG_200 = 'a3-600-none-rgb.tif'
+/**
+ * 壳 --smoke 取图（img_cache 要求带封面）和切块（要有 G4、LZW 的 TIFF）用的文件夹：seed 的「盒 WS-2025-002」的第一件（6 页，
+ * 都有封面）和「格式样本」（M9-3 前是手工造的「M2-3 分块冒烟」）。
+ */
+const SMOKE_IMG_FOLDER = '2025 文书档案/盒 WS-2025-002/2025年1月财务收支报表'
+const SMOKE_TILES_FOLDER = '格式样本'
 
 /** 驳回：键（1–9 按项目原因列表的顺序：模糊、倾斜、裁切过度、污渍、缺页、重页、方向、其他）、原因代码、说明。 */
 const REJECTS_REV1 = {
   '盒 01/IMG_0002.png': { keys: ['1'], reasons: ['blur'], comment: '150 dpi，字迹发虚，请按 300 dpi 重扫' },
-  '盒 01/IMG_0011.png': { keys: ['2'], reasons: ['skew'], comment: null },
-  '盒 02/IMG_0007.png': { keys: ['4'], reasons: ['stain'], comment: '右上角有水渍，挡住了文号' },
+  '盒 01/IMG_0006.png': { keys: ['2'], reasons: ['skew'], comment: null },
+  '盒 02/IMG_0004.png': { keys: ['4'], reasons: ['stain'], comment: '右上角有水渍，挡住了文号' },
   '盒 04/IMG_0003.png': { keys: ['3', '8'], reasons: ['cut', 'other'], comment: '左侧装订线被裁掉，重扫时整页放平' },
 }
 const REJECTS_REV2 = {
-  '盒 03/IMG_0004.png': { keys: ['3'], reasons: ['cut'], comment: null },
-  '盒 03/IMG_0010.png': { keys: ['7', '8'], reasons: ['orient', 'other'], comment: '整页倒置，页码被夹子挡住' },
-  '盒 03/IMG_0016.png': { keys: ['4'], reasons: ['stain'], comment: '中间一大块墨迹' },
+  '盒 03/IMG_0002.png': { keys: ['3'], reasons: ['cut'], comment: null },
+  '盒 03/IMG_0005.png': { keys: ['7', '8'], reasons: ['orient', 'other'], comment: '整页倒置，页码被夹子挡住' },
+  '盒 03/IMG_0008.png': { keys: ['4'], reasons: ['stain'], comment: '中间一大块墨迹' },
 }
 /** 谁在哪里重扫：A、B、C 是最后还原过程的 3 个文件。盒 04/IMG_0003 留着待重扫（给用户亲手演示）。 */
-const RESCAN_BROWSER = ['盒 01/IMG_0002.png', '盒 02/IMG_0007.png', '盒 03/IMG_0004.png']
-const RESCAN_SHELL = ['盒 01/IMG_0011.png', '盒 03/IMG_0010.png']
+const RESCAN_BROWSER = ['盒 01/IMG_0002.png', '盒 02/IMG_0004.png', '盒 03/IMG_0002.png']
+const RESCAN_SHELL = ['盒 01/IMG_0006.png', '盒 03/IMG_0005.png']
 const FILE_A = '盒 01/IMG_0002.png'
-const FILE_B = '盒 03/IMG_0010.png'
-const FILE_C = '盒 03/IMG_0016.png'
+const FILE_B = '盒 03/IMG_0005.png'
+const FILE_C = '盒 03/IMG_0008.png'
+/** 各人第一轮要审的页数、驳回数（盒 03 归 demo_reviewer2）。 */
+const REV1_TOTAL = TOTAL - PAGES[REV2_BOX]
+const REV2_TOTAL = PAGES[REV2_BOX]
+const REV1_REJECTS = Object.keys(REJECTS_REV1).length
+const REV2_REJECTS = Object.keys(REJECTS_REV2).length
 /** 内置驳回原因的中文（同 web/src/lib/reject-reasons.ts）。 */
 const REASON_LABELS = { blur: '模糊', skew: '倾斜', cut: '裁切过度', stain: '污渍', missing: '缺页', dup: '重页', orient: '方向', other: '其他' }
 
@@ -160,12 +185,8 @@ function context(page) {
       users[REV2].status = 'active'
       console.log(`  ${REV2} 是停用的（上次没跑完？），已重新启用`)
     }
-    const root = await adminApi('GET', `/api/folders/${project.root_folder_id}/children`)
-    const wanted = process.env.M2_ACCEPT_FOLDER
-    const demo = wanted
-      ? root.folders.find((f) => f.folder_name === wanted)
-      : root.folders.filter((f) => f.folder_name.startsWith(DEMO_PREFIX)).sort((a, b) => a.path_code.localeCompare(b.path_code)).at(-1)
-    assert(demo, `DEMO-A 根下找不到「${wanted ?? DEMO_PREFIX + '…'}」，先按脚本开头建好`)
+    const scanner = await as(origin, SCANNER)
+    const demo = await createDemo(scanner, project)
     const boxes = {}
     const files = {}
     const sub = await adminApi('GET', `/api/folders/${demo.id}/children`)
@@ -187,7 +208,7 @@ function context(page) {
       mgr: await as(origin, MANAGER),
       rev1: await as(origin, REV1),
       rev2: await as(origin, REV2),
-      scanner: await as(origin, SCANNER),
+      scanner,
       id: (name) => users[name].id,
       displayName: (name) => users[name].display_name,
       as: (name) => as(origin, name),
@@ -221,16 +242,177 @@ async function summary(ctx, folderId) {
   return r.counts
 }
 
-/** DEMO-A 根下别的演示文件夹的状态计数（核对没被改动）。 */
+/** seed 的文件夹（SEED_FOLDERS）的状态计数（核对没被改动）。 */
 async function otherFolders(ctx) {
   const root = await ctx.admin('GET', `/api/folders/${ctx.project.root_folder_id}/children`)
   const out = {}
-  for (const f of root.folders) {
-    if (f.id === ctx.demo.id) continue
+  for (const name of SEED_FOLDERS) {
+    const f = root.folders.find((x) => x.folder_name === name)
+    assert(f, `DEMO-A 根下找不到 seed 的「${name}」，先跑 npm run seed`)
     const c = await summary(ctx, f.id)
     out[f.folder_name] = `${c.unassigned}/${c.pending}/${c.approved}/${c.rejected}`
   }
   return out
+}
+
+/** 上传一个文件（multipart，同壳和 seed 的字段），cover 可以没有。 */
+function uploadForm(name, data, type, cover) {
+  const form = new FormData()
+  form.append('file_name', name)
+  form.append('content_sha256', createHash('sha256').update(data).digest('hex'))
+  if (cover) form.append('cover', new Blob([cover], { type: 'image/jpeg' }), 'cover.jpg')
+  form.append('file', new Blob([data], { type }), name)
+  return form
+}
+
+/**
+ * 在 DEMO-A 根下建这一次的演示文件夹「M2 验收演示 <时间>」：4 个盒（BOX_SPEC），demo_scanner 按页码顺序上传合成的扫描页
+ * IMG_0001.png…（同 seed:files），全部待分配。
+ */
+async function createDemo(scanner, project) {
+  const t0 = Date.now()
+  const demo = await scanner('POST', '/api/folders', {
+    parent_id: project.root_folder_id,
+    folder_name: `${DEMO_PREFIX}${stamp()}`,
+    remark: 'M2-8 验收脚本建的演示文件夹（审核循环走一遍）',
+  })
+  for (const [name, n, { lowDpi = [], noCover = [] }, remark] of BOX_SPEC) {
+    const box = await scanner('POST', '/api/folders', { parent_id: demo.id, folder_name: name, remark })
+    for (let i = 1; i <= n; i++) {
+      const p = makeScanPage({ seed: `M2-8 ${demo.folder_name}/${name}#${i}`, pageNo: i, dpi: lowDpi.includes(i) ? 150 : 200 })
+      await scanner('POST', `/api/folders/${box.id}/files`, uploadForm(`IMG_${String(i).padStart(4, '0')}.png`, p.png, 'image/png', noCover.includes(i) ? null : p.cover))
+    }
+  }
+  console.log(`  建了演示文件夹「${demo.folder_name}」：${BOX_SPEC.map(([name, n]) => `${name} ${n} 页`).join('、')}（${((Date.now() - t0) / 1000).toFixed(1)} 秒）`)
+  return demo
+}
+
+let benchPromise = null
+/**
+ * 大图样本文件夹「M2-8 大图样本」（只建一次，之后复用、不删）：BIG_G4 是 scripts/samples 的 tiff-g4-1bit.tif（A4 300 DPI，
+ * CCITT G4；样本带这次运行的注释，不会和「格式样本」判为内容重复），BIG_200 是现场生成的 A3 600 DPI 无压缩 RGB（约 200 MB）。
+ */
+function bench(ctx) {
+  benchPromise ??= (async () => {
+    const root = await ctx.admin('GET', `/api/folders/${ctx.project.root_folder_id}/children`)
+    const folder =
+      root.folders.find((f) => f.folder_name === BENCH_FOLDER) ??
+      (await ctx.scanner('POST', '/api/folders', {
+        parent_id: ctx.project.root_folder_id,
+        folder_name: BENCH_FOLDER,
+        remark: 'M2-8 验收脚本的大图样本（G4、200 MB 无压缩 TIFF），保留，脚本重跑时复用',
+      }))
+    const has = new Set((await ctx.admin('GET', `/api/folders/${folder.id}/children`)).files.map((f) => f.file_name))
+    if (!has.has(BIG_G4)) {
+      await ctx.scanner('POST', `/api/folders/${folder.id}/files`, uploadForm(BIG_G4, await sample('tiff-g4-1bit.tif'), 'image/tiff', null))
+      console.log(`  「${BENCH_FOLDER}」：上传了 ${BIG_G4}`)
+    }
+    if (!has.has(BIG_200)) {
+      const t0 = Date.now()
+      const { tiff, cover } = bigRgbTiff()
+      await ctx.scanner('POST', `/api/folders/${folder.id}/files`, uploadForm(BIG_200, tiff, 'image/tiff', cover))
+      console.log(`  「${BENCH_FOLDER}」：上传了 ${BIG_200}（${(tiff.length / 1048576).toFixed(0)} MiB，${((Date.now() - t0) / 1000).toFixed(1)} 秒）`)
+    }
+    return folder
+  })()
+  return benchPromise
+}
+
+/**
+ * A3 600 DPI（7016×9921）的 8 位 RGB 无压缩 TIFF（每 16 行一个条带，约 200 MB）：白底、四周的边框、标题块、一行行灰色的
+ * "字"。外加按同样版式画的封面（JPEG，长边 400）。
+ */
+function bigRgbTiff() {
+  const W = 7016
+  const H = 9921
+  const rps = 16
+  const rowBytes = W * 3
+  const data = Buffer.alloc(rowBytes * H, 255)
+  const rects = []
+  const m = 240
+  const t = 20
+  rects.push([m, m, W - 2 * m, t, 40], [m, H - m - t, W - 2 * m, t, 40], [m, m, t, H - 2 * m, 40], [W - m - t, m, t, H - 2 * m, 40])
+  rects.push([m + 300, m + 300, 2400, 280, 90]) // 标题块
+  for (let i = 0, y = m + 900; y < H - m - 500; i++, y += 200) {
+    const len = 3600 + ((i * 7919) % 2400)
+    for (let x = m + 300; x < m + 300 + len; x += 400 + ((i * 131 + x) % 200)) rects.push([x, y, 320, 70, 70])
+  }
+  for (const [x0, y0, w, h, g] of rects) {
+    const px = Buffer.alloc(w * 3, g)
+    for (let y = y0; y < y0 + h; y++) px.copy(data, y * rowBytes + x0 * 3)
+  }
+  const strips = Math.ceil(H / rps)
+  // IFD：256、257、258（3 个，放在后面）、259=1、262=2、273、277=3、278、279、282、283、284=1、296=2。
+  const entries = [
+    [256, 4, 1, W],
+    [257, 4, 1, H],
+    [258, 3, 3, 0],
+    [259, 3, 1, 1],
+    [262, 3, 1, 2],
+    [273, 4, strips, 0],
+    [277, 3, 1, 3],
+    [278, 4, 1, rps],
+    [279, 4, strips, 0],
+    [282, 5, 1, 0],
+    [283, 5, 1, 0],
+    [284, 3, 1, 1],
+    [296, 3, 1, 2],
+  ]
+  const ifdSize = 2 + entries.length * 12 + 4
+  const bpsAt = 8 + ifdSize
+  const ratAt = bpsAt + 8
+  const offsAt = ratAt + 16
+  const countsAt = offsAt + strips * 4
+  const dataAt = countsAt + strips * 4
+  const head = Buffer.alloc(dataAt)
+  head.write('II', 0, 'latin1')
+  head.writeUInt16LE(42, 2)
+  head.writeUInt32LE(8, 4)
+  head.writeUInt16LE(entries.length, 8)
+  entries.forEach(([tag, type, count, value], i) => {
+    const at = 10 + i * 12
+    head.writeUInt16LE(tag, at)
+    head.writeUInt16LE(type, at + 2)
+    head.writeUInt32LE(count, at + 4)
+    if (tag === 258) value = bpsAt
+    if (tag === 273) value = offsAt
+    if (tag === 279) value = countsAt
+    if (tag === 282) value = ratAt
+    if (tag === 283) value = ratAt + 8
+    if (type === 3 && count === 1) head.writeUInt16LE(value, at + 8)
+    else head.writeUInt32LE(value, at + 8)
+  })
+  head.writeUInt32LE(0, 10 + entries.length * 12)
+  for (let k = 0; k < 3; k++) head.writeUInt16LE(8, bpsAt + k * 2)
+  for (const at of [ratAt, ratAt + 8]) {
+    head.writeUInt32LE(600, at)
+    head.writeUInt32LE(1, at + 4)
+  }
+  for (let i = 0; i < strips; i++) {
+    const rows = Math.min(rps, H - i * rps)
+    head.writeUInt32LE(dataAt + i * rps * rowBytes, offsAt + i * 4)
+    head.writeUInt32LE(rows * rowBytes, countsAt + i * 4)
+  }
+  const tiff = Buffer.concat([head, data])
+
+  const cs = coverSize(W, H)
+  const rgba = Buffer.alloc(cs.width * cs.height * 4, 255)
+  const sx = cs.width / W
+  const sy = cs.height / H
+  for (const [x0, y0, w, h, g] of rects) {
+    const cx0 = Math.floor(x0 * sx)
+    const cy0 = Math.floor(y0 * sy)
+    const cx1 = Math.max(cx0 + 1, Math.round((x0 + w) * sx))
+    const cy1 = Math.max(cy0 + 1, Math.round((y0 + h) * sy))
+    for (let y = cy0; y < cy1 && y < cs.height; y++) {
+      for (let x = cx0; x < cx1 && x < cs.width; x++) {
+        const o = (y * cs.width + x) * 4
+        rgba[o] = rgba[o + 1] = rgba[o + 2] = g
+      }
+    }
+  }
+  const cover = Buffer.from(jpeg.encode({ data: rgba, width: cs.width, height: cs.height }, 80).data)
+  return { tiff, cover }
 }
 
 /** 一页新的扫描件（PNG + 封面），内容由种子决定。 */
@@ -609,9 +791,8 @@ async function runShell(label, env) {
       DOCLITE_SMOKE_PASSWORD: demoPassword,
       DOCLITE_SMOKE_TIMEOUT_SECS: '300',
       DOCLITE_SMOKE_IMG_PROJECT: PROJECT,
-      // 上一版的「M1-11 缓存冒烟」Go 版的库里没有，用 M2-3 的样本（2 个文件）。
-      DOCLITE_SMOKE_IMG_FOLDER: 'M2-3 分块冒烟',
-      DOCLITE_SMOKE_TILES_FOLDER: 'M2-3 分块冒烟',
+      DOCLITE_SMOKE_IMG_FOLDER: SMOKE_IMG_FOLDER,
+      DOCLITE_SMOKE_TILES_FOLDER: SMOKE_TILES_FOLDER,
       ...env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -731,22 +912,22 @@ export default {
           assert(personal, `${n} 没有 DEMO-A 的个人授权：${JSON.stringify(access).slice(0, 300)}`)
         }
         const c = await summary(ctx, ctx.demo.id)
-        assert(c.total === 100 && c.unassigned === 100, `「${ctx.demo.folder_name}」应该是 100 页全部待分配（只能走一遍）：${JSON.stringify(c)}`)
+        assert(c.total === TOTAL && c.unassigned === TOTAL, `「${ctx.demo.folder_name}」应该是 ${TOTAL} 页全部待分配：${JSON.stringify(c)}`)
         state.baseline = await otherFolders(ctx)
-        console.log(`  演示文件夹「${ctx.demo.folder_name}」：${Object.entries(ctx.boxes).map(([k, b]) => `${k} ${b.file_count} 页`).join('、')}，共 100 页待分配`)
-        console.log(`  别的演示文件夹（待分配/待审/通过/驳回）：${JSON.stringify(state.baseline)}`)
+        console.log(`  演示文件夹「${ctx.demo.folder_name}」：${Object.entries(ctx.boxes).map(([k, b]) => `${k} ${b.file_count} 页`).join('、')}，共 ${TOTAL} 页待分配`)
+        console.log(`  seed 的文件夹（待分配/待审/通过/驳回）：${JSON.stringify(state.baseline)}`)
 
         await openAssign(page, ctx.demo.id)
         await pickReviewer(page, REV1)
         const label = await page.$eval('[data-testid=assign-button]', (el) => `${el.dataset.mode} ${el.textContent?.trim()}`)
-        assert(label === `folder 分给${ctx.displayName(REV1)}（100 个）`, `分配按钮是「${label}」`)
+        assert(label === `folder 分给${ctx.displayName(REV1)}（${TOTAL} 个）`, `分配按钮是「${label}」`)
         await page.click('[data-testid=assign-button]')
         const text = await alertText(page)
-        assert(text.includes('含子文件夹，共 100 个待分配'), `确认框：${text}`)
+        assert(text.includes(`含子文件夹，共 ${TOTAL} 个待分配`), `确认框：${text}`)
         await page.screenshot({ path: path.join(OUT_DIR, 'm2-accept-assign-confirm.png') })
         const t0 = Date.now()
         await confirmAlert(page)
-        await waitToast(page, `已分配 100 个给 ${ctx.displayName(REV1)}`)
+        await waitToast(page, `已分配 ${TOTAL} 个给 ${ctx.displayName(REV1)}`)
         state.timings.assign = Date.now() - t0
         await page.waitForSelector('[data-testid=folder-unassigned][data-count="0"]', { timeout: 5000 })
         for (const f of Object.values(ctx.files)) {
@@ -759,8 +940,8 @@ export default {
           assert(d.reviewer_id === ctx.id(REV1) && d.folder_path === `${ctx.project.project_name}/${ctx.demo.folder_name}/${f.key.split('/')[0]}` && d.version_no === 1 && d.review_round === 1, `${f.key} 分配日志：${JSON.stringify(d)}`)
         }
         const after = await summary(ctx, ctx.demo.id)
-        assert(after.pending === 100 && after.unassigned === 0, `分配后的计数：${JSON.stringify(after)}`)
-        console.log(`  ✓ 按文件夹分配 100 页给 ${REV1}（点确认到提示出现 ${state.timings.assign} ms）；接口核对 100 个文件各一行 open、assign_review 日志的 folder_path 对`)
+        assert(after.pending === TOTAL && after.unassigned === 0, `分配后的计数：${JSON.stringify(after)}`)
+        console.log(`  ✓ 按文件夹分配 ${TOTAL} 页给 ${REV1}（点确认到提示出现 ${state.timings.assign} ms）；接口核对 ${TOTAL} 个文件各一行 open、assign_review 日志的 folder_path 对`)
         await waitNoToast(page)
         await rest(page)
       },
@@ -772,9 +953,9 @@ export default {
       waitFor: '[data-testid=review-assign-page]',
       async prepare(page) {
         const ctx = await context(page)
-        const box = ctx.boxes['盒 03']
+        const box = ctx.boxes[REV2_BOX]
         const list = Object.values(ctx.files).filter((f) => f.folder_id === box.id)
-        assert(list.length === 20, `盒 03 应有 20 页：${list.length}`)
+        assert(list.length === REV2_TOTAL, `${REV2_BOX} 应有 ${REV2_TOTAL} 页：${list.length}`)
         await openAssign(page, box.id)
         await pickReviewer(page, REV2)
         await (await fileCell(page, 'IMG_0001.png')).click()
@@ -783,9 +964,9 @@ export default {
         await page.keyboard.up('Meta')
         await page.waitForSelector('[data-testid=bulk-reassign-button]', { timeout: 3000 })
         const bl = await page.$eval('[data-testid=bulk-reassign-button]', (el) => el.textContent?.trim())
-        assert(bl === `改派给${ctx.displayName(REV2)}（20 个待审）`, `批量改派按钮是「${bl}」`)
+        assert(bl === `改派给${ctx.displayName(REV2)}（${REV2_TOTAL} 个待审）`, `批量改派按钮是「${bl}」`)
         await page.click('[data-testid=bulk-reassign-button]')
-        await waitToast(page, `已改派 20 个给 ${ctx.displayName(REV2)}`)
+        await waitToast(page, `已改派 ${REV2_TOTAL} 个给 ${ctx.displayName(REV2)}`)
         for (const f of list) {
           const r = await reviewsOf(ctx, f.file_id)
           assert(r.reviews.length === 2 && r.reviews[0].status === 'cancelled' && r.reviews[0].reviewer_id === ctx.id(REV1), `${f.key} 旧行：${JSON.stringify(r.reviews[0])}`)
@@ -793,7 +974,7 @@ export default {
           const l = (await logsOf(ctx, f.file_id))[0]
           assert(l.action === 'reassign_review' && l.detail.from_id === ctx.id(REV1) && l.detail.to_id === ctx.id(REV2) && l.detail.review_round === 1, `${f.key} 改派日志：${JSON.stringify(l)}`)
         }
-        console.log(`  ✓ 盒 03 全选 20 页批量改派给 ${REV2}；接口核对旧行 cancelled、新行 open、reassign_review 日志`)
+        console.log(`  ✓ ${REV2_BOX} 全选 ${REV2_TOTAL} 页批量改派给 ${REV2}；接口核对旧行 cancelled、新行 open、reassign_review 日志`)
         // 截图：看其中一页的右栏（分配记录：取消的一行 + 新的一行；日志）。
         const one = list[3]
         await (await fileCell(page, one.file_name)).click()
@@ -811,23 +992,23 @@ export default {
       async prepare(page) {
         const ctx = await context(page)
         const items = await openItems(ctx, ctx.rev1, ctx.demo.id)
-        assert(items.length === 80, `${REV1} 在演示文件夹里应有 80 个待审：${items.length}`)
+        assert(items.length === REV1_TOTAL, `${REV1} 在演示文件夹里应有 ${REV1_TOTAL} 个待审：${items.length}`)
         await openReview(page, ctx.demo.id, { tab: 'open' })
         await rest(page)
         const ms = await keyboardReview(page, items, REJECTS_REV1)
         state.timings.rev1 = ms
         const v = await verifyReviewed(ctx, items, REJECTS_REV1, REV1)
-        assert(v.approved === 76 && v.rejected === 4, `通过 ${v.approved}、驳回 ${v.rejected}`)
+        assert(v.approved === REV1_TOTAL - REV1_REJECTS && v.rejected === REV1_REJECTS, `通过 ${v.approved}、驳回 ${v.rejected}`)
         const tabs = await page.$$eval('[data-testid=review-tab]', (els) => Object.fromEntries(els.map((e) => [e.dataset.state, Number(e.dataset.count)])))
-        assert(tabs.open === 0 && tabs.approved === 76 && tabs.rejected === 4, `标签计数 ${JSON.stringify(tabs)}`)
-        console.log(`  ✓ ${REV1} 在浏览器里只用键盘审完 80 页（${(ms / 1000).toFixed(1)} 秒）：通过 76、驳回 4（${Object.keys(REJECTS_REV1).join('、')}）；接口核对结论、原因、说明、所审快照、日志`)
+        assert(tabs.open === 0 && tabs.approved === REV1_TOTAL - REV1_REJECTS && tabs.rejected === REV1_REJECTS, `标签计数 ${JSON.stringify(tabs)}`)
+        console.log(`  ✓ ${REV1} 在浏览器里只用键盘审完 ${REV1_TOTAL} 页（${(ms / 1000).toFixed(1)} 秒）：通过 ${v.approved}、驳回 ${v.rejected}（${Object.keys(REJECTS_REV1).join('、')}）；接口核对结论、原因、说明、所审快照、日志`)
         await waitNoToast(page)
         await rest(page)
       },
     },
     shellModeShot('m2-accept-review-shell', REV2, async (page, ctx, { browser }) => {
       const items = await openItems(ctx, ctx.rev2, ctx.demo.id)
-      assert(items.length === 20, `${REV2} 应有 20 个待审：${items.length}`)
+      assert(items.length === REV2_TOTAL, `${REV2} 应有 ${REV2_TOTAL} 个待审：${items.length}`)
       if (browser) await openReview(page, ctx.demo.id, { tab: 'open' })
       else await shellOpenTwice(page, ctx, 'open')
       await rest(page)
@@ -842,10 +1023,10 @@ export default {
         assert(nextOnes >= items.length - 3, `给下一张调 prepare_tiles 的只有 ${nextOnes} 次：${JSON.stringify(calls).slice(0, 300)}`)
       }
       const v = await verifyReviewed(ctx, items, REJECTS_REV2, REV2)
-      assert(v.approved === 17 && v.rejected === 3, `通过 ${v.approved}、驳回 ${v.rejected}`)
+      assert(v.approved === REV2_TOTAL - REV2_REJECTS && v.rejected === REV2_REJECTS, `通过 ${v.approved}、驳回 ${v.rejected}`)
       console.log(
-        `  ✓ ${REV2} 在${browser ? '浏览器（代替壳模式）' : '壳模式'}里只用键盘审完 20 页（${(ms / 1000).toFixed(1)} 秒，查看器 ${mode} 模式` +
-          `${browser ? '' : `，给下一张提前切块 ${nextOnes} 次`}）：通过 17、驳回 3；接口核对同上`,
+        `  ✓ ${REV2} 在${browser ? '浏览器（代替壳模式）' : '壳模式'}里只用键盘审完 ${REV2_TOTAL} 页（${(ms / 1000).toFixed(1)} 秒，查看器 ${mode} 模式` +
+          `${browser ? '' : `，给下一张提前切块 ${nextOnes} 次`}）：通过 ${v.approved}、驳回 ${v.rejected}；接口核对同上`,
       )
       await waitNoToast(page)
       await rest(page)
@@ -937,7 +1118,7 @@ export default {
       async prepare(page) {
         const ctx = await context(page)
         const items = await openItems(ctx, ctx.rev1, ctx.demo.id)
-        const want = ['盒 01/IMG_0002.png', '盒 01/IMG_0011.png', '盒 02/IMG_0007.png']
+        const want = ['盒 01/IMG_0002.png', '盒 01/IMG_0006.png', '盒 02/IMG_0004.png']
         assert(JSON.stringify(items.map((f) => f.key)) === JSON.stringify(want), `${REV1} 的第 2 轮待审：${items.map((f) => f.key)}`)
         await openReview(page, ctx.demo.id, { tab: 'open' })
         for (const f of items) {
@@ -974,7 +1155,7 @@ export default {
     },
     shellModeShot('m2-accept-round2-shell', REV2, async (page, ctx, { browser }) => {
       const items = await openItems(ctx, ctx.rev2, ctx.demo.id)
-      const want = ['盒 03/IMG_0004.png', '盒 03/IMG_0010.png']
+      const want = ['盒 03/IMG_0002.png', '盒 03/IMG_0005.png']
       assert(JSON.stringify(items.map((f) => f.key)) === JSON.stringify(want), `${REV2} 的第 2 轮待审：${items.map((f) => f.key)}`)
       if (browser) await openReview(page, ctx.demo.id, { tab: 'open' })
       else await shellOpenTwice(page, ctx, 'open')
@@ -1000,7 +1181,7 @@ export default {
         state.rev2Disabled = true
         console.log(`  已停用 ${REV2}`)
         const name = `${c.file_name.replace('.png', '')} 重扫.png`
-        const p = newPage(`停用后重扫 ${FILE_C}`, 16)
+        const p = newPage(`停用后重扫 ${FILE_C}`, Number(c.file_name.slice(4, 8)))
         const r = await rescanOnPage(page, c, name, p.png)
         assert(r.result === 'done', `重扫结果：${JSON.stringify(r)}`)
         assert(r.reassign === `${ctx.displayName(REV2)} 已不能再审这个项目，改为待分配`, `说明：${r.reassign}`)
@@ -1022,7 +1203,7 @@ export default {
       async prepare(page) {
         const ctx = await context(page)
         const c = file(ctx, FILE_C)
-        await openAssign(page, ctx.boxes['盒 03'].id)
+        await openAssign(page, ctx.boxes[REV2_BOX].id)
         await page.waitForSelector('[data-testid=status-filter-unassigned][data-count="1"]', { timeout: 5000 })
         const rows = await page.$$eval('[data-testid=reviewer-row]', (els) => els.map((e) => e.dataset.username))
         assert(!rows.includes(REV2), `停用的 ${REV2} 不该出现在"分给谁"里`)
@@ -1075,8 +1256,8 @@ export default {
         const r = await compareAndApprove(page, ctx, c, REV1, REJECTS_REV2[FILE_C])
         console.log(`  ✓ ${REV1} 审 ${FILE_C}：${r.banner}；C 对比后通过 v2`)
         const s = await summary(ctx, ctx.demo.id)
-        assert(s.approved === 99 && s.rejected === 1 && s.pending === 0 && s.unassigned === 0, `演示文件夹最后的计数：${JSON.stringify(s)}`)
-        console.log(`  ✓ 演示文件夹最后：通过 99、驳回 1（盒 04/IMG_0003.png 留着待重扫）`)
+        assert(s.approved === TOTAL - 1 && s.rejected === 1 && s.pending === 0 && s.unassigned === 0, `演示文件夹最后的计数：${JSON.stringify(s)}`)
+        console.log(`  ✓ 演示文件夹最后：通过 ${TOTAL - 1}、驳回 1（盒 04/IMG_0003.png 留着待重扫）`)
         await waitNoToast(page)
         await rest(page)
       },
@@ -1133,13 +1314,13 @@ export default {
           'ACCEPT_IDS ' +
             JSON.stringify({ demo: ctx.demo.id, A: ids[FILE_A], B: ids[FILE_B], C: ids[FILE_C], rev1: ctx.id(REV1), rev2: ctx.id(REV2), mgr: ctx.id(MANAGER) }),
         )
-        // 别的演示文件夹没被改动。
+        // seed 的文件夹没被改动。
         const now = await otherFolders(ctx)
-        assert(JSON.stringify(now) === JSON.stringify(state.baseline), `别的演示文件夹的计数变了：${JSON.stringify(state.baseline)} → ${JSON.stringify(now)}`)
-        console.log(`  ✓ 别的演示文件夹的状态计数没变（${Object.keys(now).length} 个）`)
+        assert(JSON.stringify(now) === JSON.stringify(state.baseline), `seed 的文件夹的计数变了：${JSON.stringify(state.baseline)} → ${JSON.stringify(now)}`)
+        console.log(`  ✓ seed 的文件夹的状态计数没变（${Object.keys(now).join('、')}）`)
         // 截图：C 在 /review-assign 右栏的分配记录和日志。
         const c = file(ctx, FILE_C)
-        await openAssign(page, ctx.boxes['盒 03'].id)
+        await openAssign(page, ctx.boxes[REV2_BOX].id)
         await (await fileCell(page, c.file_name)).click()
         await panelLogs(page, c.file_id, 7, 'approve')
         await page.$eval('[data-testid=single-file]', (el) => el.scrollIntoView({ block: 'start' }))
@@ -1156,12 +1337,10 @@ export default {
         const origin = new URL(page.url()).origin
         await loginPage(page, origin, admin, adminPassword)
         const ctx = await context(page)
-        const root = await ctx.admin('GET', `/api/folders/${ctx.project.root_folder_id}/children`)
-        const bench = root.folders.find((f) => f.folder_name === BENCH_FOLDER)
-        assert(bench, `找不到 ${BENCH_FOLDER}`)
-        const f = (await ctx.admin('GET', `/api/folders/${bench.id}/children`)).files.find((x) => x.file_name === name)
+        const folder = await bench(ctx)
+        const f = (await ctx.admin('GET', `/api/folders/${folder.id}/children`)).files.find((x) => x.file_name === name)
         assert(f, `${BENCH_FOLDER} 里没有 ${name}`)
-        await openFolder(page, origin, bench.id)
+        await openFolder(page, origin, folder.id)
         const mem = sampleMemory(page.browser(), 50)
         const t0 = Date.now()
         await openViewer(page, name)
@@ -1182,8 +1361,7 @@ export default {
       waitFor: '[data-testid=files-page]',
       async prepare(page) {
         const ctx = await context(page)
-        const root = await ctx.admin('GET', `/api/folders/${ctx.project.root_folder_id}/children`)
-        const bench = root.folders.find((f) => f.folder_name === BENCH_FOLDER)
+        const folder = await bench(ctx)
         if (SHELL) {
           for (const name of [BIG_G4, BIG_200]) {
             const run = await runShell(`big ${name}`, {
@@ -1203,7 +1381,7 @@ export default {
         } else {
           console.log('  （没有设置 M2_ACCEPT_SHELL：跳过壳的大图）')
         }
-        await openFolder(page, ctx.origin, bench.id)
+        await openFolder(page, ctx.origin, folder.id)
         await waitCovers(page)
         console.log(`STATE ${JSON.stringify({ timings: state.timings, rescanned: state.rescanned, shellRuns: state.shellRuns.map(({ steps, ...r }) => r), browser: Object.fromEntries(Object.entries(state).filter(([k]) => k.startsWith('browser '))) })}`)
       },
