@@ -6,7 +6,8 @@
 // - 键盘：上下移动，左右收起、展开，Enter / 空格选中（reka-ui 自带）；
 // - `isDisabled`：不能选的文件夹（例如移动文件夹时，它自己和它的子树），显示为灰色。
 // - 插槽 `suffix`（`{folder, selected}`）：行尾的附加信息，例如审核分配页的待分配计数（M2-5）。
-import { ChevronRightIcon, FolderIcon, FolderOpenIcon, LoaderCircleIcon } from '@lucide/vue'
+import { ChevronRightIcon, LoaderCircleIcon } from '@lucide/vue'
+import FolderGlyph from '@/components/files/FolderGlyph.vue'
 import { TreeItem, TreeRoot } from 'reka-ui'
 import { computed } from 'vue'
 
@@ -75,7 +76,7 @@ function onToggle(ev: CustomEvent<TreeEventDetail>) {
     :get-children="props.tree.childrenOf"
     :expanded="props.tree.expanded.value"
     :model-value="selectedNode"
-    class="flex flex-col gap-px text-[13px] select-none"
+    class="flex flex-col gap-px text-compact select-none"
     data-testid="folder-tree"
     @update:expanded="(v: string[]) => (props.tree.expanded.value = v)"
   >
@@ -114,10 +115,7 @@ function onToggle(ev: CustomEvent<TreeEventDetail>) {
           :class="isExpanded ? 'rotate-90' : ''"
         />
       </span>
-      <component
-        :is="isExpanded && item.hasChildren ? FolderOpenIcon : FolderIcon"
-        class="size-4 shrink-0 fill-amber-300/60 text-amber-600"
-      />
+      <FolderGlyph :open="isExpanded && item.hasChildren" :stroke-width="2" class="size-4" />
       <span
         class="min-w-0 flex-1 truncate"
         :class="

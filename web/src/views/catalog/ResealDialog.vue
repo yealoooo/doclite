@@ -117,10 +117,10 @@ function pageText(n: number) {
         <LoaderCircleIcon class="size-4 animate-spin" />正在对比…
       </div>
       <p v-else-if="state === 'error'" class="rounded-md bg-destructive-soft px-3 py-2 text-sm text-destructive">{{ loadError }}</p>
-      <div v-else-if="preview" class="max-h-[52vh] space-y-2 overflow-y-auto text-[13px]">
+      <div v-else-if="preview" class="max-h-[52vh] space-y-2 overflow-y-auto text-compact">
         <div
           class="rounded-md px-3 py-2 text-xs"
-          :class="none ? 'bg-muted text-foreground' : 'bg-orange-50 text-orange-950'"
+          :class="none ? 'bg-muted text-foreground' : 'bg-modifying-soft text-foreground'"
           data-testid="reseal-summary"
         >
           原来 <b>{{ preview.old_page_count }}</b> 页 → 现在 <b>{{ preview.new_page_count }}</b> 页<template v-if="none">，没有变化（确认后恢复封存）</template>
@@ -160,7 +160,7 @@ function pageText(n: number) {
               在 {{ [...x.category_names, x.archive_no ?? `第 ${x.item_no} 件`].join(' / ') }} 第 {{ x.page_no }} 页
             </li>
           </ul>
-          <p class="mt-1 text-destructive/80">改好文件夹后再重新归档；不要这一件了请用"撤销归档"。</p>
+          <p class="mt-1 text-destructive">改好文件夹后再重新归档；不要这一件了请用"撤销归档"。</p>
         </div>
       </div>
       <p v-if="note" class="rounded-md bg-warn-soft px-3 py-2 text-xs text-warn" role="alert" data-testid="reseal-note">{{ note }}</p>

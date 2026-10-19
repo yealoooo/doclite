@@ -11,6 +11,7 @@ import { getStorageMigration } from '@/api/storage'
 import type { StorageMigration, StorageProfileItem } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { formatDateTime } from '@/lib/format'
 import { MIGRATION_FAILURE_LABEL, migrationStatusOf } from '@/lib/storage'
 
@@ -74,7 +75,7 @@ const status = computed(() => (data.value ? migrationStatusOf(data.value) : null
 
       <div class="flex shrink-0 flex-wrap items-center gap-2 text-xs">
         <template v-if="data && status">
-          <span class="rounded-full px-2 leading-5 font-medium" :class="status.badge">{{ status.label }}</span>
+          <StatusBadge :status="status" size="md" />
           <span class="text-foreground tabular-nums">
             已迁 {{ data.migrated.toLocaleString() }} / 共 {{ data.total.toLocaleString() }} 个快照 · 核对不一致
             {{ data.failed.toLocaleString() }} 个（{{ data.failed_objects.toLocaleString() }} 个对象）
@@ -123,8 +124,8 @@ const status = computed(() => (data.value ? migrationStatusOf(data.value) : null
               <span class="shrink-0 rounded bg-warn-soft px-1.5 leading-5 text-warn">{{ MIGRATION_FAILURE_LABEL[f.reason_code] ?? f.reason_code }}</span>
               <div class="min-w-0 flex-1">
                 <div class="leading-5 text-foreground">{{ f.reason }}</div>
-                <div class="font-mono text-[11px] break-all text-muted-foreground">{{ f.storage_key }}</div>
-                <ul class="mt-1 space-y-px text-[11px] text-muted-foreground">
+                <div class="font-mono text-2xs break-all text-muted-foreground">{{ f.storage_key }}</div>
+                <ul class="mt-1 space-y-px text-2xs text-muted-foreground">
                   <li v-for="s in f.snapshots" :key="s.snapshot_id">
                     <span class="text-foreground">{{ s.project_code ?? '—' }} / {{ s.folder_path ?? '—' }} / {{ s.file_name ?? '（找不到文件）' }}</span>
                     v{{ s.version_no }}<template v-if="s.file_deleted">（已删除）</template>
@@ -139,10 +140,10 @@ const status = computed(() => (data.value ? migrationStatusOf(data.value) : null
           </li>
         </ul>
       </div>
-      <p v-if="data?.failures_truncated" class="shrink-0 text-[11px] text-muted-foreground">
+      <p v-if="data?.failures_truncated" class="shrink-0 text-2xs text-muted-foreground">
         只列出了前 200 个对象，还有没列出的；处理完再迁一次会重新核对剩下的。
       </p>
-      <p v-if="data && data.failed > 0" class="shrink-0 text-[11px] text-muted-foreground">
+      <p v-if="data && data.failed > 0" class="shrink-0 text-2xs text-muted-foreground">
         这些快照的位置没有改，还指向源存储。重扫或删除有问题的文件（或者修好存储里的对象）后，可以再迁一次。
       </p>
     </DialogContent>

@@ -164,7 +164,7 @@ defineExpose({ refresh })
 
     <template v-else>
       <!-- 总占用 -->
-      <div class="rounded-lg p-4 shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
+      <div class="rounded-lg p-4 shadow-outline">
         <div class="flex items-end justify-between gap-4">
           <div>
             <div class="text-xs text-muted-foreground">总占用</div>
@@ -200,7 +200,7 @@ defineExpose({ refresh })
       </div>
 
       <!-- 各项目 -->
-      <div class="rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
+      <div class="rounded-lg shadow-outline">
         <Table>
           <TableHeader>
             <TableRow class="bg-muted/60 hover:bg-muted/60">

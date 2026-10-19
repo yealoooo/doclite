@@ -224,7 +224,7 @@ onMounted(() => {
               v-for="t in STATUS_TILES"
               :key="t.status"
               type="button"
-              class="rounded-lg px-3 py-2.5 text-left transition-colors shadow-[0_0_0_1px_rgba(0,0,0,0.08)] hover:bg-muted/60"
+              class="rounded-lg px-3 py-2.5 text-left transition-colors shadow-outline hover:bg-muted/60"
               :class="q.filter.value === t.status ? 'bg-muted shadow-[0_0_0_1.5px_var(--color-foreground)]' : ''"
               :aria-pressed="q.filter.value === t.status"
               :data-testid="`tile-${t.status}`"
@@ -251,7 +251,7 @@ onMounted(() => {
           </div>
 
           <!-- 最近文件 -->
-          <section class="rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
+          <section class="rounded-lg shadow-outline">
             <div class="flex h-11 items-center gap-2 border-b px-4 text-sm">
               <FolderSyncIcon class="size-4 text-muted-foreground" />
               <span class="font-medium text-foreground">{{ filterLabel ? `「${filterLabel}」的文件` : '最近的文件' }}</span>

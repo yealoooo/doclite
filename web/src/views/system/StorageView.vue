@@ -37,6 +37,7 @@ import type { ConnectionTestResult, StorageMigration, StorageProfileItem, Storag
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import GuardedButton from '@/components/app/GuardedButton.vue'
 import PageHeader from '@/components/app/PageHeader.vue'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
 import {
   conflictTitle,
@@ -46,6 +47,7 @@ import {
   migrationPercent,
   setDefaultBlock,
   STATUS_LABEL,
+  STORAGE_STATUS,
   statusBlock,
 } from '@/lib/storage'
 
@@ -314,11 +316,6 @@ onBeforeUnmount(() => {
   if (pollTimer) clearTimeout(pollTimer)
 })
 
-function statusClass(s: StorageStatus): string {
-  if (s === 'active') return 'bg-ok-soft text-ok'
-  if (s === 'readonly') return 'bg-warn-soft text-warn'
-  return 'bg-destructive-soft text-destructive'
-}
 </script>
 
 <template>
@@ -356,7 +353,7 @@ function statusClass(s: StorageStatus): string {
         :key="p.id"
         class="flex flex-col gap-3 rounded-lg px-4 py-3.5"
         :class="[
-          p.id === editingId ? 'shadow-[0_0_0_2px_var(--color-ring)]' : 'shadow-[0_0_0_1px_rgba(0,0,0,0.08)]',
+          p.id === editingId ? 'shadow-[0_0_0_2px_var(--color-ring)]' : 'shadow-outline',
           p.is_default ? 'bg-muted/40' : '',
         ]"
         data-testid="storage-card"
@@ -369,13 +366,11 @@ function statusClass(s: StorageStatus): string {
               <span class="font-semibold text-foreground">{{ p.profile_name }}</span>
               <span
                 v-if="p.is_default"
-                class="inline-flex items-center gap-1 rounded-md bg-primary px-1.5 py-0.5 text-[11px] leading-none text-primary-foreground"
+                class="inline-flex items-center gap-1 rounded-md bg-primary px-1.5 py-0.5 text-2xs leading-none text-primary-foreground"
                 data-testid="default-badge"
               ><StarIcon class="size-3" />默认</span>
-              <span class="rounded-md px-1.5 py-0.5 text-[11px] leading-none" :class="statusClass(p.status)">
-                {{ STATUS_LABEL[p.status] }}
-              </span>
-              <span class="rounded-md bg-secondary px-1.5 py-0.5 text-[11px] leading-none text-muted-foreground">
+              <StatusBadge :status="STORAGE_STATUS[p.status]" />
+              <span class="rounded-md bg-secondary px-1.5 py-0.5 text-2xs leading-none text-muted-foreground">
                 {{ p.in_use ? '有文件存在这里' : '还没有文件' }}
               </span>
             </div>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// "修改中 n 件"的清单（M9，requirements 5.9"不让人忘"，Mockup v3.1 的 askModList）：点归类页顶部的橙色提醒打开。
+// "修改中 n 件"的清单（M9，requirements 5.9"不让人忘"，Mockup v3.1 的 askModList）：点归类页顶部的青色提醒打开。
 // 每行：件（节点名 件号、题名）、来源文件夹、谁 / 何时 / 原因；"去文件目录修改"（/files 打开那个文件夹）、"打开"（右边
 // 打开这一件）、"重新归档…"（页面打开 ResealDialog）。
 // 截图脚本用的属性：data-testid=modifying-dialog（data-count）；每行 modifying-row（data-item-id）；按钮 modifying-reseal。
@@ -45,7 +45,7 @@ function label(it: ModifyingItem) {
         </DialogDescription>
       </DialogHeader>
       <div class="max-h-[55vh] overflow-y-auto">
-        <table class="w-full border-collapse text-[13px]">
+        <table class="w-full border-collapse text-compact">
           <thead>
             <tr class="bg-muted/60 text-left text-xs text-muted-foreground">
               <th class="px-2 py-1.5 font-medium">件</th>
@@ -74,7 +74,7 @@ function label(it: ModifyingItem) {
                   <Button v-if="props.canFiles" size="xs" variant="outline" @click="emit('openFiles', it.source_folder_id)">
                     <ExternalLinkIcon />去修改
                   </Button>
-                  <Button size="xs" class="bg-orange-600 text-white hover:bg-orange-700" data-testid="modifying-reseal" @click="emit('reseal', it)">
+                  <Button size="xs" variant="modify" data-testid="modifying-reseal" @click="emit('reseal', it)">
                     重新归档…
                   </Button>
                 </div>

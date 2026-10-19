@@ -76,7 +76,7 @@ function isLong(d: ItemFieldDef): boolean {
 }
 
 const inputCls =
-  'h-8 w-full min-w-0 rounded-md border border-input bg-background px-2 text-[13px] text-foreground shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-foreground aria-invalid:border-destructive'
+  'h-8 w-full min-w-0 rounded-md border border-input bg-background px-2 text-compact text-foreground shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-foreground aria-invalid:border-destructive'
 </script>
 
 <template>
@@ -89,7 +89,7 @@ const inputCls =
     <button
       v-if="defs.length || orphanKeys.length"
       type="button"
-      class="absolute top-2 right-4 z-10 flex items-center gap-0.5 rounded px-1.5 text-[11px] leading-5 text-muted-foreground hover:bg-muted hover:text-foreground"
+      class="absolute top-2 right-4 z-10 flex items-center gap-0.5 rounded px-1.5 text-2xs leading-5 text-muted-foreground hover:bg-muted hover:text-foreground"
       :title="formCollapsed ? '展开全部著录项' : '只留题名，给下面的页腾地方'"
       data-testid="item-form-toggle"
       @click="formCollapsed = !formCollapsed"
@@ -117,8 +117,8 @@ const inputCls =
           data-testid="item-title"
           @input="emit('input', TITLE_KEY)"
         >
-        <span v-if="fieldError(TITLE_KEY)" class="text-[11px] text-destructive" data-testid="field-error">{{ fieldError(TITLE_KEY) }}</span>
-        <span v-if="theirs[TITLE_KEY] !== undefined" class="text-[11px] text-warn">别人改成了：{{ theirs[TITLE_KEY] || '（空）' }}</span>
+        <span v-if="fieldError(TITLE_KEY)" class="text-2xs text-destructive" data-testid="field-error">{{ fieldError(TITLE_KEY) }}</span>
+        <span v-if="theirs[TITLE_KEY] !== undefined" class="text-2xs text-warn">别人改成了：{{ theirs[TITLE_KEY] || '（空）' }}</span>
       </label>
 
       <!-- 设置里的著录项 -->
@@ -153,7 +153,7 @@ const inputCls =
         <Textarea
           v-else-if="isLong(d)"
           :model-value="props.values[d.key] ?? ''"
-          class="min-h-14 px-2 py-1 text-[13px] md:text-[13px]"
+          class="min-h-14 px-2 py-1 text-compact md:text-compact"
           rows="2"
           :disabled="locked"
           :aria-invalid="!!fieldError(d.key) || undefined"
@@ -170,13 +170,13 @@ const inputCls =
           data-testid="item-field-input"
           @input="emit('field', d.key, ($event.target as HTMLInputElement).value)"
         >
-        <span v-if="fieldError(d.key)" class="text-[11px] text-destructive" data-testid="field-error">{{ fieldError(d.key) }}</span>
+        <span v-if="fieldError(d.key)" class="text-2xs text-destructive" data-testid="field-error">{{ fieldError(d.key) }}</span>
         <span
           v-else-if="issues.get(d.key) && (values[d.key] ?? '').trim() === (initial[d.key] ?? '').trim()"
-          class="text-[11px] text-warn"
+          class="text-2xs text-warn"
           data-testid="field-issue"
         >旧值：{{ issues.get(d.key) }}。不改它照样能保存，锁定前要改掉。</span>
-        <span v-if="theirs[d.key] !== undefined" class="text-[11px] text-warn">别人改成了：{{ theirs[d.key] || '（空）' }}</span>
+        <span v-if="theirs[d.key] !== undefined" class="text-2xs text-warn">别人改成了：{{ theirs[d.key] || '（空）' }}</span>
       </label>
     </div>
 
@@ -191,7 +191,7 @@ const inputCls =
       <div
         v-for="k in orphanKeys"
         :key="k"
-        class="mt-1.5 flex items-center gap-2 text-[13px]"
+        class="mt-1.5 flex items-center gap-2 text-compact"
         data-testid="item-orphan-field"
         :data-key="k"
         :data-cleared="cleared.has(k) ? 'true' : undefined"

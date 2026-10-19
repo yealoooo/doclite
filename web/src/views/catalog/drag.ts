@@ -23,8 +23,8 @@ export function setDragLabel(ev: DragEvent, text: string) {
   const el = document.createElement('div')
   el.textContent = text
   el.style.cssText =
-    'position:fixed;top:-100px;left:-100px;padding:4px 10px;border-radius:6px;font:500 12px system-ui,sans-serif;' +
-    'background:#171717;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.2);white-space:nowrap;pointer-events:none'
+    'position:fixed;top:-100px;left:-100px;padding:4px 10px;border-radius:6px;font:500 12px var(--font-sans);' +
+    'background:var(--foreground);color:var(--background);box-shadow:0 2px 8px rgba(0,0,0,.2);white-space:nowrap;pointer-events:none'
   document.body.appendChild(el)
   try {
     dt.setDragImage(el, -12, -12)

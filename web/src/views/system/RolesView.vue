@@ -229,7 +229,7 @@ function badgeOf(role: RoleItem): { text: string; cls: string } {
         class="flex flex-col gap-0.5 rounded-md px-2.5 py-2 text-left transition-colors"
         :class="
           role.role_code === selectedCode
-            ? 'bg-secondary shadow-[0_0_0_1px_rgba(0,0,0,0.12)]'
+            ? 'bg-secondary shadow-outline'
             : 'hover:bg-muted'
         "
         :data-role="role.role_code"
@@ -237,7 +237,7 @@ function badgeOf(role: RoleItem): { text: string; cls: string } {
       >
         <span class="flex items-center justify-between gap-2">
           <span class="truncate text-sm font-medium text-foreground">{{ role.role_name }}</span>
-          <span class="shrink-0 rounded px-1.5 py-0.5 text-[11px] leading-none" :class="badgeOf(role).cls">
+          <span class="shrink-0 rounded px-1.5 py-0.5 text-2xs leading-none" :class="badgeOf(role).cls">
             {{ badgeOf(role).text }}
           </span>
         </span>

@@ -43,7 +43,7 @@ const steps = computed<Step[]>(() => {
       value: c.total,
       unit: '页',
       bar: c.total > 0 ? '100%' : '0%',
-      color: 'bg-stone-600',
+      color: 'bg-foreground/70',
       rest: [],
       data: {},
     },
@@ -70,7 +70,7 @@ const steps = computed<Step[]>(() => {
       value: it.total,
       unit: `件 · ${formatCount(c.catalog.cataloged)} 页`,
       bar: barWidth(c.catalog.cataloged, c.total),
-      color: 'bg-violet-600',
+      color: 'bg-sealed/60',
       rest: [
         { text: `${formatCount(c.catalog.cataloged)} / ${formatCount(c.total)} 页 · ${percentText(c.catalog.cataloged, c.total)}` },
         ...(it.modifying ? [{ text: ' · 修改中 ' }, { text: formatCount(it.modifying), em: true }, { text: ' 件' }] : []),
@@ -83,7 +83,7 @@ const steps = computed<Step[]>(() => {
       value: it.locked,
       unit: `/ ${formatCount(it.total)} 件`,
       bar: barWidth(it.locked, it.total),
-      color: 'bg-violet-900',
+      color: 'bg-sealed',
       rest: [{ text: '未锁定 ' }, { text: formatCount(it.total - it.locked), em: true }, { text: ' 件' }],
       data: { total: it.total },
     },
@@ -104,7 +104,7 @@ const steps = computed<Step[]>(() => {
 </script>
 
 <template>
-  <div class="grid grid-cols-5 overflow-hidden rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.08)]" data-testid="flow-steps">
+  <div class="grid grid-cols-5 overflow-hidden rounded-lg shadow-outline" data-testid="flow-steps">
     <div
       v-for="(s, i) in steps"
       :key="s.kind"
@@ -123,14 +123,14 @@ const steps = computed<Step[]>(() => {
     >
       <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
         <span
-          class="inline-flex size-[18px] shrink-0 items-center justify-center rounded-full text-[11px]"
+          class="inline-flex size-[18px] shrink-0 items-center justify-center rounded-full text-2xs"
           :class="s.kind === 'exportable' ? 'bg-ok text-white' : 'bg-muted text-muted-foreground'"
         >{{ i + 1 }}</span>
         <span class="truncate">{{ s.label }}</span>
       </div>
       <div class="mt-1 flex flex-wrap items-baseline gap-x-1.5 leading-tight">
         <span class="text-2xl font-semibold tracking-tight text-foreground tabular-nums" data-testid="flow-value">{{ formatCount(s.value) }}</span>
-        <span class="text-[13px] text-muted-foreground tabular-nums">{{ s.unit }}</span>
+        <span class="text-compact text-muted-foreground tabular-nums">{{ s.unit }}</span>
       </div>
       <div class="mt-2 mb-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
         <div class="h-full rounded-full" :class="s.color" :style="{ width: s.bar }" />

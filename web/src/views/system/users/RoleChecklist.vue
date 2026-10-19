@@ -31,7 +31,7 @@ function toggle(id: string, on: boolean) {
 </script>
 
 <template>
-  <div class="flex max-h-72 flex-col overflow-y-auto rounded-lg p-1 shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
+  <div class="flex max-h-72 flex-col overflow-y-auto rounded-lg p-1 shadow-outline">
     <label
       v-for="row in rows"
       :key="row.role.id"

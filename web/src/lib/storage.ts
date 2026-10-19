@@ -11,12 +11,20 @@ import type {
   StorageStatus,
 } from '@/api/types'
 
+import type { StatusStyle } from './status'
 import { charCount } from './validate'
 
 export const STATUS_LABEL: Record<StorageStatus, string> = {
   active: '可读写',
   readonly: '只读',
   disabled: '停用',
+}
+
+/** 存储状态的徽标。 */
+export const STORAGE_STATUS: Record<StorageStatus, StatusStyle> = {
+  active: { label: STATUS_LABEL.active, badge: 'bg-ok-soft text-ok' },
+  readonly: { label: STATUS_LABEL.readonly, badge: 'bg-warn-soft text-warn' },
+  disabled: { label: STATUS_LABEL.disabled, badge: 'bg-destructive-soft text-destructive' },
 }
 
 export const RESULT_LABEL: Record<ConnectionTestResultCode, string> = {
@@ -105,7 +113,7 @@ export function migrateBlock(p: StorageProfileItem, all: StorageProfileItem[]): 
 }
 
 /** 迁移状态的中文和配色。 */
-export function migrationStatusOf(m: StorageMigration): { label: string; badge: string } {
+export function migrationStatusOf(m: StorageMigration): StatusStyle {
   if (m.status === 'running' && m.cancel_requested) return { label: '正在取消', badge: 'bg-muted text-muted-foreground' }
   if (m.status === 'queued' && m.attempts > 0) return { label: '等待重试', badge: 'bg-warn-soft text-warn' }
   switch (m.status) {

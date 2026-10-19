@@ -17,6 +17,7 @@ import { getArchiveItem, itemAction, unsealArchiveItem } from '@/api/catalog'
 import { ApiError, errorMessage, HANDLE_ALL, isApiError } from '@/api/http'
 import type { ArchiveItem } from '@/api/types'
 import { Button } from '@/components/ui/button'
+import { NativeSelect } from '@/components/ui/native-select'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { UNSEAL_REASONS } from '@/lib/catalog'
 
@@ -157,14 +158,14 @@ async function unlock() {
           </div>
           <label class="grid gap-1 text-xs text-muted-foreground">
             原因（选填，记进日志）
-            <select
+            <NativeSelect
               v-model="reason"
-              class="h-8 rounded-md border border-input bg-background px-2 text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              size="sm"
               data-testid="unseal-reason"
             >
               <option value="">（不填）</option>
               <option v-for="r in UNSEAL_REASONS" :key="r" :value="r">{{ r }}</option>
-            </select>
+            </NativeSelect>
           </label>
         </template>
       </template>
@@ -178,7 +179,7 @@ async function unlock() {
         </Button>
         <Button
           v-if="state === 'ready'"
-          class="bg-orange-600 text-white hover:bg-orange-700"
+          variant="modify"
           :disabled="busy !== ''"
           data-testid="unseal-confirm"
           @click="unseal"

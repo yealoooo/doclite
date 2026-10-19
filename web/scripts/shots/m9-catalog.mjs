@@ -17,11 +17,11 @@
 // 4. m9-files-sealed：/files 打开同一个文件夹 → 紫色横条、"上传文件"等按钮置灰；把盒子里直接放的那页移进这个文件夹
 //    （接口）→ 409 folder_archived；再在页面里"移动到…"走一遍，提示是 server 的说明、带"去归类页查看"。
 // 5. m9-files-sealed-scanner：demo_scanner 打开同一个文件夹 → 横条写"要修改请联系归类员解除封存"，没有解除按钮。
-// 6. m9-unseal-dialog：/catalog 左栏横条"解除封存去修改…"→ 对话框，选原因"漏扫了页"；确认 → 橙色横条（三步进度），
+// 6. m9-unseal-dialog：/catalog 左栏横条"解除封存去修改…"→ 对话框，选原因"漏扫了页"；确认 → 青色横条（三步进度），
 //    顶部"修改中 1 件"。
-// 7. m9-files-modifying：/files 打开这个文件夹 → 橙色横条；页面里上传一页（走上传按钮的代码）、接口删一页 → 文件数对。
+// 7. m9-files-modifying：/files 打开这个文件夹 → 青色横条；页面里上传一页（走上传按钮的代码）、接口删一页 → 文件数对。
 // 8. m9-modifying-dialog：/catalog 点"修改中 1 件"→ 清单一行。
-// 9. m9-reseal-dialog：右边双击打开这一件 → 橙色横条；"重新归档…"→ 原来 3 页 → 现在 3 页，新增 1、去掉 1；确认 →
+// 9. m9-reseal-dialog：右边双击打开这一件 → 青色横条；"重新归档…"→ 原来 3 页 → 现在 3 页，新增 1、去掉 1；确认 →
 //    封存（紫色横条），页 = 文件夹现在的样子。
 // 10. m9-item-locked：新传的那页通过后"锁定"→ 已锁定；左栏横条写"已锁定"。
 // 11. m9-batch-lock：回到列表，勾选另外 3 件批量锁定 → 4 件都已锁定。
@@ -340,7 +340,7 @@ export default {
         const b = await bannerState(page)
         assert(b.text.includes('漏扫了页') && b.text.includes('重新归档'), `修改中的横条不对：${b.text}`)
         await extraShot(page, 'm9-catalog-modifying')
-        console.log('  已解除封存：左栏橙色横条（三步进度），顶部"修改中 1 件"（另存 m9-catalog-modifying.png）')
+        console.log('  已解除封存：左栏青色横条（三步进度），顶部"修改中 1 件"（另存 m9-catalog-modifying.png）')
       },
     },
     {
@@ -360,7 +360,7 @@ export default {
         assert(after.length === before.length, `应还是 ${before.length} 个文件：${after.length}`)
         ctx.newFile = after.find((f) => f.file_name === '0004.png')
         await waitFor(page, (n) => document.querySelectorAll('[data-testid=file-cell], [data-testid=file-row]').length === n, after.length)
-        console.log('  /files 修改中：橙色横条；上传了 0004.png，删掉了 0002.png')
+        console.log('  /files 修改中：青色横条；上传了 0004.png，删掉了 0002.png')
       },
     },
     {

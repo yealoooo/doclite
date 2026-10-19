@@ -91,7 +91,7 @@ onBeforeUnmount(() => {
         <div class="flex items-baseline gap-1.5">
           <span class="font-medium text-foreground">{{ logActionLabel(log.action) }}</span>
           <span class="truncate text-xs text-muted-foreground">{{ log.operator_name }}</span>
-          <span class="ml-auto shrink-0 text-[11px] text-muted-foreground">{{ formatDateTime(log.created_at) }}</span>
+          <span class="ml-auto shrink-0 text-2xs text-muted-foreground">{{ formatDateTime(log.created_at) }}</span>
         </div>
         <div v-if="logSummary(log)" class="mt-0.5 text-xs [overflow-wrap:anywhere] text-muted-foreground" data-testid="file-log-summary">
           {{ logSummary(log) }}

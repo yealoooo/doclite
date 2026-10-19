@@ -83,7 +83,7 @@ function onError() {
   <div
     :class="
       cn(
-        'relative flex aspect-[1/1.414] items-center justify-center overflow-hidden rounded-[3px] bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.10)]',
+        'relative flex aspect-[1/1.414] items-center justify-center overflow-hidden rounded-[3px] bg-white shadow-outline',
         state === 'loading' && 'animate-pulse bg-muted',
         props.class,
       )
@@ -111,8 +111,8 @@ function onError() {
     >
       <ImageOffIcon :class="props.compact ? 'size-3.5' : 'size-5'" />
       <template v-if="!props.compact">
-        <span class="text-[11px] leading-tight">{{ state === 'broken' ? '加载失败' : '无封面' }}</span>
-        <span v-if="state === 'error'" class="text-[10px] leading-tight text-destructive">存储不可用</span>
+        <span class="text-2xs leading-tight">{{ state === 'broken' ? '加载失败' : '无封面' }}</span>
+        <span v-if="state === 'error'" class="text-2xs leading-tight text-destructive">存储不可用</span>
       </template>
     </div>
     <slot />

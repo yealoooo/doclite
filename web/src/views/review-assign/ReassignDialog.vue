@@ -27,6 +27,7 @@ import {
 import type { AssignmentReviewer, OpenAssignment, OpenAssignments, ProjectReviewer } from '@/api/types'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import { Button } from '@/components/ui/button'
+import { NativeSelect } from '@/components/ui/native-select'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { formatDateTime } from '@/lib/format'
@@ -415,7 +416,7 @@ async function reassignAllOfFilter() {
         <div
           v-for="row in items"
           :key="row.assignment_id"
-          class="grid items-center gap-2 border-b border-border/60 px-3 py-1.5 text-[13px]"
+          class="grid items-center gap-2 border-b border-border/60 px-3 py-1.5 text-compact"
           :class="row.reviewer_can_review ? (checked.has(row.assignment_id) ? 'bg-info-soft' : '') : 'bg-destructive-soft/70'"
           style="grid-template-columns: 20px minmax(0, 1fr) 52px 180px 104px 76px"
           data-testid="assignment-row"
@@ -432,7 +433,7 @@ async function reassignAllOfFilter() {
           />
           <span class="min-w-0">
             <span class="block truncate text-foreground" :title="row.file_name">{{ row.file_name }}</span>
-            <span class="block truncate text-[11px] text-muted-foreground" :title="`/${row.folder_path}`">/{{ row.folder_path }}</span>
+            <span class="block truncate text-2xs text-muted-foreground" :title="`/${row.folder_path}`">/{{ row.folder_path }}</span>
           </span>
           <span class="text-xs text-muted-foreground">第 {{ row.review_round }} 轮</span>
           <span class="min-w-0">
@@ -441,7 +442,7 @@ async function reassignAllOfFilter() {
             </span>
             <span
               v-if="!row.reviewer_can_review"
-              class="block truncate text-[11px] text-destructive"
+              class="block truncate text-2xs text-destructive"
               data-testid="assignment-problem"
             >{{ reviewerProblemsText(problemOf.get(row.reviewer_id)?.problems ?? []) || '已不能再审' }}</span>
           </span>
@@ -466,16 +467,17 @@ async function reassignAllOfFilter() {
       <div class="flex flex-wrap items-center gap-2 border-t pt-3" data-testid="reassign-footer">
         <label class="flex items-center gap-2 text-sm text-muted-foreground">
           改派给
-          <select
+          <NativeSelect
             v-model="target"
-            class="h-8 min-w-40 rounded-md border bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            size="sm"
+            class="min-w-40"
             data-testid="reassign-target"
           >
             <option :value="null" disabled>选择审核人…</option>
             <option v-for="r in props.targets ?? []" :key="r.id" :value="r.id">
               {{ r.display_name }}（待办 {{ r.open }}）
             </option>
-          </select>
+          </NativeSelect>
         </label>
         <div class="flex-1" />
         <Button

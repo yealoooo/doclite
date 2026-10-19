@@ -22,6 +22,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import { MAX_SCOPE_IDS } from '@/api/export'
 import type { ExportTask } from '@/api/types'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { formatBytes } from '@/lib/files'
 import { formatDateTime } from '@/lib/format'
 import {
@@ -31,6 +32,7 @@ import {
   isWaitingRetry,
   progressPercent,
   scopeTitle,
+  TASK_STATUS,
   taskStatusOf,
 } from '@/lib/export'
 
@@ -122,8 +124,8 @@ const tooManyToReexport = computed(() => t.value.scope_ids.length > MAX_SCOPE_ID
     <div class="grid grid-cols-[minmax(0,1fr)_64px_104px_minmax(150px,210px)] items-start gap-x-4">
       <!-- 范围 -->
       <div class="min-w-0">
-        <div class="truncate text-[13px] font-medium text-foreground" :title="title" data-testid="export-task-scope">{{ title }}</div>
-        <div class="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
+        <div class="truncate text-compact font-medium text-foreground" :title="title" data-testid="export-task-scope">{{ title }}</div>
+        <div class="mt-0.5 flex flex-wrap items-center gap-x-2 text-2xs text-muted-foreground">
           <span
             v-if="t.resubmit_of"
             class="inline-block max-w-full truncate rounded bg-info-soft px-1 align-bottom leading-4 text-info"
@@ -155,32 +157,32 @@ const tooManyToReexport = computed(() => t.value.scope_ids.length > MAX_SCOPE_ID
             </div>
             <span class="shrink-0 text-muted-foreground tabular-nums">{{ percent }}%</span>
           </div>
-          <div class="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
+          <div class="mt-0.5 text-2xs text-muted-foreground tabular-nums">
             生成中 · {{ t.progress_done.toLocaleString() }} / {{ t.progress_total.toLocaleString() }} 页
             <span v-if="t.attempts > 1">· 第 {{ t.attempts }} 次执行</span>
           </div>
         </template>
         <template v-else-if="retrying">
-          <span class="rounded-full bg-warn-soft px-2 leading-5 font-medium text-warn">等待重试</span>
-          <span class="ml-1 text-[11px] text-muted-foreground">已执行 {{ t.attempts }} / {{ t.max_attempts }} 次</span>
+          <StatusBadge :status="TASK_STATUS.retrying" size="md" />
+          <span class="ml-1 text-2xs text-muted-foreground">已执行 {{ t.attempts }} / {{ t.max_attempts }} 次</span>
         </template>
         <template v-else-if="t.status === 'canceled' && t.cleaning_up">
-          <span class="inline-flex items-center gap-1 rounded-full bg-muted px-2 leading-5 font-medium text-muted-foreground" data-testid="export-task-cleaning">
-            <LoaderCircleIcon class="size-3 animate-spin" />正在清理
-          </span>
-          <span class="ml-1 text-[11px] text-muted-foreground">已取消，正在删除已生成的部分</span>
+          <StatusBadge :status="TASK_STATUS.cleaning" size="md" data-testid="export-task-cleaning">
+            <LoaderCircleIcon class="inline size-3 animate-spin align-[-2px]" /> 正在清理
+          </StatusBadge>
+          <span class="ml-1 text-2xs text-muted-foreground">已取消，正在删除已生成的部分</span>
         </template>
         <template v-else-if="expired">
-          <span class="rounded-full bg-muted px-2 leading-5 font-medium text-muted-foreground" data-testid="export-task-expired">已过期</span>
-          <span class="ml-1 text-[11px] text-muted-foreground">导出物已于 {{ formatDateTime(t.expires_at) }} 删除</span>
+          <StatusBadge :status="TASK_STATUS.expired" size="md" data-testid="export-task-expired" />
+          <span class="ml-1 text-2xs text-muted-foreground">导出物已于 {{ formatDateTime(t.expires_at) }} 删除</span>
         </template>
         <template v-else>
-          <span class="rounded-full px-2 leading-5 font-medium" :class="status.badge">{{ status.label }}</span>
-          <span v-if="t.status === 'done'" class="ml-1 text-[11px] text-muted-foreground tabular-nums">
+          <StatusBadge :status="status" size="md" />
+          <span v-if="t.status === 'done'" class="ml-1 text-2xs text-muted-foreground tabular-nums">
             {{ formatBytes(t.output_size) }} · 保留到 {{ formatDateTime(t.expires_at).slice(5) }}
           </span>
-          <span v-else-if="t.status === 'queued'" class="ml-1 text-[11px] text-muted-foreground">等空闲的执行器（同时最多 2 个）</span>
-          <span v-else-if="t.status === 'canceled'" class="ml-1 text-[11px] text-muted-foreground">{{ formatDateTime(t.finished_at) }}</span>
+          <span v-else-if="t.status === 'queued'" class="ml-1 text-2xs text-muted-foreground">等空闲的执行器（同时最多 2 个）</span>
+          <span v-else-if="t.status === 'canceled'" class="ml-1 text-2xs text-muted-foreground">{{ formatDateTime(t.finished_at) }}</span>
         </template>
       </div>
     </div>
@@ -188,7 +190,7 @@ const tooManyToReexport = computed(() => t.value.scope_ids.length > MAX_SCOPE_ID
     <!-- 失败、等待重试的原因（可能有几十行：问题页清单） -->
     <div
       v-if="(t.status === 'failed' || retrying) && t.error_message"
-      class="mt-1.5 rounded-md px-2.5 py-1.5 text-[11px]"
+      class="mt-1.5 rounded-md px-2.5 py-1.5 text-2xs"
       :class="t.status === 'failed' ? 'bg-destructive-soft text-destructive' : 'bg-warn-soft text-warn'"
       data-testid="export-task-error"
       :data-open="errorOpen ? 'true' : undefined"
@@ -245,14 +247,14 @@ const tooManyToReexport = computed(() => t.value.scope_ids.length > MAX_SCOPE_ID
         <button
           v-if="changedCount !== null && changesState === 'error'"
           type="button"
-          class="-ml-2 text-[11px] text-destructive hover:underline"
+          class="-ml-2 text-2xs text-destructive hover:underline"
           :title="`最近一次取交付后变更失败：${props.changes?.error ?? ''}`"
           data-testid="task-changes-error"
           @click="emit('changes')"
         >· 可能已过时，点开重试</button>
         <span
           v-else-if="changedCount !== null && changesState === 'stale'"
-          class="-ml-2 text-[11px] text-muted-foreground"
+          class="-ml-2 text-2xs text-muted-foreground"
           title="项目里有了新的审核、扫描或归类变化，这个数字可能已过时，最迟约 20 秒后更新；点开看最新的"
           data-testid="task-changes-stale"
         >· 可能已过时</span>

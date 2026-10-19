@@ -264,7 +264,7 @@ const headline = computed(() => {
 
 <template>
   <section
-    class="rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.08)]"
+    class="rounded-lg shadow-outline"
     data-testid="hotfolder-card"
     :data-running="running ? 'true' : 'false'"
     :data-configured="config ? 'true' : 'false'"
@@ -320,7 +320,7 @@ const headline = computed(() => {
     <dl class="grid grid-cols-[88px_1fr_auto] items-center gap-x-3 gap-y-2.5 px-4 py-3.5 text-sm">
       <dt class="text-muted-foreground">监控目录</dt>
       <dd class="min-w-0">
-        <code v-if="shownDir" class="font-mono text-[13px] break-all text-foreground" data-testid="hotfolder-dir">{{ shownDir }}</code>
+        <code v-if="shownDir" class="font-mono text-compact break-all text-foreground" data-testid="hotfolder-dir">{{ shownDir }}</code>
         <span v-else class="text-muted-foreground">还没选：扫描软件保存文件的文件夹</span>
         <span v-if="pendingDir" class="ml-2 text-xs text-warn">未保存</span>
       </dd>

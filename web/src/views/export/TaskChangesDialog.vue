@@ -12,6 +12,7 @@ import { computed } from 'vue'
 import type { ExportChangedItem, ExportTask } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { itemStatusOf } from '@/lib/catalog'
 import { formatDateTime } from '@/lib/format'
 import { CHANGE_LABEL, CHANGE_ORDER, itemName } from '@/lib/export'
@@ -121,15 +122,15 @@ function fieldValue(v: unknown): string {
               <span class="shrink-0 font-mono font-medium text-foreground">{{ itemName(it.archive_no, it.item_no) }}</span>
               <span v-if="nowName(it)" class="shrink-0 font-mono text-muted-foreground">→ 现在 {{ nowName(it) }}</span>
               <span class="min-w-0 flex-1 truncate text-foreground" :title="it.title">{{ it.title || '（未填题名）' }}</span>
-              <span v-if="it.deleted" class="shrink-0 rounded-full bg-destructive-soft px-1.5 leading-5 text-destructive">已删除，不补交</span>
-              <span v-else-if="it.now" class="shrink-0 rounded-full px-1.5 leading-5" :class="itemStatusOf(it.now.status).badge">现在{{ itemStatusOf(it.now.status).label }}</span>
+              <StatusBadge v-if="it.deleted" :status="{ label: '已删除，不补交', badge: 'bg-destructive-soft text-destructive' }" />
+              <StatusBadge v-else-if="it.now" :status="itemStatusOf(it.now.status)">现在{{ itemStatusOf(it.now.status).label }}</StatusBadge>
             </div>
             <div class="mt-1 space-y-0.5 pl-10">
               <div v-for="r in it.reasons" :key="r.code" class="flex items-start gap-1.5" :data-reason="r.code">
                 <span class="shrink-0 rounded bg-muted px-1 leading-5 text-muted-foreground">{{ CHANGE_LABEL[r.code] ?? r.code }}</span>
                 <div class="min-w-0 flex-1 leading-5 text-foreground">
                   <template v-if="r.message !== CHANGE_LABEL[r.code]">{{ r.message }}</template>
-                  <ul v-if="r.fields?.length" class="mt-0.5 space-y-px text-[11px] text-muted-foreground">
+                  <ul v-if="r.fields?.length" class="mt-0.5 space-y-px text-2xs text-muted-foreground">
                     <li v-for="f in r.fields" :key="f.key">
                       {{ f.label }}：<span class="line-through">{{ fieldValue(f.before) }}</span> → <span class="text-foreground">{{ fieldValue(f.after) }}</span>
                     </li>
@@ -138,14 +139,14 @@ function fieldValue(v: unknown): string {
               </div>
             </div>
           </li>
-          <li v-if="data.truncated" class="px-3 py-2 text-[11px] text-muted-foreground">
+          <li v-if="data.truncated" class="px-3 py-2 text-2xs text-muted-foreground">
             只列出了前 {{ data.items.length }} 件；有变更的一共 {{ data.changed_count.toLocaleString() }} 件，补交时全部包含。
           </li>
         </ul>
       </div>
 
       <DialogFooter class="items-center">
-        <span v-if="deletedCount" class="mr-auto text-[11px] text-muted-foreground">已删除的 {{ deletedCount }} 件不补交；用同一个档号新建的条目要另外导出。</span>
+        <span v-if="deletedCount" class="mr-auto text-2xs text-muted-foreground">已删除的 {{ deletedCount }} 件不补交；用同一个档号新建的条目要另外导出。</span>
         <Button variant="outline" @click="open = false">关闭</Button>
         <Button
           :disabled="!resubmitCount || !props.task"

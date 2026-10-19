@@ -116,7 +116,7 @@ async function choose(id: string) {
       <PopoverTrigger v-if="props.collapsed" as-child>
         <button
           type="button"
-          class="flex h-10 w-full items-center justify-center rounded-lg bg-background px-0.5 shadow-[0_0_0_1px_rgba(0,0,0,0.1)] hover:bg-sidebar-accent"
+          class="flex h-10 w-full items-center justify-center rounded-lg bg-background px-0.5 shadow-outline hover:bg-sidebar-accent"
           :disabled="project.state !== 'ready'"
           :title="collapsedTitle"
           :aria-label="collapsedTitle"
@@ -181,7 +181,7 @@ async function choose(id: string) {
                 <span class="truncate text-sm text-foreground">{{ p.project_name }}</span>
                 <span
                   v-if="p.status === 'archived'"
-                  class="shrink-0 rounded bg-muted px-1 text-[11px] text-muted-foreground"
+                  class="shrink-0 rounded bg-muted px-1 text-2xs text-muted-foreground"
                 >已归档</span>
               </span>
               <span class="block truncate font-mono text-xs text-muted-foreground">{{ p.project_code }}</span>

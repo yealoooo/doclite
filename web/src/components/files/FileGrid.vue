@@ -12,11 +12,13 @@
 // - M9：子文件夹的格子、行上显示归档状态（FolderArchiveBadge：🔒 节点名 件号 / ✎ 修改中）。
 import { useResizeObserver } from '@vueuse/core'
 import { useVirtualizer } from '@tanstack/vue-virtual'
-import { FolderIcon } from '@lucide/vue'
+
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import FolderArchiveBadge from '@/components/catalog/FolderArchiveBadge.vue'
 import FileCover from '@/components/files/FileCover.vue'
+import FolderGlyph from '@/components/files/FolderGlyph.vue'
+import { StatusBadge } from '@/components/ui/status-badge'
 import type { Selection } from '@/composables/useSelection'
 import { formatDateTime } from '@/lib/format'
 import { formatBytes, formatSpec, isLowDpi, reviewStatusOf } from '@/lib/files'
@@ -203,7 +205,7 @@ defineExpose({ scrollToKey })
 
     <div
       ref="scrollEl"
-      class="min-h-0 flex-1 overflow-y-auto outline-none [scrollbar-gutter:stable]"
+      class="min-h-0 flex-1 overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:ring-inset [scrollbar-gutter:stable]"
       tabindex="0"
       data-testid="file-scroll"
       :data-view="props.view"
@@ -255,26 +257,26 @@ defineExpose({ scrollToKey })
                 >
                   <span
                     v-if="entry.file.cataloged"
-                    class="absolute top-1 left-1 rounded bg-violet-100 px-1 text-[10px] leading-4 text-violet-700"
+                    class="absolute top-1 left-1 rounded bg-sealed-soft px-1 text-2xs leading-4 text-sealed"
                   >已归档</span>
                   <span
                     v-if="entry.file.version_no > 1"
-                    class="absolute top-1 right-1 rounded bg-foreground/75 px-1 font-mono text-[10px] leading-4 text-background"
+                    class="absolute top-1 right-1 rounded bg-foreground/75 px-1 font-mono text-2xs leading-4 text-background"
                   >v{{ entry.file.version_no }}</span>
                   <span
                     v-if="isLowDpi(images.get(entry.file.file_id)?.dpi)"
-                    class="absolute bottom-1 left-1 rounded bg-warn-soft px-1 text-[10px] leading-4 text-warn"
+                    class="absolute bottom-1 left-1 rounded bg-warn-soft px-1 text-2xs leading-4 text-warn"
                     title="DPI 低于 200"
                   >{{ images.get(entry.file.file_id)?.dpi }} dpi</span>
                 </FileCover>
                 <div
                   class="w-full truncate text-center text-foreground"
-                  :class="props.dense ? 'text-[11px]' : 'text-xs'"
+                  :class="props.dense ? 'text-2xs' : 'text-xs'"
                   :title="entry.file.file_name"
                 >
-                  <span v-if="props.dense" class="mr-1 font-mono text-[11px] text-muted-foreground" data-testid="file-position">#{{ positionOf(entry) }}</span>{{ entry.file.file_name }}
+                  <span v-if="props.dense" class="mr-1 font-mono text-2xs text-muted-foreground" data-testid="file-position">#{{ positionOf(entry) }}</span>{{ entry.file.file_name }}
                 </div>
-                <div class="flex items-center gap-1 text-[11px] text-muted-foreground">
+                <div class="flex items-center gap-1 text-2xs text-muted-foreground">
                   <span class="size-1.5 rounded-full" :class="reviewStatusOf(entry.file.review_status).dot" />
                   {{ reviewStatusOf(entry.file.review_status).label }}
                   <span v-if="props.dense && entry.file.version_no > 1" class="font-mono">· v{{ entry.file.version_no }}</span>
@@ -282,12 +284,12 @@ defineExpose({ scrollToKey })
               </template>
               <template v-else>
                 <div class="flex items-center justify-center" :class="props.dense ? 'h-[102px] w-[72px]' : 'h-[130px] w-[92px]'">
-                  <FolderIcon class="size-16 fill-amber-300/70 text-amber-600" :stroke-width="1.25" />
+                  <FolderGlyph class="size-16" :stroke-width="1.25" />
                 </div>
                 <div class="w-full truncate text-center text-xs text-foreground" :title="entry.folder.folder_name">
                   {{ entry.folder.folder_name }}
                 </div>
-                <div class="truncate text-[11px] text-muted-foreground">
+                <div class="truncate text-2xs text-muted-foreground">
                   <template v-if="entry.folder.folder_count">{{ entry.folder.folder_count }} 个文件夹 · </template>
                   {{ entry.folder.file_count }} 个文件
                 </div>
@@ -298,7 +300,7 @@ defineExpose({ scrollToKey })
             <!-- ===== 列表视图 ===== -->
             <div
               v-else
-              class="grid cursor-default items-center gap-2 border-b border-border/60 px-3 text-[13px]"
+              class="grid cursor-default items-center gap-2 border-b border-border/60 px-3 text-compact"
               :class="props.selection.isSelected(entry.key) ? 'bg-info-soft' : 'hover:bg-muted/60'"
               :style="{ gridTemplateColumns: listColumns, height: `${LIST_ROW_H}px` }"
               :data-testid="entry.kind === 'file' ? 'file-row' : 'folder-row'"
@@ -322,18 +324,11 @@ defineExpose({ scrollToKey })
                   <span class="truncate text-foreground" :title="entry.file.file_name">{{ entry.file.file_name }}</span>
                   <span
                     v-if="entry.file.cataloged"
-                    class="shrink-0 rounded bg-violet-100 px-1 text-[10px] leading-4 text-violet-700"
+                    class="shrink-0 rounded bg-sealed-soft px-1 text-2xs leading-4 text-sealed"
                   >已归档</span>
                 </span>
                 <span>
-                  <span
-                    class="inline-flex items-center gap-1 rounded-full px-1.5 text-[11px] leading-5"
-                    :class="reviewStatusOf(entry.file.review_status).badge"
-                    data-testid="review-status"
-                  >
-                    <span class="size-1.5 rounded-full" :class="reviewStatusOf(entry.file.review_status).dot" />
-                    {{ reviewStatusOf(entry.file.review_status).label }}
-                  </span>
+                  <StatusBadge :status="reviewStatusOf(entry.file.review_status)" dot data-testid="review-status" />
                 </span>
                 <span class="font-mono text-xs text-muted-foreground">v{{ entry.file.version_no }}</span>
                 <span
@@ -351,7 +346,7 @@ defineExpose({ scrollToKey })
               </template>
               <template v-else>
                 <span />
-                <FolderIcon class="size-5 fill-amber-300/70 text-amber-600" :stroke-width="1.5" />
+                <FolderGlyph class="size-5" />
                 <span class="flex min-w-0 items-baseline gap-2">
                   <span class="truncate font-medium text-foreground" :title="entry.folder.folder_name">
                     {{ entry.folder.folder_name }}

@@ -5,7 +5,8 @@
 // `{before, after}`（只放变了的字段），另有各动作自己的键（source、batch、cause、moved……）。
 
 import type { AuditLog } from '@/api/types'
-import { CATEGORY_TYPE_LABEL } from '@/lib/catalog'
+import { ARCHIVE_STATE, CATEGORY_TYPE_LABEL } from '@/lib/catalog'
+import type { StatusStyle } from '@/lib/status'
 import { formatDateTime } from '@/lib/format'
 
 /** 对象类型的中文名。 */
@@ -81,6 +82,23 @@ export function targetLabel(type: string): string {
 /** 操作的中文名；type 为空时按通用的叫法。不认识的原样返回。 */
 export function actionLabel(action: string, type?: string | null): string {
   return (type && ACTION_OVERRIDES[type]?.[action]) || ACTION_LABELS[action] || action
+}
+
+/** 操作的徽标颜色：新建绿、删除停用红，归档、锁定、解除封存和归类页同色，其余灰。 */
+export function auditActionStatusOf(action: string, label: string): StatusStyle {
+  const badge =
+    action === 'create'
+      ? 'bg-ok-soft text-ok'
+      : action === 'delete' || action === 'disable'
+        ? 'bg-destructive-soft text-destructive'
+        : action === 'archive' || action === 'reseal'
+          ? ARCHIVE_STATE.archived.badge
+          : action === 'lock'
+            ? ARCHIVE_STATE.locked.badge
+            : action === 'unseal'
+              ? ARCHIVE_STATE.modifying.badge
+              : 'bg-muted text-muted-foreground'
+  return { label, badge }
 }
 
 /** 筛选栏"操作"的选项：选了类型时是这个类型的动作，否则是全部动作（去重）。 */

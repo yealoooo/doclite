@@ -427,7 +427,7 @@ const scopeHint = computed(() => {
   >
     <div class="flex h-11 shrink-0 items-center gap-2 border-b px-4">
       <span class="text-sm font-semibold text-foreground">新建导出</span>
-      <span class="text-[11px] text-muted-foreground">只包含已归档的文件</span>
+      <span class="text-2xs text-muted-foreground">只包含已归档的文件</span>
       <span class="flex-1" />
       <Button variant="ghost" size="icon-xs" aria-label="关闭" data-testid="export-new-close" @click="emit('close')"><XIcon /></Button>
     </div>
@@ -497,14 +497,14 @@ const scopeHint = computed(() => {
                     <span v-if="e.label === null" class="text-muted-foreground">正在取名称…</span>
                     <template v-else>{{ e.label }}</template>
                   </div>
-                  <div v-if="e.sub" class="truncate text-[11px] text-muted-foreground" :title="e.sub">{{ e.sub }}</div>
-                  <div v-if="missing.has(e.id)" class="text-[11px] text-destructive">不存在、已删除或不在这个项目里</div>
+                  <div v-if="e.sub" class="truncate text-2xs text-muted-foreground" :title="e.sub">{{ e.sub }}</div>
+                  <div v-if="missing.has(e.id)" class="text-2xs text-destructive">不存在、已删除或不在这个项目里</div>
                 </div>
                 <button type="button" class="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="移除" data-testid="scope-entry-remove" @click="removeEntry(e.id)">
                   <XIcon class="size-3.5" />
                 </button>
               </li>
-              <li v-if="entries.length > 200" class="px-3 py-1.5 text-[11px] text-muted-foreground">另外 {{ (entries.length - 200).toLocaleString() }} 个没有列出</li>
+              <li v-if="entries.length > 200" class="px-3 py-1.5 text-2xs text-muted-foreground">另外 {{ (entries.length - 200).toLocaleString() }} 个没有列出</li>
             </ul>
           </div>
           <div class="mt-1.5 flex flex-wrap items-center gap-2">
@@ -524,12 +524,12 @@ const scopeHint = computed(() => {
               data-testid="scope-add-item"
               @click="itemPickerOpen = true"
             ><PlusIcon />从归类树选条目…</Button>
-            <span class="text-[11px] text-muted-foreground">{{ scopeHint }}</span>
+            <span class="text-2xs text-muted-foreground">{{ scopeHint }}</span>
           </div>
-          <p v-if="scopeNotice && mode === 'item'" class="mt-1.5 rounded-md bg-warn-soft px-2.5 py-1.5 text-[11px] text-warn" data-testid="scope-notice">
+          <p v-if="scopeNotice && mode === 'item'" class="mt-1.5 rounded-md bg-warn-soft px-2.5 py-1.5 text-2xs text-warn" data-testid="scope-notice">
             {{ scopeNotice }}
           </p>
-          <p v-if="!props.canPickScope" class="mt-1.5 text-[11px] text-muted-foreground">
+          <p v-if="!props.canPickScope" class="mt-1.5 text-2xs text-muted-foreground">
             选范围要用归类树（归类菜单），你的账号没有这个菜单；可以用任务列表里的"按原来的范围重新导出"或补交交付后变更。
           </p>
         </template>
@@ -557,13 +557,13 @@ const scopeHint = computed(() => {
           >
             <div class="flex items-center gap-1.5 font-medium text-foreground">
               {{ f.label }}
-              <span v-if="f.future" class="rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground">以后的版本</span>
+              <span v-if="f.future" class="rounded bg-muted px-1 text-2xs font-normal text-muted-foreground">以后的版本</span>
               <CheckIcon v-else-if="format === f.value" class="ml-auto size-3.5" />
             </div>
-            <div class="mt-0.5 text-[11px] text-muted-foreground">{{ f.description }}</div>
+            <div class="mt-0.5 text-2xs text-muted-foreground">{{ f.description }}</div>
           </button>
         </div>
-        <p class="mt-1.5 text-[11px] text-muted-foreground">两种都附目录.xlsx（每件一行）和清单.csv（每页一行，可以按 file_id、snapshot_id 反查）。</p>
+        <p class="mt-1.5 text-2xs text-muted-foreground">两种都附目录.xlsx（每件一行）和清单.csv（每页一行，可以按 file_id、snapshot_id 反查）。</p>
       </section>
 
       <!-- 选项 -->
@@ -572,9 +572,9 @@ const scopeHint = computed(() => {
         <label class="flex cursor-pointer items-center gap-2 text-xs text-foreground" data-testid="export-only-approved" :data-checked="onlyApproved ? 'true' : 'false'">
           <Checkbox :model-value="onlyApproved" @update:model-value="(v) => (onlyApproved = v === true)" />
           只导出审核通过的文件
-          <span class="text-[11px] text-muted-foreground">（不勾选就包含所有已归档的文件）</span>
+          <span class="text-2xs text-muted-foreground">（不勾选就包含所有已归档的文件）</span>
         </label>
-        <p class="mt-1 text-[11px] text-muted-foreground">
+        <p class="mt-1 text-2xs text-muted-foreground">
           每页用建任务那一刻的最新版本，明细里记下用的是哪一版；之后的重扫、改页序不影响这次导出，会出现在"交付后变更"里。
           <template v-if="precheck?.require_locked_item">项目设置要求导出的件已锁定。</template>
         </p>
@@ -597,12 +597,12 @@ const scopeHint = computed(() => {
         <div class="mb-1.5 flex items-center gap-2">
           <span class="text-xs font-medium text-muted-foreground">预检</span>
           <LoaderCircleIcon v-if="precheckState === 'loading' || refreshing" class="size-3.5 animate-spin text-muted-foreground" />
-          <span v-if="refreshing" class="text-[11px] text-muted-foreground" data-testid="precheck-refreshing">项目里有变化，正在重新预检</span>
+          <span v-if="refreshing" class="text-2xs text-muted-foreground" data-testid="precheck-refreshing">项目里有变化，正在重新预检</span>
           <span class="flex-1" />
           <button
             v-if="body"
             type="button"
-            class="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+            class="inline-flex items-center gap-1 text-2xs text-muted-foreground hover:text-foreground"
             data-testid="precheck-rerun"
             @click="runPrecheck()"
           ><RefreshCwIcon class="size-3" />重新预检</button>
@@ -617,20 +617,20 @@ const scopeHint = computed(() => {
           <LoaderCircleIcon class="size-3.5 animate-spin" />正在预检…
         </div>
         <div v-else class="space-y-2" :class="!fresh && 'opacity-60'">
-          <p v-if="refreshError" class="text-[11px] text-muted-foreground" data-testid="precheck-refresh-error">
+          <p v-if="refreshError" class="text-2xs text-muted-foreground" data-testid="precheck-refresh-error">
             重新预检失败（{{ refreshError }}），下面是上一次的结果；建任务时数据变了会提示。
           </p>
           <div class="grid grid-cols-3 gap-2 text-xs">
             <div class="rounded-lg border px-2.5 py-2">
-              <div class="text-[11px] text-muted-foreground">范围</div>
+              <div class="text-2xs text-muted-foreground">范围</div>
               <div class="mt-0.5 font-medium text-foreground tabular-nums" data-testid="precheck-scope">{{ precheck.item_count.toLocaleString() }} 件 · {{ precheck.page_count.toLocaleString() }} 页</div>
             </div>
             <div class="rounded-lg border px-2.5 py-2">
-              <div class="text-[11px] text-muted-foreground">就绪</div>
+              <div class="text-2xs text-muted-foreground">就绪</div>
               <div class="mt-0.5 font-medium text-ok tabular-nums" data-testid="precheck-ready">{{ precheck.ready_item_count.toLocaleString() }} 件 · {{ precheck.ready_page_count.toLocaleString() }} 页</div>
             </div>
             <div class="rounded-lg border px-2.5 py-2">
-              <div class="text-[11px] text-muted-foreground">不就绪</div>
+              <div class="text-2xs text-muted-foreground">不就绪</div>
               <div class="mt-0.5 font-medium tabular-nums" :class="precheck.not_ready_count ? 'text-warn' : 'text-foreground'" data-testid="precheck-not-ready">
                 {{ precheck.not_ready_count.toLocaleString() }} 件
               </div>
@@ -645,7 +645,7 @@ const scopeHint = computed(() => {
             <CircleAlertIcon class="mt-px size-3.5 shrink-0" />
             <div>
               {{ precheck.page_limit_message }}
-              <div class="mt-0.5 text-destructive/80">在范围里分别选下级节点，分几次导出（每次最多 {{ precheck.max_page_count.toLocaleString() }} 页）。</div>
+              <div class="mt-0.5 text-destructive">在范围里分别选下级节点，分几次导出（每次最多 {{ precheck.max_page_count.toLocaleString() }} 页）。</div>
             </div>
           </div>
 
@@ -674,14 +674,14 @@ const scopeHint = computed(() => {
                 <span class="font-mono font-medium">{{ itemName(it.archive_no, it.item_no) }}</span>
                 <span class="text-muted-foreground">：{{ shortIssue(it) }}</span>
                 <template v-if="showAll">
-                  <div class="truncate pl-3 text-[11px] text-muted-foreground" :title="`${it.title} · ${it.category_names.join(' / ')}`">
+                  <div class="truncate pl-3 text-2xs text-muted-foreground" :title="`${it.title} · ${it.category_names.join(' / ')}`">
                     {{ it.title || '（未填题名）' }} · {{ it.category_names.join(' / ') }} · {{ it.page_count }} 页
                   </div>
-                  <div v-for="r in it.reasons" :key="r.code" class="pl-3 text-[11px] text-warn">{{ r.message }}</div>
+                  <div v-for="r in it.reasons" :key="r.code" class="pl-3 text-2xs text-warn">{{ r.message }}</div>
                 </template>
               </li>
             </ul>
-            <p v-if="showAll && precheck.not_ready_truncated" class="mt-1.5 text-[11px] text-muted-foreground" data-testid="precheck-truncated">
+            <p v-if="showAll && precheck.not_ready_truncated" class="mt-1.5 text-2xs text-muted-foreground" data-testid="precheck-truncated">
               只列出了前 {{ precheck.not_ready.length }} 件；上面的件数是全部的。
             </p>
             <button
@@ -691,7 +691,7 @@ const scopeHint = computed(() => {
               data-testid="precheck-show-all"
               @click="showAll = !showAll"
             >{{ showAll ? '收起' : `查看全部问题（${precheck.not_ready_count.toLocaleString()} 件）` }}</button>
-            <p class="mt-1.5 text-[11px] text-muted-foreground">可以只导出就绪的，也可以先回归类里处理这些条目再导出。</p>
+            <p class="mt-1.5 text-2xs text-muted-foreground">可以只导出就绪的，也可以先回归类里处理这些条目再导出。</p>
           </div>
         </div>
       </section>

@@ -218,7 +218,7 @@ const badge = computed(() => (total.value === null ? '' : total.value > 999 ? '9
               <Button size="xs" variant="outline" data-testid="rescan-item-upload" @click="openRescan(it)">
                 <ScanLineIcon />上传重扫件
               </Button>
-              <span class="text-[11px] text-muted-foreground">第 {{ it.review_round }} 轮 · v{{ it.version_no }}</span>
+              <span class="text-2xs text-muted-foreground">第 {{ it.review_round }} 轮 · v{{ it.version_no }}</span>
             </div>
           </div>
         </li>
@@ -230,7 +230,7 @@ const badge = computed(() => (total.value === null ? '' : total.value > 999 ? '9
       </div>
     </div>
 
-    <div class="shrink-0 border-t px-4 py-2 text-[11px] leading-relaxed text-muted-foreground">
+    <div class="shrink-0 border-t px-4 py-2 text-2xs leading-relaxed text-muted-foreground">
       重扫件追加到原来的文件（新版本），文件名、位置和归类都不变；上传后自动回到驳回它的审核人那里。
     </div>
 

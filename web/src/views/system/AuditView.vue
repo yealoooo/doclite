@@ -14,12 +14,15 @@ import { AUDIT_PAGE_SIZE, type AuditQuery, getAuditFilterOptions, listAuditLogs 
 import { errorMessage, HANDLE_ALL } from '@/api/http'
 import type { AuditFilterOptions, AuditLog } from '@/api/types'
 import PageHeader from '@/components/app/PageHeader.vue'
-import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { NativeSelect } from '@/components/ui/native-select'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   actionLabel,
   actionOptions,
+  auditActionStatusOf,
   describe,
   detailRows,
   formatAuditTime,
@@ -222,15 +225,6 @@ onMounted(async () => {
   }
 })
 
-function actionClass(action: string): string {
-  if (action === 'create') return 'bg-ok-soft text-ok'
-  if (action === 'delete' || action === 'disable') return 'bg-destructive-soft text-destructive'
-  if (action === 'lock' || action === 'unlock') return 'bg-info-soft text-info'
-  return ''
-}
-
-const CONTROL =
-  'h-8 rounded-md border bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50'
 </script>
 
 <template>
@@ -246,46 +240,46 @@ const CONTROL =
     <div class="flex flex-wrap items-end gap-3" data-testid="audit-filters">
       <label class="flex flex-col gap-1 text-xs text-muted-foreground">
         开始日期
-        <input v-model="filters.from" type="date" :class="CONTROL" data-testid="audit-from" />
+        <Input v-model="filters.from" type="date" class="h-8 w-auto" data-testid="audit-from" />
       </label>
       <label class="flex flex-col gap-1 text-xs text-muted-foreground">
         结束日期
-        <input v-model="filters.to" type="date" :class="CONTROL" data-testid="audit-to" />
+        <Input v-model="filters.to" type="date" class="h-8 w-auto" data-testid="audit-to" />
       </label>
       <label class="flex flex-col gap-1 text-xs text-muted-foreground">
         操作人
-        <select v-model="filters.operator" :class="[CONTROL, 'w-52']" data-testid="audit-operator">
+        <NativeSelect v-model="filters.operator" size="sm" class="w-52" data-testid="audit-operator">
           <option value="">全部</option>
           <option v-for="o in operatorOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-        </select>
+        </NativeSelect>
       </label>
       <label class="flex flex-col gap-1 text-xs text-muted-foreground">
         项目
-        <select v-model="filters.project" :class="[CONTROL, 'w-56']" data-testid="audit-project">
+        <NativeSelect v-model="filters.project" size="sm" class="w-56" data-testid="audit-project">
           <option value="">全部</option>
           <option v-for="o in projectOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-        </select>
+        </NativeSelect>
       </label>
       <label class="flex flex-col gap-1 text-xs text-muted-foreground">
         对象
-        <select v-model="filters.type" :class="[CONTROL, 'w-32']" data-testid="audit-type">
+        <NativeSelect v-model="filters.type" size="sm" class="w-32" data-testid="audit-type">
           <option value="">全部</option>
           <option v-for="o in typeOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-        </select>
+        </NativeSelect>
       </label>
       <label class="flex flex-col gap-1 text-xs text-muted-foreground">
         操作
-        <select v-model="filters.action" :class="[CONTROL, 'w-44']" data-testid="audit-action">
+        <NativeSelect v-model="filters.action" size="sm" class="w-44" data-testid="audit-action">
           <option value="">全部</option>
           <option v-for="o in actionChoices" :key="o.value" :value="o.value">{{ o.label }}</option>
-        </select>
+        </NativeSelect>
       </label>
       <Button size="sm" variant="ghost" :disabled="!hasFilters" data-testid="audit-reset" @click="resetFilters">
         <RotateCcwIcon />清空条件
       </Button>
     </div>
 
-    <div class="rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
+    <div class="rounded-lg shadow-outline">
       <Table class="table-fixed">
         <TableHeader>
           <TableRow class="bg-muted/60 hover:bg-muted/60">
@@ -337,9 +331,7 @@ const CONTROL =
                 {{ r.object.name }}
               </TableCell>
               <TableCell>
-                <Badge variant="secondary" class="rounded-md font-normal" :class="actionClass(r.log.action)">
-                  {{ r.action }}
-                </Badge>
+                <StatusBadge :status="auditActionStatusOf(r.log.action, r.action)" size="md" />
               </TableCell>
               <TableCell class="truncate pr-4 text-muted-foreground" :title="r.summary">{{ r.summary || '—' }}</TableCell>
             </TableRow>
@@ -367,7 +359,7 @@ const CONTROL =
                         <td
                           v-if="c.before !== undefined"
                           class="py-1 pr-3 break-all"
-                          :class="c.before === c.after ? 'text-muted-foreground' : 'text-destructive/80'"
+                          :class="c.before === c.after ? 'text-muted-foreground' : 'text-destructive'"
                         >
                           {{ c.before }}
                         </td>
@@ -383,7 +375,7 @@ const CONTROL =
                       <dd class="break-all text-foreground">{{ o.after }}</dd>
                     </template>
                   </dl>
-                  <p class="font-mono text-[11px] text-muted-foreground">
+                  <p class="font-mono text-2xs text-muted-foreground">
                     #{{ r.log.id }} · {{ r.log.target_type }} / {{ r.log.action }} · {{ r.log.target_id }}
                     <template v-if="r.log.operator_username"> · {{ r.log.operator_username }}</template>
                   </p>

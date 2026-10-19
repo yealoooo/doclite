@@ -14,6 +14,7 @@ import { getLicense, importLicense, LICENSE_IMPORT_CODES } from '@/api/license'
 import type { LicenseState, LicenseStatusCode } from '@/api/types'
 import PageHeader from '@/components/app/PageHeader.vue'
 import { Button } from '@/components/ui/button'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { Textarea } from '@/components/ui/textarea'
 import { copyText } from '@/lib/clipboard'
 import { formatDateTime } from '@/lib/format'
@@ -44,7 +45,7 @@ const STATUS_LABEL: Record<LicenseStatusCode, string> = {
 }
 
 const STATUS_CLASS: Record<LicenseStatusCode, string> = {
-  dev: 'bg-secondary text-muted-foreground',
+  dev: 'bg-muted text-muted-foreground',
   missing: 'bg-destructive-soft text-destructive',
   valid: 'bg-ok-soft text-ok',
   expiring: 'bg-warn-soft text-warn',
@@ -165,13 +166,13 @@ function importErrorText(code: string, message: string): string {
 <template>
   <PageHeader>
     <template #meta>
-      <span
+      <StatusBadge
         v-if="state"
-        class="rounded-md px-2 py-0.5 text-xs"
-        :class="STATUS_CLASS[state.status]"
+        :status="{ label: STATUS_LABEL[state.status], badge: STATUS_CLASS[state.status] }"
+        size="md"
         data-testid="license-status"
         :data-status="state.status"
-      >{{ STATUS_LABEL[state.status] }}</span>
+      />
     </template>
   </PageHeader>
 
@@ -188,7 +189,7 @@ function importErrorText(code: string, message: string): string {
 
       <template v-if="state">
         <!-- 状态和许可证内容 -->
-        <article class="flex flex-col gap-3 rounded-lg px-4 py-4 shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
+        <article class="flex flex-col gap-3 rounded-lg px-4 py-4 shadow-outline">
           <div class="flex items-start gap-3">
             <ShieldCheckIcon class="mt-0.5 size-5 shrink-0 text-muted-foreground" />
             <div class="flex min-w-0 flex-col gap-1">
@@ -229,7 +230,7 @@ function importErrorText(code: string, message: string): string {
         </article>
 
         <!-- install_id -->
-        <article class="flex flex-col gap-2 rounded-lg px-4 py-4 shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
+        <article class="flex flex-col gap-2 rounded-lg px-4 py-4 shadow-outline">
           <div class="flex items-center gap-2">
             <KeyRoundIcon class="size-4 shrink-0 text-muted-foreground" />
             <h2 class="text-sm font-semibold text-foreground">install_id</h2>
@@ -249,7 +250,7 @@ function importErrorText(code: string, message: string): string {
         <!-- 导入 -->
         <article
           v-if="state.status !== 'dev'"
-          class="flex flex-col gap-3 rounded-lg px-4 py-4 shadow-[0_0_0_1px_rgba(0,0,0,0.08)]"
+          class="flex flex-col gap-3 rounded-lg px-4 py-4 shadow-outline"
           data-testid="license-import"
         >
           <div class="flex items-center gap-2">

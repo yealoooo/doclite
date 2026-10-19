@@ -8,6 +8,7 @@ import { useRouter } from 'vue-router'
 import { getFolder } from '@/api/folders'
 import { HANDLE_ALL, isApiError } from '@/api/http'
 import { Button } from '@/components/ui/button'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { formatDateTime } from '@/lib/format'
 import type { HotFolderStatus } from '@/lib/scan-queue'
 import { shellErrorMessage } from '@/lib/shell'
@@ -79,7 +80,7 @@ watch(
     <dl class="grid grid-cols-[88px_1fr] items-baseline gap-x-3 gap-y-2.5">
       <dt class="text-muted-foreground">状态</dt>
       <dd class="flex flex-wrap items-center gap-2">
-        <span class="rounded-md px-2 py-0.5 text-xs" :class="state.cls" data-testid="settings-hotfolder-state">{{ state.text }}</span>
+        <StatusBadge :status="{ label: state.text, badge: state.cls }" size="md" data-testid="settings-hotfolder-state" />
         <span v-if="props.hotfolder?.running" class="text-xs text-muted-foreground">
           {{ props.hotfolder.watching ? '实时监控目录' : `目录事件不可用，每 ${config?.scan_interval_secs ?? 15} 秒扫描一次` }}
           <template v-if="props.hotfolder.last_scan_at"> · 上次全量扫描 {{ formatDateTime(props.hotfolder.last_scan_at, { seconds: true }) }}</template>

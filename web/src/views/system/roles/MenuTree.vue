@@ -78,7 +78,7 @@ function toggleGroup(node: Node) {
 </script>
 
 <template>
-  <div class="rounded-lg p-1.5 shadow-[0_0_0_1px_rgba(0,0,0,0.08)]" data-testid="menu-tree">
+  <div class="rounded-lg p-1.5 shadow-outline" data-testid="menu-tree">
     <template v-for="node in tree" :key="node.item.menu.menu_code">
       <!-- 分组：勾选框表示子菜单全选/半选 -->
       <label

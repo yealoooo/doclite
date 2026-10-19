@@ -85,11 +85,11 @@ async function start() {
               {{ t.profile_name }}
               <span
                 v-if="t.is_default"
-                class="inline-flex items-center gap-1 rounded-md bg-primary px-1.5 py-0.5 text-[10px] leading-none font-normal text-primary-foreground"
+                class="inline-flex items-center gap-1 rounded-md bg-primary px-1.5 py-0.5 text-2xs leading-none font-normal text-primary-foreground"
               ><StarIcon class="size-2.5" />默认</span>
               <CheckIcon v-if="targetId === t.id" class="ml-auto size-3.5" />
             </div>
-            <div class="mt-0.5 break-all text-[11px] text-muted-foreground">
+            <div class="mt-0.5 break-all text-2xs text-muted-foreground">
               bucket <code class="text-foreground">{{ t.bucket }}</code> · 前缀
               <code class="text-foreground">{{ t.path_prefix || '（无）' }}</code> · {{ t.endpoint }}
             </div>
@@ -97,7 +97,7 @@ async function start() {
         </div>
         <p
           v-if="target && !target.is_default"
-          class="mt-2 rounded-md bg-warn-soft px-3 py-2 text-[11px] text-foreground"
+          class="mt-2 rounded-md bg-warn-soft px-3 py-2 text-2xs text-foreground"
           data-testid="migrate-not-default"
         >
           「{{ target.profile_name }}」不是默认存储：迁移期间和之后新上传的文件仍写到默认存储。

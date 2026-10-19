@@ -220,7 +220,7 @@ async function copyDiagnostics() {
     data-testid="settings-page"
     :data-state="!inShell ? 'browser' : ready ? 'ready' : 'loading'"
   >
-    <div v-if="!inShell" class="flex max-w-xl items-start gap-3 rounded-lg p-5 shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
+    <div v-if="!inShell" class="flex max-w-xl items-start gap-3 rounded-lg p-5 shadow-outline">
       <MonitorIcon class="mt-0.5 size-5 shrink-0 text-muted-foreground" />
       <p class="text-sm leading-relaxed text-muted-foreground">
         设置页只在 Doclite 桌面客户端里有：服务器地址、本机的数据目录、图片缓存、上传队列和热文件夹都是客户端的。

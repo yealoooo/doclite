@@ -9,6 +9,7 @@ import { computed } from 'vue'
 
 import type { StorageMigration } from '@/api/types'
 import { Button } from '@/components/ui/button'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { formatDateTime } from '@/lib/format'
 import { migrationActive, migrationPercent, migrationStatusOf } from '@/lib/storage'
 
@@ -40,8 +41,8 @@ const retrying = computed(() => m.value.status === 'queued' && m.value.attempts 
   >
     <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
       <span class="font-medium text-foreground">迁移到「{{ m.target_profile_name }}」</span>
-      <span class="rounded-full px-2 leading-5 font-medium" :class="status.badge">{{ status.label }}</span>
-      <span class="text-[11px] text-muted-foreground">
+      <StatusBadge :status="status" size="md" />
+      <span class="text-2xs text-muted-foreground">
         {{ m.created_by_name ?? '—' }} · {{ formatDateTime(m.created_at) }}
         <template v-if="m.finished_at"> · 结束于 {{ formatDateTime(m.finished_at) }}</template>
       </span>
@@ -79,7 +80,7 @@ const retrying = computed(() => m.value.status === 'queued' && m.value.attempts 
       </div>
     </div>
 
-    <p class="mt-1.5 text-[11px] text-muted-foreground tabular-nums" data-testid="storage-migration-counts">
+    <p class="mt-1.5 text-2xs text-muted-foreground tabular-nums" data-testid="storage-migration-counts">
       已迁 {{ m.migrated.toLocaleString() }} / 共 {{ m.total.toLocaleString() }} 个快照
       <template v-if="m.failed > 0">
         · <span class="text-warn">核对不一致 {{ m.failed.toLocaleString() }} 个（{{ m.failed_objects.toLocaleString() }} 个对象，没有改）</span>
@@ -88,21 +89,21 @@ const retrying = computed(() => m.value.status === 'queued' && m.value.attempts 
       <template v-if="m.status === 'queued' && !retrying"> · 等空闲的执行器</template>
     </p>
 
-    <p v-if="m.status === 'running' && m.cancel_requested" class="mt-1 text-[11px] text-muted-foreground">
+    <p v-if="m.status === 'running' && m.cancel_requested" class="mt-1 text-2xs text-muted-foreground">
       正在停下：手上的这几个做完就停，已经迁的不退回。
     </p>
     <p
       v-if="(m.status === 'failed' || retrying) && m.error_message"
-      class="mt-1.5 rounded-md px-2.5 py-1.5 text-[11px] break-all"
+      class="mt-1.5 rounded-md px-2.5 py-1.5 text-2xs break-all"
       :class="m.status === 'failed' ? 'bg-destructive-soft text-destructive' : 'bg-warn-soft text-warn'"
       data-testid="storage-migration-error"
     >
       {{ m.error_message }}
     </p>
-    <p v-if="m.status === 'done' && !props.sourceInUse" class="mt-1 text-[11px] text-ok" data-testid="storage-migration-empty">
+    <p v-if="m.status === 'done' && !props.sourceInUse" class="mt-1 text-2xs text-ok" data-testid="storage-migration-empty">
       这个存储里已经没有文件了。建议先改为只读（旧的导出物仍能下载），等导出物到期被自动清理后再停用；存储里的对象没有删除。
     </p>
-    <p v-else-if="!active && props.sourceInUse" class="mt-1 text-[11px] text-muted-foreground">
+    <p v-else-if="!active && props.sourceInUse" class="mt-1 text-2xs text-muted-foreground">
       这个存储里还有文件（{{ m.failed > 0 ? '核对不一致的、' : '' }}没迁完的），可以处理后再迁一次。
     </p>
   </div>

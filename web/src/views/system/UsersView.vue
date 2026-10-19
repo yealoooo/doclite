@@ -283,7 +283,7 @@ async function enable(user: UserItem) {
       </p>
     </div>
 
-    <div class="rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
+    <div class="rounded-lg shadow-outline">
       <Table>
         <TableHeader>
           <TableRow class="bg-muted/60 hover:bg-muted/60">
@@ -307,7 +307,7 @@ async function enable(user: UserItem) {
                   </TooltipTrigger>
                   <TooltipContent>{{ privilegeBlock(user) }}</TooltipContent>
                 </Tooltip>
-                <Badge v-if="user.id === session.me?.id" variant="outline" class="h-4.5 px-1.5 text-[11px]">我</Badge>
+                <Badge v-if="user.id === session.me?.id" variant="outline" class="h-4.5 px-1.5 text-2xs">我</Badge>
               </span>
             </TableCell>
             <TableCell>{{ user.display_name }}</TableCell>

@@ -323,7 +323,7 @@ onBeforeUnmount(() => {
           <div class="flex-1" />
           <Button v-if="expanded.size" variant="ghost" size="xs" data-testid="collapse-all" @click="collapseAll">全部收起</Button>
         </div>
-        <FolderProgressTable class="overflow-hidden rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.08)]" :rows="rows" @toggle="toggle" />
+        <FolderProgressTable class="overflow-hidden rounded-lg shadow-outline" :rows="rows" @toggle="toggle" />
       </div>
     </section>
   </div>

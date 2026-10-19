@@ -4,7 +4,7 @@
 //
 // - **档号只读**，按模板自动生成；为空时显示原因（`archive_no_reason`）：缺级、撞号（可以跳到占用的条目）、未生成
 //   （"按新模板重新生成"）、模板不对。件号未锁定时可以改（撞号、被占用 409 `conflict`，提示换一个号）。
-// - **封存横条**（M9）：已封存（紫色）写来源文件夹、"页来自文件夹，这里不能改页"和"解除封存去修改…"；修改中（橙色）写
+// - **封存横条**（M9）：已封存（紫色）写来源文件夹、"页来自文件夹，这里不能改页"和"解除封存去修改…"；修改中（青色）写
 //   谁、何时、原因，"去文件目录"（左栏打开来源文件夹）和"重新归档…"。解除封存、重新归档的对话框在页面里
 //   （`unseal`、`reseal` 事件）。
 // - **著录表单**按 catalog-settings 的 item_fields 动态生成：text（长的用多行框）、date、enum（下拉）。旧值（Q1）：库里
@@ -30,7 +30,6 @@ import {
   LockIcon,
   LockOpenIcon,
   PencilIcon,
-  PencilLineIcon,
   RefreshCwIcon,
   SaveIcon,
   Undo2Icon,
@@ -43,11 +42,15 @@ import { deleteArchiveItem, getArchiveItem, type ItemAction, itemAction, updateA
 import { ApiError, errorMessage, HANDLE_ALL, handledGlobally, isApiError } from '@/api/http'
 import type { ArchiveItem, CatalogSettings, FieldIssue, FileEntry, ItemFieldDef, UpdateArchiveItemBody } from '@/api/types'
 import CategoryPicker, { type PickedCategory } from '@/components/catalog/CategoryPicker.vue'
+import StateBanner from '@/components/catalog/StateBanner.vue'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import GuardedButton from '@/components/app/GuardedButton.vue'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { useSelection } from '@/composables/useSelection'
 import {
+  ARCHIVE_STATE,
   archiveNoReasonShort,
   checkFieldValue,
   checkTitle,
@@ -747,44 +750,30 @@ defineExpose({
     </div>
 
     <template v-else-if="item">
-      <!-- 封存横条（M9） -->
-      <div
-        v-if="modifying"
-        class="grid shrink-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2.5 gap-y-1.5 border-b border-orange-300 bg-orange-50 px-3 py-2 text-xs leading-relaxed text-orange-950"
-        data-testid="item-banner"
-        data-state="modifying"
-      >
-        <PencilLineIcon class="mt-0.5 size-4 shrink-0 text-orange-700" />
-        <div class="min-w-0">
-          <b class="text-[13px] text-orange-800">修改中</b>：来源文件夹已解除封存（{{ item.unsealed_by_name ?? '有人' }}
-          {{ formatDateTime(item.unsealed_at) }}{{ item.unseal_reason ? `，${item.unseal_reason}` : '' }}）。改完后重新归档；在此之前不能锁定、不能导出。
-          <span v-if="item.source_folder_deleted" class="block text-destructive">来源文件夹已被删除：不能重新归档，不要这一件了请"撤销归档"。</span>
-        </div>
-        <div class="col-start-2 flex flex-wrap items-center gap-1.5">
-          <Button v-if="!item.source_folder_deleted" size="xs" variant="outline" class="bg-white" data-testid="item-open-folder" @click="emit('openFolder', item.source_folder_id)">
+      <!-- 封存横条（M9；外框和 SealBanner 共用 StateBanner） -->
+      <StateBanner v-if="modifying" tone="modifying" data-testid="item-banner" data-state="modifying">
+        <b class="text-compact text-modifying">修改中</b>：来源文件夹已解除封存（{{ item.unsealed_by_name ?? '有人' }}
+        {{ formatDateTime(item.unsealed_at) }}{{ item.unseal_reason ? `，${item.unseal_reason}` : '' }}）。改完后重新归档；在此之前不能锁定、不能导出。
+        <span v-if="item.source_folder_deleted" class="block text-destructive">来源文件夹已被删除：不能重新归档，不要这一件了请"撤销归档"。</span>
+        <template #actions>
+          <Button v-if="!item.source_folder_deleted" size="xs" variant="outline" data-testid="item-open-folder" @click="emit('openFolder', item.source_folder_id)">
             去文件目录
           </Button>
-          <Button size="xs" class="bg-orange-600 text-white hover:bg-orange-700" :disabled="busy !== ''" data-testid="item-reseal" @click="emit('reseal', item, shortLabel)">
+          <Button size="xs" variant="modify" :disabled="busy !== ''" data-testid="item-reseal" @click="emit('reseal', item, shortLabel)">
             重新归档…
           </Button>
-        </div>
-      </div>
-      <div
-        v-else
-        class="grid shrink-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2.5 gap-y-1.5 border-b bg-violet-50 px-3 py-2 text-xs leading-relaxed text-violet-950"
-        data-testid="item-banner"
-        data-state="sealed"
-      >
-        <LockIcon class="mt-0.5 size-4 shrink-0 text-violet-700" />
-        <div class="min-w-0">
-          <b class="text-[13px] text-violet-900">来源：</b>
-          <button type="button" class="text-left text-violet-900 hover:underline" :title="`在左边打开 ${item.source_folder_path}`" data-testid="item-source" @click="emit('openFolder', item.source_folder_id)">{{ item.source_folder_path }}</button>（已封存）
-          <span class="block text-violet-900/80">页来自文件夹，这里不能改页。要改页 →</span>
-        </div>
-        <Button size="xs" variant="outline" class="col-start-2 justify-self-start bg-white" :disabled="busy !== ''" data-testid="item-unseal" @click="emit('unseal', item, shortLabel)">
-          解除封存去修改…
-        </Button>
-      </div>
+        </template>
+      </StateBanner>
+      <StateBanner v-else tone="sealed" data-testid="item-banner" data-state="sealed">
+        <b class="text-compact text-sealed">来源：</b>
+        <button type="button" class="text-left text-sealed hover:underline" :title="`在左边打开 ${item.source_folder_path}`" data-testid="item-source" @click="emit('openFolder', item.source_folder_id)">{{ item.source_folder_path }}</button>（已封存）
+        <span class="block text-muted-foreground">页来自文件夹，这里不能改页。要改页 →</span>
+        <template #actions>
+          <Button size="xs" variant="outline" :disabled="busy !== ''" data-testid="item-unseal" @click="emit('unseal', item, shortLabel)">
+            解除封存去修改…
+          </Button>
+        </template>
+      </StateBanner>
 
       <!-- 页头：档号、状态、件号、位置 -->
       <div class="shrink-0 border-b px-4 pt-2.5 pb-2.5">
@@ -808,15 +797,8 @@ defineExpose({
               <CircleAlertIcon class="size-4" />档号为空 · {{ archiveNoReasonShort(reason) }}
             </div>
           </div>
-          <span
-            v-if="modifying"
-            class="mt-0.5 inline-flex shrink-0 items-center gap-0.5 rounded-full border border-orange-300 bg-orange-50 px-2 text-xs leading-5 text-orange-700"
-          ><PencilLineIcon class="size-3" />修改中</span>
-          <span
-            class="mt-0.5 shrink-0 rounded-full px-2.5 text-xs leading-6 font-medium"
-            :class="statusInfo.badge"
-            data-testid="item-status"
-          >{{ statusInfo.label }}</span>
+          <StatusBadge v-if="modifying" :status="ARCHIVE_STATE.modifying" size="md" class="mt-0.5" />
+          <StatusBadge :status="statusInfo" size="md" class="mt-0.5" data-testid="item-status" />
         </div>
 
         <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -834,13 +816,13 @@ defineExpose({
             </template>
             <form v-else class="flex items-center gap-1" @submit.prevent="submitItemNo">
               件号
-              <input
+              <Input
                 v-model="itemNoText"
-                class="h-6 w-20 rounded border border-input bg-background px-1.5 font-mono text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                class="h-6 w-20 px-1.5 font-mono text-xs md:text-xs"
                 inputmode="numeric"
                 data-testid="item-no-input"
                 @keydown.esc.prevent="itemNoEditing = false"
-              >
+              />
               <Button type="submit" size="xs" :disabled="busy !== ''" data-testid="item-no-submit">改</Button>
               <Button type="button" size="xs" variant="ghost" @click="itemNoEditing = false">取消</Button>
             </form>
@@ -868,8 +850,8 @@ defineExpose({
         >
           <div class="min-w-0 flex-1">
             <p>{{ reason.message }}</p>
-            <p v-if="reason.code === 'incomplete'" class="mt-0.5 text-warn/80">在归类树里补上这几级节点，或者把这一件移到层级完整的节点下；档号为空的件可以著录，不能锁定。</p>
-            <p v-else-if="reason.code === 'template_invalid'" class="mt-0.5 text-warn/80">请到「系统管理 › 项目」里修改档号模板。</p>
+            <p v-if="reason.code === 'incomplete'" class="mt-0.5 text-warn">在归类树里补上这几级节点，或者把这一件移到层级完整的节点下；档号为空的件可以著录，不能锁定。</p>
+            <p v-else-if="reason.code === 'template_invalid'" class="mt-0.5 text-warn">请到「系统管理 › 项目」里修改档号模板。</p>
           </div>
           <Button
             v-if="reason.code === 'conflict' && reason.conflict_item_id && reason.conflict_category_id"
@@ -895,7 +877,7 @@ defineExpose({
 
         <div
           v-if="locked"
-          class="mt-2 flex items-center gap-2 rounded-md bg-violet-50 px-3 py-2 text-xs text-violet-800"
+          class="mt-2 flex items-center gap-2 rounded-md bg-sealed-soft/50 px-3 py-2 text-xs text-sealed"
           data-testid="item-locked-note"
         >
           <LockIcon class="size-3.5 shrink-0" />
@@ -951,7 +933,7 @@ defineExpose({
           <span v-if="item.page_counts.unassigned">待分配 {{ item.page_counts.unassigned }}</span>
           <span v-if="newAfterLock.size" class="text-info">锁定后有新版本 {{ newAfterLock.size }}</span>
           <span class="flex-1" />
-          <span v-if="modifying" class="text-orange-700">修改中：这里还是上次归档时的页</span>
+          <span v-if="modifying" class="text-modifying">修改中：这里还是上次归档时的页</span>
           <span v-else>双击看原图</span>
         </div>
         <div v-if="!item.pages.length" class="flex flex-1 items-center justify-center text-xs text-muted-foreground">没有页</div>
@@ -1011,7 +993,7 @@ defineExpose({
         >
           <Undo2Icon />撤销归档…
         </Button>
-        <span v-if="dirty" class="w-full text-[11px] text-muted-foreground">有未保存的修改（Ctrl 或 ⌘ + S 保存）</span>
+        <span v-if="dirty" class="w-full text-2xs text-muted-foreground">有未保存的修改（Ctrl 或 ⌘ + S 保存）</span>
       </div>
 
       <ConfirmDialog

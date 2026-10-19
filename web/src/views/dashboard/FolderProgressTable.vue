@@ -8,10 +8,12 @@
 // 截图脚本用的属性：data-testid=folder-progress（data-rows）；folder-row（data-folder-id、data-kind：folder / direct、
 // data-depth、data-expanded、data-total、data-approved、data-items、data-cataloged、data-locked-items，自己归档了的另有
 // data-archive-no（档号或"第 n 件"）、data-archive-locked、data-archive-modifying）；folder-toggle。
-import { ChevronRightIcon, FileIcon, FolderIcon, FolderOpenIcon, LoaderCircleIcon, LockIcon, PencilIcon } from '@lucide/vue'
+import { ChevronRightIcon, FileIcon, LoaderCircleIcon, LockIcon } from '@lucide/vue'
+import FolderGlyph from '@/components/files/FolderGlyph.vue'
+import { StatusBadge } from '@/components/ui/status-badge'
 
 import type { CatalogCounts, FolderArchive } from '@/api/types'
-import { placementNo } from '@/lib/catalog'
+import { ARCHIVE_STATE, placementNo } from '@/lib/catalog'
 
 import { formatCount } from '@/lib/format'
 
@@ -64,7 +66,7 @@ const COLS = 'grid-cols-[minmax(220px,2.2fr)_64px_minmax(150px,1.4fr)_minmax(120
     <div
       v-for="r in props.rows"
       :key="r.key"
-      class="grid items-center gap-3.5 border-b px-3.5 py-2 text-[13px] last:border-b-0 hover:bg-muted/30"
+      class="grid items-center gap-3.5 border-b px-3.5 py-2 text-compact last:border-b-0 hover:bg-muted/30"
       :class="COLS"
       data-testid="folder-row"
       :data-folder-id="r.folderId"
@@ -95,11 +97,7 @@ const COLS = 'grid-cols-[minmax(220px,2.2fr)_64px_minmax(150px,1.4fr)_minmax(120
             <ChevronRightIcon v-else class="size-3.5 transition-transform" :class="r.expanded ? 'rotate-90' : ''" />
           </button>
           <span v-else class="size-5 shrink-0" />
-          <component
-            :is="r.expanded ? FolderOpenIcon : FolderIcon"
-            class="size-4 shrink-0 fill-amber-300/60 text-amber-600"
-            :stroke-width="1.5"
-          />
+          <FolderGlyph :open="r.expanded" class="size-4" />
           <span class="min-w-0 truncate text-foreground" :class="r.hasChildren ? 'font-semibold' : ''" :title="r.name">{{ r.name }}</span>
         </template>
         <template v-else>
@@ -117,23 +115,19 @@ const COLS = 'grid-cols-[minmax(220px,2.2fr)_64px_minmax(150px,1.4fr)_minmax(120
       </div>
       <!-- 已归档 -->
       <span v-if="r.archive" class="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" :title="archiveTitle(r.archive)">
-        <span class="truncate font-mono text-[11.5px] text-foreground">{{ placementNo(r.archive) }}</span>
-        <span
-          v-if="r.archive.source_status === 'modifying'"
-          class="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-warn-soft px-1.5 text-[11px] text-warn"
-          data-testid="archive-modifying"
-        ><PencilIcon class="size-3" />修改中</span>
+        <span class="truncate font-mono text-2xs text-foreground">{{ placementNo(r.archive) }}</span>
+        <StatusBadge v-if="r.archive.source_status === 'modifying'" :status="ARCHIVE_STATE.modifying" data-testid="archive-modifying" />
       </span>
       <span v-else-if="showTotals(r)" class="truncate text-xs text-muted-foreground tabular-nums">
         {{ formatCount(r.counts.items.total) }} 件 · {{ formatCount(r.counts.catalog.cataloged) }} 页
       </span>
-      <span v-else class="text-xs text-muted-foreground/50">—</span>
+      <span v-else class="text-xs text-muted-foreground">—</span>
       <!-- 已锁定 -->
       <span v-if="r.archive?.locked" class="flex items-center gap-1 text-xs text-muted-foreground">
-        <LockIcon class="size-3.5 text-violet-900" />已锁定
+        <LockIcon class="size-3.5 text-sealed" />已锁定
       </span>
       <span v-else-if="showTotals(r)" class="truncate text-xs text-muted-foreground tabular-nums">{{ formatCount(r.counts.items.locked) }} 件</span>
-      <span v-else class="text-xs text-muted-foreground/50">—</span>
+      <span v-else class="text-xs text-muted-foreground">—</span>
     </div>
     <div v-if="props.rows.length === 0" class="px-3 py-8 text-center text-sm text-muted-foreground">项目里还没有文件夹</div>
   </div>

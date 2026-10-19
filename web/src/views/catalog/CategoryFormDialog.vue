@@ -11,6 +11,7 @@ import { computed, ref, watch } from 'vue'
 import { createArchiveCategory, updateArchiveCategory } from '@/api/catalog'
 import type { ArchiveCategory, CatalogSettings, UpdatedArchiveCategory } from '@/api/types'
 import { Button } from '@/components/ui/button'
+import { NativeSelect } from '@/components/ui/native-select'
 import {
   Dialog,
   DialogContent,
@@ -147,14 +148,13 @@ async function submit() {
         <div class="grid grid-cols-[7rem_1fr] gap-3">
           <div class="grid gap-2">
             <Label for="cf-type">类型</Label>
-            <select
+            <NativeSelect
               id="cf-type"
               v-model="type"
-              class="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
               data-testid="category-form-type"
             >
               <option v-for="t in types" :key="t" :value="t">{{ categoryTypeLabel(t) }}</option>
-            </select>
+            </NativeSelect>
           </div>
           <div class="grid gap-2">
             <Label for="cf-code">编码</Label>

@@ -22,6 +22,7 @@ import type {
   ItemFieldType,
   ItemStatus,
 } from '@/api/types'
+import type { StatusStyle } from '@/lib/status'
 
 /** 能新建、能用在模板里的归类节点类型（不含 root），按层级的常见顺序。 */
 export const CATEGORY_TYPES = ['fonds', 'category', 'year', 'retention', 'org', 'custom'] as const
@@ -316,14 +317,43 @@ export function placementNo(p: Pick<CatalogPlacement, 'archive_no' | 'item_no'>)
 
 // ---------- 档案条目（M3-5） ----------
 
-/** 条目状态的中文名和徽标颜色（M9 起只有两种：draft 未锁定、locked 已锁定，用户 2026-10-19）。 */
-export const ITEM_STATUS: Record<ItemStatus, { label: string; badge: string; dot: string }> = {
+/**
+ * 归档相关状态的样式（全 web 只在这里定义，StatusBadge、横条、看板、审计都用它）：
+ * - archived 已归档 / 已封存（文件已归档、文件夹已封存未锁定、文件夹全部归档、条目的来源已封存）：浅紫底紫字，锁；
+ * - locked 已锁定（条目锁定、来源文件夹的条目已锁定）：实心紫底白字，锁——比"已归档"重一级；
+ * - modifying 修改中（解除封存后在改，改完要重新归档）：浅青底青字加细框，铅笔。青色和 warn（琥珀色，"待审"等提醒）
+ *   分开，也和紫色（封存）一眼能分清；
+ * - none 未归档、draft 未锁定：灰。
+ * 横条、进度条按同样的色系：已封存横条浅紫、修改中横条浅青；看板"已归档"进度条半透明紫、"已锁定"实心紫。
+ */
+export const ARCHIVE_STATE = {
+  none: { label: '未归档', badge: 'bg-muted text-muted-foreground', dot: 'bg-muted-foreground/45' },
   draft: { label: '未锁定', badge: 'bg-muted text-muted-foreground', dot: 'bg-muted-foreground/45' },
-  locked: { label: '已锁定', badge: 'bg-violet-100 text-violet-700', dot: 'bg-violet-700' },
+  archived: { label: '已归档', badge: 'bg-sealed-soft text-sealed', dot: 'bg-sealed/60', icon: 'lock' },
+  locked: { label: '已锁定', badge: 'bg-sealed text-sealed-foreground', dot: 'bg-sealed', icon: 'lock' },
+  modifying: {
+    label: '修改中',
+    badge: 'bg-modifying-soft text-modifying ring-1 ring-modifying/30 ring-inset',
+    dot: 'bg-modifying',
+    icon: 'pencil',
+  },
+} satisfies Record<string, StatusStyle>
+
+/** 条目状态的中文名和徽标（M9 起只有两种：draft 未锁定、locked 已锁定，用户 2026-10-19）。 */
+export const ITEM_STATUS: Record<ItemStatus, StatusStyle> = {
+  draft: ARCHIVE_STATE.draft,
+  locked: ARCHIVE_STATE.locked,
 }
 
-export function itemStatusOf(status: string) {
-  return ITEM_STATUS[status as ItemStatus] ?? { label: status, badge: 'bg-muted text-muted-foreground', dot: 'bg-muted-foreground/45' }
+export function itemStatusOf(status: string): StatusStyle {
+  return ITEM_STATUS[status as ItemStatus] ?? { ...ARCHIVE_STATE.draft, label: status }
+}
+
+/** 一个文件夹（或条目来源）的归档状态：没有归档 none，修改中 modifying，已锁定 locked，否则 archived。 */
+export function folderArchiveState(a: { source_status?: string | null; locked: boolean } | null | undefined): StatusStyle {
+  if (!a) return ARCHIVE_STATE.none
+  if (a.source_status === 'modifying') return ARCHIVE_STATE.modifying
+  return a.locked ? ARCHIVE_STATE.locked : ARCHIVE_STATE.archived
 }
 
 /** 件号按模板的补零位数显示（模板解析不了时不补零）。 */

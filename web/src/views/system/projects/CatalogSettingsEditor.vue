@@ -21,6 +21,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { listArchiveCategories } from '@/api/catalog'
 import type { ItemFieldType } from '@/api/types'
 import { Button } from '@/components/ui/button'
+import { NativeSelect } from '@/components/ui/native-select'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import {
@@ -236,7 +237,7 @@ const problems = computed(() => props.draft.fields.map((f) => fieldProblems(f, p
           v-for="t in INSERTS"
           :key="t.token"
           type="button"
-          class="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11.5px] text-foreground hover:bg-muted-foreground/15"
+          class="rounded-md bg-muted px-1.5 py-0.5 font-mono text-2xs text-foreground hover:bg-muted-foreground/15"
           :title="t.label"
           data-testid="template-insert"
           :data-token="t.token"
@@ -249,7 +250,7 @@ const problems = computed(() => props.draft.fields.map((f) => fieldProblems(f, p
 
       <div
         class="rounded-lg px-3 py-2.5 text-xs leading-5"
-        :class="parsed.ok ? 'bg-muted/50 shadow-[0_0_0_1px_rgba(0,0,0,0.06)]' : 'bg-destructive-soft'"
+        :class="parsed.ok ? 'bg-muted/50 shadow-outline' : 'bg-destructive-soft'"
         data-testid="template-preview"
         :data-ok="String(parsed.ok)"
         :data-value="preview ?? undefined"
@@ -353,7 +354,7 @@ const problems = computed(() => props.draft.fields.map((f) => fieldProblems(f, p
           :class="
             props.highlightIndex === i
               ? 'bg-destructive-soft/40 shadow-[0_0_0_1.5px_var(--destructive)]'
-              : 'shadow-[0_0_0_1px_rgba(0,0,0,0.08)]'
+              : 'shadow-outline'
           "
           data-testid="item-field"
           :data-index="i"
@@ -388,7 +389,7 @@ const problems = computed(() => props.draft.fields.map((f) => fieldProblems(f, p
             <span class="w-5 shrink-0 text-center text-xs text-muted-foreground tabular-nums">{{ i + 1 }}</span>
             <Input
               v-model="f.key"
-              class="h-8 w-36 shrink-0 font-mono text-[13px]"
+              class="h-8 w-36 shrink-0 font-mono text-compact"
               placeholder="key，如 doc_no"
               autocomplete="off"
               spellcheck="false"
@@ -439,7 +440,7 @@ const problems = computed(() => props.draft.fields.map((f) => fieldProblems(f, p
                 最大长度
                 <Input
                   v-model="f.maxLength"
-                  class="h-7 w-20 text-[13px] tabular-nums"
+                  class="h-7 w-20 text-compact tabular-nums"
                   inputmode="numeric"
                   :placeholder="String(DEFAULT_TEXT_MAX_LENGTH)"
                   data-testid="field-max-length"
@@ -448,7 +449,7 @@ const problems = computed(() => props.draft.fields.map((f) => fieldProblems(f, p
               </label>
               <label class="flex min-w-0 flex-1 items-center gap-1.5">
                 默认值
-                <Input v-model="f.defaultValue" class="h-7 min-w-0 flex-1 text-[13px]" placeholder="没有" data-testid="field-default" />
+                <Input v-model="f.defaultValue" class="h-7 min-w-0 flex-1 text-compact" placeholder="没有" data-testid="field-default" />
               </label>
             </template>
             <template v-else-if="f.type === 'date'">
@@ -456,7 +457,7 @@ const problems = computed(() => props.draft.fields.map((f) => fieldProblems(f, p
                 默认值
                 <Input
                   v-model="f.defaultValue"
-                  class="h-7 w-40 font-mono text-[13px]"
+                  class="h-7 w-40 font-mono text-compact"
                   placeholder="没有"
                   data-testid="field-default"
                 />
@@ -469,16 +470,17 @@ const problems = computed(() => props.draft.fields.map((f) => fieldProblems(f, p
                 <textarea
                   v-model="f.optionsText"
                   rows="3"
-                  class="min-h-[60px] min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 py-1 text-[13px] text-foreground shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                  class="min-h-[60px] min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 py-1 text-compact text-foreground shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                   placeholder="一行一个，例如&#10;公开&#10;内部"
                   data-testid="field-options"
                 />
               </label>
               <label class="flex shrink-0 items-center gap-1.5 pt-0.5">
                 默认值
-                <select
+                <NativeSelect
                   v-model="f.defaultValue"
-                  class="h-7 max-w-40 rounded-md border bg-background px-1.5 text-[13px] text-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  size="xs"
+                  class="max-w-40"
                   data-testid="field-default"
                 >
                   <option value="">没有</option>
@@ -486,7 +488,7 @@ const problems = computed(() => props.draft.fields.map((f) => fieldProblems(f, p
                     {{ f.defaultValue }}（不在选项里）
                   </option>
                   <option v-for="o in optionLines(f.optionsText)" :key="o" :value="o">{{ o }}</option>
-                </select>
+                </NativeSelect>
               </label>
             </template>
           </div>

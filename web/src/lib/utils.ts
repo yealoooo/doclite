@@ -1,6 +1,11 @@
 import type { ClassValue } from "clsx"
 import { clsx } from "clsx"
-import { twMerge } from "tailwind-merge"
+import { extendTailwindMerge } from "tailwind-merge"
+
+/** style.css 里加的字号（text-2xs、text-compact）、阴影（shadow-outline）告诉 tailwind-merge，免得被当成颜色合并掉。 */
+const twMerge = extendTailwindMerge({
+  extend: { theme: { text: ["2xs", "compact"], shadow: ["outline"] } },
+})
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))

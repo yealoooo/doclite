@@ -18,6 +18,7 @@ import { ApiError, errorMessage, HANDLE_ALL, isApiError } from '@/api/http'
 import type { ArchiveResult } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { ARCHIVE_SKIP_LABEL, checkTitle, fieldIssuesOf, formatItemNo } from '@/lib/catalog'
 
 const open = defineModel<boolean>('open', { required: true })
@@ -172,7 +173,7 @@ const totalPages = computed(() => plan.value?.items.reduce((n, it) => n + it.pag
       </div>
       <p v-else-if="state === 'error'" class="rounded-md bg-destructive-soft px-3 py-2 text-sm text-destructive">{{ loadError }}</p>
       <div v-else-if="plan" class="max-h-[55vh] space-y-3 overflow-y-auto">
-        <table v-if="plan.items.length" class="w-full border-collapse text-[13px]">
+        <table v-if="plan.items.length" class="w-full border-collapse text-compact">
           <thead>
             <tr class="bg-muted/60 text-left text-xs text-muted-foreground">
               <th class="w-16 px-2 py-1.5 font-medium">件号</th>
@@ -186,15 +187,15 @@ const totalPages = computed(() => plan.value?.items.reduce((n, it) => n + it.pag
                 {{ formatItemNo(it.item_no, props.itemNoWidth) }}
               </td>
               <td class="px-2 py-1">
-                <input
+                <Input
                   v-model="titles[it.folder_id]"
-                  class="h-7 w-full rounded border border-input bg-background px-1.5 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                  class="h-7 px-1.5 text-compact md:text-compact"
                   :aria-invalid="!!rowErrors[it.folder_id] || undefined"
                   data-testid="archive-title"
                   @input="onTitleInput(it.folder_id)"
-                >
-                <div class="mt-0.5 truncate text-[11px] text-muted-foreground" :title="it.folder_path">{{ it.folder_path }}</div>
-                <div v-if="rowErrors[it.folder_id]" class="text-[11px] text-destructive">{{ rowErrors[it.folder_id] }}</div>
+                />
+                <div class="mt-0.5 truncate text-2xs text-muted-foreground" :title="it.folder_path">{{ it.folder_path }}</div>
+                <div v-if="rowErrors[it.folder_id]" class="text-2xs text-destructive">{{ rowErrors[it.folder_id] }}</div>
               </td>
               <td class="px-2 py-1.5 text-right tabular-nums">{{ it.page_count }}</td>
             </tr>

@@ -1,8 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-@custom-variant dark (&:is(.dark *));
-
 /*
  * shadcn-vue 组件里用到的 data-open / data-checked 等变体。reka-ui 用 data-state 表示状态，
  * 这几条和 shadcn-vue 自带的 tailwind.css 相同（没有引整个包，只抄了用到的变体）。
@@ -61,6 +59,12 @@
 
 /* 字体：只用系统字体（客户内网不联网，不引外网字体）。 */
 @theme {
+  /* 两档补充字号（不带行高，沿用外层的行高，和原来的 text-[11px]、text-[13px] 一样）：
+     2xs = 11px，小徽标、表格角注；compact = 13px，紧凑的正文（列表行、表单、侧栏）。 */
+  --text-2xs: 11px;
+  --text-compact: 13px;
+  /* 卡片、浮层的一像素描边（代替 border，不占尺寸）。 */
+  --shadow-outline: 0 0 0 1px rgba(0, 0, 0, 0.08);
   --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", "Noto Sans CJK SC", sans-serif;
   --font-mono: "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
 }
@@ -91,6 +95,14 @@
   --color-ok-soft: var(--ok-soft);
   --color-warn: var(--warn);
   --color-warn-soft: var(--warn-soft);
+  --color-sealed: var(--sealed);
+  --color-sealed-soft: var(--sealed-soft);
+  --color-sealed-foreground: var(--sealed-foreground);
+  --color-modifying: var(--modifying);
+  --color-modifying-soft: var(--modifying-soft);
+  --color-canvas: var(--canvas);
+  --color-folder: var(--folder);
+  --color-folder-fill: var(--folder-fill);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -125,7 +137,7 @@
   --secondary: #f4f4f5;
   --secondary-foreground: #171717;
   --muted: #f4f4f5;
-  --muted-foreground: #737373;
+  --muted-foreground: #666666;
   --accent: #f4f4f5;
   --accent-foreground: #171717;
   --destructive: #c62828;
@@ -136,6 +148,18 @@
   --ok-soft: #e6f5ea;
   --warn: #b45309;
   --warn-soft: #fcf1df;
+  /* 归档状态（见 lib/catalog.ts 的 ARCHIVE_STATE）：已归档、已封存、已锁定用紫色（锁定是实心）；修改中用青色，
+     和"待审"等提醒用的 warn（琥珀色）分开。 */
+  --sealed: #6d28d9;
+  --sealed-soft: #ede9fe;
+  --sealed-foreground: #ffffff;
+  --modifying: #0f766e;
+  --modifying-soft: #dcf3ef;
+  /* 看图区的底色（大图、对比、原图）。 */
+  --canvas: #e4e4e7;
+  /* 文件夹图标（FolderGlyph）。 */
+  --folder: #d97706;
+  --folder-fill: rgba(252, 211, 77, 0.7);
   --border: #ebebeb;
   --input: #e2e2e2;
   --ring: #0a72ef;
@@ -154,46 +178,6 @@
   --sidebar-ring: #0a72ef;
 }
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-soft: #3a1717;
-  --info: #4c9bff;
-  --info-soft: #12233a;
-  --ok: #4ade80;
-  --ok-soft: #10281a;
-  --warn: #f59e0b;
-  --warn-soft: #2e2210;
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
-}
 
 @layer base {
   * {
@@ -205,5 +189,11 @@
   code,
   kbd {
     @apply font-mono;
+  }
+  /* 手写的 <button> 和 tabindex=0 的元素：键盘聚焦时显示和 Button 一样的焦点环（鼠标点击不显示）。能聚焦的滚动区
+     自己带 focus-visible:ring-inset（外环会被裁掉）。 */
+  button:focus-visible,
+  [tabindex="0"]:focus-visible {
+    @apply ring-3 ring-ring/50 outline-none;
   }
 }

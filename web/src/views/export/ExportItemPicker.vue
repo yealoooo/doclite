@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useCategoryTree } from '@/composables/useCategoryTree'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { itemStatusOf } from '@/lib/catalog'
 import { itemName } from '@/lib/export'
 
@@ -187,10 +188,10 @@ function confirm() {
               <Checkbox :model-value="picked.has(it.id) || chosenSet.has(it.id)" :disabled="chosenSet.has(it.id)" class="pointer-events-none" tabindex="-1" />
               <span class="min-w-0 flex-1">
                 <span class="block truncate font-mono font-medium text-foreground" :title="it.archive_no ?? undefined">{{ itemName(it.archive_no, it.item_no) }}</span>
-                <span class="block truncate text-[11px]" :class="it.title ? 'text-muted-foreground' : 'text-muted-foreground/70'" :title="it.title || undefined">{{ it.title || '（未填题名）' }}</span>
+                <span class="block truncate text-2xs text-muted-foreground" :class="it.title ? '' : 'italic'" :title="it.title || undefined">{{ it.title || '（未填题名）' }}</span>
               </span>
               <span class="shrink-0 text-muted-foreground tabular-nums">{{ it.page_count }} 页</span>
-              <span class="shrink-0 rounded-full px-1.5 text-[11px] leading-5" :class="itemStatusOf(it.status).badge">{{ itemStatusOf(it.status).label }}</span>
+              <StatusBadge :status="itemStatusOf(it.status)" />
             </button>
             <button v-if="nextCursor" type="button" class="w-full py-2 text-xs text-info hover:underline" @click="loadMore">加载更多</button>
           </div>

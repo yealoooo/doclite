@@ -146,7 +146,7 @@ function onActivate(id: string) {
           <button
             v-if="props.allowTop && tree.rootId.value"
             type="button"
-            class="mb-px flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[13px] hover:bg-muted"
+            class="mb-px flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-compact hover:bg-muted"
             :class="[
               selectedId === tree.rootId.value ? 'bg-info-soft font-medium text-info hover:bg-info-soft' : 'text-foreground',
               !selectable(tree.rootId.value) && 'cursor-not-allowed opacity-45',

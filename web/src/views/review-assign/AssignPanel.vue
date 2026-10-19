@@ -17,7 +17,8 @@ import type { AssignmentReviewer, FileEntry, FileReviews, ProjectReviewer } from
 import FileCover from '@/components/files/FileCover.vue'
 import FileLogList from '@/components/files/FileLogList.vue'
 import { Button } from '@/components/ui/button'
-import { reviewStatusOf } from '@/lib/files'
+import { StatusBadge } from '@/components/ui/status-badge'
+import { REVIEW_STATUS, reviewStatusOf } from '@/lib/files'
 import { formatDateTime } from '@/lib/format'
 import { rejectReasonLabel, reviewerProblemsText, reviewRowLabel } from '@/lib/reviews'
 import { useImageInfoStore } from '@/stores/image-info'
@@ -162,7 +163,7 @@ const reviewerLine = computed<{ label: string; name: string | null } | null>(() 
 </script>
 
 <template>
-  <div class="flex flex-col gap-4 p-4 text-[13px]" data-testid="assign-panel">
+  <div class="flex flex-col gap-4 p-4 text-compact" data-testid="assign-panel">
     <!-- ===== 分给谁 ===== -->
     <section>
       <h3 class="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
@@ -191,13 +192,9 @@ const reviewerLine = computed<{ label: string; name: string | null } | null>(() 
         >
           <span class="min-w-0 flex-1">
             <span class="block truncate font-medium text-foreground">{{ r.display_name }}</span>
-            <span class="block truncate text-[11px] text-muted-foreground">{{ r.username }}</span>
+            <span class="block truncate text-2xs text-muted-foreground">{{ r.username }}</span>
           </span>
-          <span
-            class="shrink-0 rounded-full px-2 text-[11px] leading-5"
-            :class="r.open > 0 ? 'bg-warn-soft text-warn' : 'bg-muted text-muted-foreground'"
-            data-testid="reviewer-open"
-          >待办 {{ r.open }}</span>
+          <StatusBadge :status="r.open > 0 ? REVIEW_STATUS.pending : REVIEW_STATUS.unassigned" data-testid="reviewer-open">待办 {{ r.open }}</StatusBadge>
         </button>
       </div>
     </section>
@@ -281,12 +278,7 @@ const reviewerLine = computed<{ label: string; name: string | null } | null>(() 
         <div class="min-w-0 flex-1">
           <div class="font-semibold [overflow-wrap:anywhere] text-foreground" data-testid="single-file-name">{{ single.file_name }}</div>
           <div class="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-            <span
-              class="inline-flex items-center gap-1 rounded-full px-1.5 leading-5"
-              :class="reviewStatusOf(status).badge"
-              data-testid="single-file-status"
-              :data-status="status"
-            >{{ reviewStatusOf(status).label }}</span>
+            <StatusBadge :status="reviewStatusOf(status)" size="md" dot data-testid="single-file-status" :data-status="status" />
             <span>v{{ current?.version_no ?? single.version_no }} · 第 {{ current?.review_round ?? single.review_round }} 轮</span>
           </div>
           <div class="mt-1 text-xs text-muted-foreground" data-testid="single-file-reviewer">
@@ -338,7 +330,7 @@ const reviewerLine = computed<{ label: string; name: string | null } | null>(() 
             <span>{{ reviewRowLabel(r) }}</span>
             <span v-if="r.version_no" class="font-mono text-muted-foreground">v{{ r.version_no }}</span>
             <span v-if="r.reject_reasons.length" class="text-destructive">{{ r.reject_reasons.map(rejectReasonLabel).join('、') }}</span>
-            <span class="ml-auto text-[11px] text-muted-foreground no-underline">{{ formatDateTime(r.reviewed_at ?? r.assigned_at) }}</span>
+            <span class="ml-auto text-2xs text-muted-foreground no-underline">{{ formatDateTime(r.reviewed_at ?? r.assigned_at) }}</span>
           </li>
         </ol>
       </div>

@@ -8,7 +8,7 @@
 // - 当前文件夹可以编辑名称和备注（M1-12）。
 // - 单个文件的归类信息（M3-7，只读，用户决定 Q10）：CatalogPlacementInfo 自己取 files/{fid}/catalog，只给档号
 //   （为空时"第 n 件"）、题名、第几页，没挂接时"未归类"；`refreshToken`、`catalogRefreshToken` 变了重新取。
-import { FolderIcon, HistoryIcon, LoaderCircleIcon, PencilIcon } from '@lucide/vue'
+import { HistoryIcon, LoaderCircleIcon, PencilIcon } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import { getFileLogs, getFileSnapshots } from '@/api/files'
@@ -16,7 +16,9 @@ import { errorMessage, HANDLE_ALL } from '@/api/http'
 import type { FileEntry, FileLog, FolderItem, SnapshotItem } from '@/api/types'
 import CatalogPlacementInfo from '@/components/files/CatalogPlacementInfo.vue'
 import FileCover from '@/components/files/FileCover.vue'
+import FolderGlyph from '@/components/files/FolderGlyph.vue'
 import { Button } from '@/components/ui/button'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { formatDateTime } from '@/lib/format'
 import {
   colorModeLabel,
@@ -158,7 +160,7 @@ const summary = computed(() => {
 </script>
 
 <template>
-  <div class="flex flex-col gap-4 p-4 text-[13px]" data-testid="detail-panel">
+  <div class="flex flex-col gap-4 p-4 text-compact" data-testid="detail-panel">
     <!-- ===== 一个文件 ===== -->
     <template v-if="file">
       <FileCover
@@ -176,11 +178,11 @@ const summary = computed(() => {
 
       <dl class="kv">
         <dt>file_id</dt>
-        <dd class="font-mono text-[11.5px] break-all" data-testid="detail-file-id">{{ file.file_id }}</dd>
+        <dd class="font-mono text-2xs break-all" data-testid="detail-file-id">{{ file.file_id }}</dd>
         <dt>位置</dt>
         <dd class="[overflow-wrap:anywhere]">{{ props.location }}</dd>
         <dt>路径编码</dt>
-        <dd class="font-mono text-[11.5px] break-all">{{ props.folder?.path_code }}</dd>
+        <dd class="font-mono text-2xs break-all">{{ props.folder?.path_code }}</dd>
         <dt>当前快照</dt>
         <dd data-testid="detail-snapshot">
           <template v-if="current">
@@ -193,7 +195,7 @@ const summary = computed(() => {
         <dd>
           <template v-if="current">
             {{ current.storage_profile_name }}
-            <div class="mt-0.5 font-mono text-[11px] break-all text-muted-foreground" data-testid="detail-storage-key">
+            <div class="mt-0.5 font-mono text-2xs break-all text-muted-foreground" data-testid="detail-storage-key">
               {{ current.storage_key }}
             </div>
           </template>
@@ -218,12 +220,7 @@ const summary = computed(() => {
         </dd>
         <dt>审核</dt>
         <dd>
-          <span
-            class="inline-flex items-center gap-1 rounded-full px-1.5 text-xs leading-5"
-            :class="reviewStatusOf(file.review_status).badge"
-          >
-            {{ reviewStatusOf(file.review_status).label }}
-          </span>
+          <StatusBadge :status="reviewStatusOf(file.review_status)" size="md" dot />
           <span class="ml-1.5 text-xs text-muted-foreground">第 {{ file.review_round }} 轮</span>
         </dd>
         <!-- 封面正常时不占一行；没有封面、取不到地址时写明原因。 -->
@@ -262,7 +259,7 @@ const summary = computed(() => {
             <div class="flex items-baseline gap-1.5">
               <span class="font-medium text-foreground">{{ logActionLabel(log.action) }}</span>
               <span class="truncate text-xs text-muted-foreground">{{ log.operator_name }}</span>
-              <span class="ml-auto shrink-0 text-[11px] text-muted-foreground">{{ formatDateTime(log.created_at) }}</span>
+              <span class="ml-auto shrink-0 text-2xs text-muted-foreground">{{ formatDateTime(log.created_at) }}</span>
             </div>
             <div v-if="logSummary(log)" class="mt-0.5 text-xs [overflow-wrap:anywhere] text-muted-foreground">{{ logSummary(log) }}</div>
           </li>
@@ -274,14 +271,14 @@ const summary = computed(() => {
     <!-- ===== 一个文件夹 ===== -->
     <template v-else-if="folderEntry">
       <div class="flex flex-col items-center gap-2 pt-2">
-        <FolderIcon class="size-16 fill-amber-300/70 text-amber-600" :stroke-width="1.25" />
+        <FolderGlyph class="size-16" :stroke-width="1.25" />
         <div class="text-sm font-semibold [overflow-wrap:anywhere] text-foreground">{{ folderEntry.folder_name }}</div>
       </div>
       <dl class="kv">
         <dt>位置</dt>
         <dd class="[overflow-wrap:anywhere]">{{ props.location === '/' ? '' : props.location }}/{{ folderEntry.folder_name }}</dd>
         <dt>路径编码</dt>
-        <dd class="font-mono text-[11.5px] break-all">{{ folderEntry.path_code }}</dd>
+        <dd class="font-mono text-2xs break-all">{{ folderEntry.path_code }}</dd>
         <dt>原件</dt>
         <dd>{{ folderEntry.remark || '—' }}</dd>
         <dt>内容</dt>
@@ -319,7 +316,7 @@ const summary = computed(() => {
     <!-- ===== 没选：当前文件夹 ===== -->
     <template v-else-if="props.folder">
       <div class="flex flex-col items-center gap-2 pt-2">
-        <FolderIcon class="size-16 fill-amber-300/70 text-amber-600" :stroke-width="1.25" />
+        <FolderGlyph class="size-16" :stroke-width="1.25" />
         <div class="text-sm font-semibold [overflow-wrap:anywhere] text-foreground">{{ props.folder.folder_name }}</div>
         <div class="text-xs text-muted-foreground">当前文件夹</div>
       </div>
@@ -327,7 +324,7 @@ const summary = computed(() => {
         <dt>位置</dt>
         <dd class="[overflow-wrap:anywhere]">{{ props.location }}</dd>
         <dt>路径编码</dt>
-        <dd class="font-mono text-[11.5px] break-all">{{ props.folder.path_code }}</dd>
+        <dd class="font-mono text-2xs break-all">{{ props.folder.path_code }}</dd>
         <dt>原件</dt>
         <dd>{{ props.folder.remark || '—' }}</dd>
         <dt>内容</dt>

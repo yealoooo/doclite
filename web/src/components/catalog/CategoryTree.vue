@@ -87,7 +87,7 @@ function rowTitle(n: ArchiveCategory): string {
     :get-children="props.tree.childrenOf"
     :expanded="props.tree.expanded.value"
     :model-value="selectedNode"
-    class="flex flex-col gap-px text-[13px] select-none"
+    class="flex flex-col gap-px text-compact select-none"
     data-testid="category-tree"
     @update:expanded="(v: string[]) => (props.tree.expanded.value = v)"
   >
@@ -131,7 +131,7 @@ function rowTitle(n: ArchiveCategory): string {
           :class="isExpanded ? 'rotate-90' : ''"
         />
       </span>
-      <LibraryBigIcon class="size-4 shrink-0 text-muted-foreground/80" />
+      <LibraryBigIcon class="size-4 shrink-0 text-muted-foreground" />
       <span
         class="min-w-0 truncate"
         :class="
@@ -145,13 +145,13 @@ function rowTitle(n: ArchiveCategory): string {
         {{ item.value.category_name }}
       </span>
       <span
-        class="shrink-0 rounded bg-muted px-1 font-mono text-[11px] leading-4 text-muted-foreground"
+        class="shrink-0 rounded bg-muted px-1 font-mono text-2xs leading-4 text-muted-foreground"
         data-testid="tree-category-code"
       >{{ item.value.category_code }}</span>
       <span class="min-w-0 flex-1" />
       <span
         v-if="props.showCounts && item.value.item_count > 0"
-        class="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums"
+        class="shrink-0 font-mono text-2xs text-muted-foreground tabular-nums"
         data-testid="tree-category-count"
       >{{ item.value.item_count.toLocaleString() }} 件</span>
       <slot name="suffix" :node="item.value" :selected="item.value.id === props.selectedId" />

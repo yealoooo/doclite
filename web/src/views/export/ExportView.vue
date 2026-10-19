@@ -385,7 +385,7 @@ const counts = computed(() => {
   >
     <header class="flex h-14 shrink-0 items-center gap-3 border-b px-5">
       <h1 class="shrink-0 text-base font-semibold tracking-tight text-foreground">导出交付</h1>
-      <span class="shrink-0 rounded-full bg-muted px-2 text-[11px] leading-5 text-muted-foreground">只导出已归档的文件</span>
+      <span class="shrink-0 rounded-full bg-muted px-2 text-2xs leading-5 text-muted-foreground">只导出已归档的文件</span>
       <div class="flex-1" />
       <StreamStatus v-if="project.current" :state="stream.state.value" />
       <Button v-if="project.current" size="sm" data-testid="export-new-button" @click="openBlank">
@@ -416,7 +416,7 @@ const counts = computed(() => {
             导出入口在归类这一侧；建任务时冻结每页的版本，之后的重扫、撤回、改页序会出现在"交付后变更"里，只补交那几件。
           </span>
         </div>
-        <div class="grid shrink-0 grid-cols-[minmax(0,1fr)_64px_104px_minmax(150px,210px)] gap-x-4 border-b bg-muted/40 px-5 py-1.5 text-[11px] font-medium text-muted-foreground">
+        <div class="grid shrink-0 grid-cols-[minmax(0,1fr)_64px_104px_minmax(150px,210px)] gap-x-4 border-b bg-muted/40 px-5 py-1.5 text-2xs font-medium text-muted-foreground">
           <span>范围（归类树）</span><span>格式</span><span>件数 · 页数</span><span>状态</span>
         </div>
         <div ref="listEl" class="min-h-0 flex-1 overflow-y-auto" data-testid="export-task-list" @scroll.passive="onListScroll">

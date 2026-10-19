@@ -10,7 +10,7 @@ const props = defineProps<{
 </script>
 
 <template>
-  <article class="rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
+  <article class="rounded-lg shadow-outline">
     <header class="flex items-center gap-3 border-b px-4 py-3">
       <component :is="props.icon" class="size-4.5 shrink-0 text-muted-foreground" />
       <div class="min-w-0 flex-1">

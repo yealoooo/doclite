@@ -105,24 +105,24 @@ function statusClass(item: QueueItem): string {
           <span class="truncate font-medium text-foreground" :title="item.local_path">{{ item.file_name }}</span>
           <span
             v-if="isLowDpi(item)"
-            class="shrink-0 rounded bg-warn-soft px-1.5 py-px text-[11px] font-medium text-warn"
+            class="shrink-0 rounded bg-warn-soft px-1.5 py-px text-2xs font-medium text-warn"
             title="扫描分辨率低于 200 DPI，可能需要重扫"
             data-testid="badge-low-dpi"
           >DPI 低于 200</span>
           <span
             v-else-if="item.warnings.includes('dpi_unknown')"
-            class="shrink-0 rounded bg-muted px-1.5 py-px text-[11px] text-muted-foreground"
+            class="shrink-0 rounded bg-muted px-1.5 py-px text-2xs text-muted-foreground"
             title="文件里没有写分辨率"
           >DPI 未知</span>
           <span
             v-if="missingCover(item)"
-            class="shrink-0 rounded bg-muted px-1.5 py-px text-[11px] font-medium text-muted-foreground"
+            class="shrink-0 rounded bg-muted px-1.5 py-px text-2xs font-medium text-muted-foreground"
             :title="coverNote(item)"
             data-testid="badge-no-cover"
           >无封面</span>
           <span
             v-if="item.source === 'manual'"
-            class="shrink-0 rounded bg-info-soft px-1.5 py-px text-[11px] text-info"
+            class="shrink-0 rounded bg-info-soft px-1.5 py-px text-2xs text-info"
             title="从文件目录的上传按钮加入的"
           >上传按钮</span>
         </div>

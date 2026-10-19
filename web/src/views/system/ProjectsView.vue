@@ -13,9 +13,9 @@ import { deleteProject, listProjects } from '@/api/projects'
 import type { Page, ProjectAccess, ProjectDetail, ProjectItem, ProjectStatus } from '@/api/types'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import PageHeader from '@/components/app/PageHeader.vue'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { StatusBadge } from '@/components/ui/status-badge'
 import {
   Table,
   TableBody,
@@ -227,7 +227,7 @@ async function confirmDelete() {
   </PageHeader>
 
   <section class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-5">
-    <div class="rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
+    <div class="rounded-lg shadow-outline">
       <Table>
         <TableHeader>
           <TableRow class="bg-muted/60 hover:bg-muted/60">
@@ -249,10 +249,10 @@ async function confirmDelete() {
               </div>
             </TableCell>
             <TableCell>
-              <Badge
-                :class="p.status === 'active' ? 'bg-ok-soft text-ok' : 'bg-muted text-muted-foreground'"
-                class="rounded-md"
-              >{{ PROJECT_STATUS_LABEL[p.status] }}</Badge>
+              <StatusBadge
+                :status="{ label: PROJECT_STATUS_LABEL[p.status], badge: p.status === 'active' ? 'bg-ok-soft text-ok' : 'bg-muted text-muted-foreground' }"
+                size="md"
+              />
             </TableCell>
             <TableCell class="text-muted-foreground tabular-nums">
               <span v-if="p.member_count === 0 && p.role_count === 0" class="text-warn">未授权（仅管理员）</span>

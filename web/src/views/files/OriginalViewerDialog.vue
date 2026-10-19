@@ -259,14 +259,14 @@ const spec = computed(() => (info.value ? formatSpec(info.value) : ''))
 
         <!-- 查看区 -->
         <div class="relative flex min-h-0 flex-1">
-          <div v-if="missing" class="flex flex-1 items-center justify-center bg-zinc-200 text-sm text-muted-foreground">
+          <div v-if="missing" class="flex flex-1 items-center justify-center bg-canvas text-sm text-muted-foreground">
             文件已不存在（可能刚被删除或移走）
           </div>
           <template v-else-if="compare">
-            <div v-if="compareLoading" class="flex flex-1 items-center justify-center gap-2 bg-zinc-200 text-sm text-muted-foreground">
+            <div v-if="compareLoading" class="flex flex-1 items-center justify-center gap-2 bg-canvas text-sm text-muted-foreground">
               <LoaderCircleIcon class="size-4 animate-spin" />正在取各个版本…
             </div>
-            <div v-else-if="compareError" class="flex flex-1 items-center justify-center bg-zinc-200 text-sm text-destructive">
+            <div v-else-if="compareError" class="flex flex-1 items-center justify-center bg-canvas text-sm text-destructive">
               {{ compareError }}
             </div>
             <CompareViewer
@@ -296,7 +296,7 @@ const spec = computed(() => (info.value ? formatSpec(info.value) : ''))
 
         <!-- 状态栏 -->
         <div
-          class="flex h-7 shrink-0 items-center gap-3.5 overflow-hidden border-t bg-background px-3 font-mono text-[11px] whitespace-nowrap text-muted-foreground"
+          class="flex h-7 shrink-0 items-center gap-3.5 overflow-hidden border-t bg-background px-3 font-mono text-2xs whitespace-nowrap text-muted-foreground"
           data-testid="viewer-statusbar"
         >
           <span v-if="entry" class="truncate">{{ entry.file_name }}</span>

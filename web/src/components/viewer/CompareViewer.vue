@@ -223,7 +223,7 @@ const sides = computed(() => [
 
 <template>
   <div
-    class="relative flex min-h-0 min-w-0 flex-1 bg-zinc-300"
+    class="relative flex min-h-0 min-w-0 flex-1 bg-canvas"
     :class="mode === 'side' ? 'gap-px' : ''"
     data-testid="compare-viewer"
     :data-mode="mode"
@@ -258,17 +258,17 @@ const sides = computed(() => [
           :data-side="key"
         >
           <span
-            class="rounded px-1.5 font-mono text-[12px] leading-5 font-medium shadow-[0_0_0_1px_rgba(0,0,0,0.08)]"
+            class="rounded px-1.5 font-mono text-xs leading-5 font-medium shadow-outline"
             :class="key === 'right' ? 'bg-foreground text-background' : 'bg-background text-foreground'"
           >v{{ side.versionNo }}<template v-if="side.label"> · {{ side.label }}</template></span>
           <span
             v-if="side.rejectReasons?.length"
-            class="max-w-full rounded bg-destructive-soft px-1.5 text-[12px] leading-5 text-destructive shadow-[0_0_0_1px_rgba(198,40,40,0.15)]"
+            class="max-w-full rounded bg-destructive-soft px-1.5 text-xs leading-5 text-destructive ring-1 ring-destructive/15"
             data-testid="compare-reasons"
           >驳回：{{ reasonsOf(side) }}</span>
           <span
             v-if="side.rejectComment"
-            class="line-clamp-2 max-w-full rounded bg-background/90 px-1.5 text-[11px] leading-4 text-muted-foreground"
+            class="line-clamp-2 max-w-full rounded bg-background/90 px-1.5 text-2xs leading-4 text-muted-foreground"
           >{{ side.rejectComment }}</span>
         </div>
       </ImageViewer>

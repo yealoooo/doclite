@@ -204,12 +204,12 @@ const stateNote = computed(() => {
           ref="panelEl"
           tabindex="-1"
           class="flex flex-col gap-2 rounded-lg outline-none"
-          :class="open ? 'bg-destructive-soft/40 p-2.5 shadow-[0_0_0_1px_rgba(198,40,40,0.18)]' : ''"
+          :class="open ? 'bg-destructive-soft/40 p-2.5 ring-1 ring-destructive/20' : ''"
           data-testid="reject-panel"
         >
           <div class="flex flex-col gap-0.5">
             <span class="text-xs font-medium" :class="open ? 'text-destructive' : 'text-muted-foreground'">驳回原因</span>
-            <span v-if="open" class="text-[11px] text-muted-foreground">按 1–9 勾选 · Tab 写说明 · Enter 确认 · Esc 取消</span>
+            <span v-if="open" class="text-2xs text-muted-foreground">按 1–9 勾选 · Tab 写说明 · Enter 确认 · Esc 取消</span>
           </div>
           <div class="flex flex-wrap gap-1.5">
             <span v-if="!props.reasons && props.reasonsError" class="text-xs text-destructive" data-testid="reject-reasons-error">
@@ -238,7 +238,7 @@ const stateNote = computed(() => {
             >
               <span
                 v-if="open && i < 9"
-                class="font-mono text-[10px]"
+                class="font-mono text-2xs"
                 :class="selected.includes(code) ? 'text-white/80' : 'text-muted-foreground'"
               >{{ i + 1 }}</span>
               {{ rejectReasonLabel(code) }}
@@ -250,12 +250,12 @@ const stateNote = computed(() => {
                 ref="commentEl"
                 v-model="comment"
                 rows="3"
-                class="block w-full resize-none rounded-md border bg-background px-2.5 py-1.5 text-[13px] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                class="block w-full resize-none rounded-md border bg-background px-2.5 py-1.5 text-compact outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                 :placeholder="needsComment ? '说明（选了“其他”，必填）' : '说明（可选，Shift+Enter 换行）'"
                 data-testid="reject-comment"
               />
               <span
-                class="absolute right-2 bottom-1 font-mono text-[10px]"
+                class="absolute right-2 bottom-1 font-mono text-2xs"
                 :class="commentChars > props.commentMax ? 'text-destructive' : 'text-muted-foreground'"
               >{{ commentChars }}/{{ props.commentMax }}</span>
             </div>
@@ -279,7 +279,7 @@ const stateNote = computed(() => {
           </template>
         </div>
 
-        <p v-if="props.blockedHint && !open" class="text-center text-[11px] text-muted-foreground" data-testid="review-blocked">
+        <p v-if="props.blockedHint && !open" class="text-center text-2xs text-muted-foreground" data-testid="review-blocked">
           {{ props.blockedHint }}
         </p>
         <div v-if="!open" class="flex gap-1.5">
@@ -294,7 +294,8 @@ const stateNote = computed(() => {
             驳回重扫<span class="kbd">R</span>
           </Button>
           <Button
-            class="flex-1 bg-ok text-white hover:bg-ok/85"
+            variant="success"
+            class="flex-1"
             :disabled="!props.canAct || props.busy"
             data-testid="review-approve"
             @mousedown.prevent
@@ -321,7 +322,7 @@ const stateNote = computed(() => {
         </Button>
       </template>
     </template>
-    <p class="text-center text-[11px] leading-4 text-muted-foreground">
+    <p class="text-center text-2xs leading-4 text-muted-foreground">
       ← → 翻页 · 空格 适合窗口/100% · + − 0 缩放 · [ ] 旋转 · C 对比 · A 通过 · R 驳回
     </p>
   </div>

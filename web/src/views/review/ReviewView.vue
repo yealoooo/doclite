@@ -1116,7 +1116,7 @@ const emptyText = computed(() => {
           >
             <span class="font-mono text-xs text-muted-foreground">{{ p.code }}</span>
             <span class="min-w-0 flex-1 truncate">{{ p.name }}</span>
-            <span v-if="p.status === 'archived'" class="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">已归档</span>
+            <span v-if="p.status === 'archived'" class="shrink-0 rounded bg-muted px-1 text-2xs text-muted-foreground">已归档</span>
             <span class="shrink-0 font-mono text-xs">{{ p.open.toLocaleString() }}</span>
           </button>
         </PopoverContent>
@@ -1145,7 +1145,7 @@ const emptyText = computed(() => {
             <button
               v-if="folderScope"
               type="button"
-              class="inline-flex shrink-0 items-center gap-0.5 rounded px-1 text-[11px] leading-5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              class="inline-flex shrink-0 items-center gap-0.5 rounded px-1 text-2xs leading-5 text-muted-foreground hover:bg-muted hover:text-foreground"
               title="看整个项目"
               data-testid="review-scope-clear"
               @click="scopeTo(null)"
@@ -1175,7 +1175,7 @@ const emptyText = computed(() => {
               role="radio"
               :aria-checked="stateFilter === t.state"
               class="rounded-full px-2 text-xs leading-6"
-              :class="stateFilter === t.state ? 'bg-foreground text-background' : 'bg-background text-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.1)] hover:bg-muted'"
+              :class="stateFilter === t.state ? 'bg-foreground text-background' : 'bg-background text-foreground shadow-outline hover:bg-muted'"
               data-testid="review-tab"
               :data-state="t.state"
               :data-count="tabCount(t.state) ?? ''"
@@ -1188,7 +1188,7 @@ const emptyText = computed(() => {
               role="checkbox"
               :aria-checked="lowDpi"
               class="rounded-full px-2 text-xs leading-6"
-              :class="lowDpi ? 'bg-warn text-white' : 'bg-background text-warn shadow-[0_0_0_1px_rgba(180,83,9,0.25)] hover:bg-warn-soft'"
+              :class="lowDpi ? 'bg-warn text-white' : 'bg-background text-warn ring-1 ring-warn/25 hover:bg-warn-soft'"
               data-testid="review-tab-low-dpi"
               :data-count="list.counts.value?.low_dpi ?? ''"
               :title="`当前版本的 DPI 低于 ${list.lowDpiThreshold.value}（读不出的不算）`"
@@ -1243,7 +1243,7 @@ const emptyText = computed(() => {
         />
 
         <div class="shrink-0 border-t px-3 py-2" data-testid="batch-bar" :data-selected="selection.count.value" :data-eligible="batchEligible.length">
-          <div class="mb-1.5 text-[11px] text-muted-foreground">
+          <div class="mb-1.5 text-2xs text-muted-foreground">
             <template v-if="selection.count.value > 1">
               已选 {{ selection.count.value }} 个，其中待审 {{ batchEligible.length }} 个
               <button type="button" class="ml-1 underline hover:text-foreground" @click="currentId ? selection.set([currentId]) : selection.clear()">取消</button>
@@ -1290,7 +1290,7 @@ const emptyText = computed(() => {
               >
                 <LoaderCircleIcon v-if="compareLoading" class="size-3.5 animate-spin" />
                 <Columns2Icon v-else class="size-3.5" />与上一轮对比
-                <span class="font-mono text-[10px] text-muted-foreground">C</span>
+                <span class="font-mono text-2xs text-muted-foreground">C</span>
               </button>
             </template>
             <template v-else>
@@ -1313,10 +1313,10 @@ const emptyText = computed(() => {
                 @mousedown.prevent
                 @click="compareMode = 'toggle'"
               >
-                <LayersIcon class="size-3.5" />同位切换<span class="font-mono text-[10px] text-muted-foreground">V</span>
+                <LayersIcon class="size-3.5" />同位切换<span class="font-mono text-2xs text-muted-foreground">V</span>
               </button>
               <button type="button" class="viewer-tool" data-testid="compare-close" @mousedown.prevent @click="closeCompare()">
-                退出对比<span class="font-mono text-[10px] text-muted-foreground">C</span>
+                退出对比<span class="font-mono text-2xs text-muted-foreground">C</span>
               </button>
             </template>
             <div class="flex-1" />
@@ -1335,10 +1335,10 @@ const emptyText = computed(() => {
         </ViewerToolbar>
 
         <div class="relative flex min-h-0 flex-1">
-          <div v-if="!currentId" class="flex flex-1 items-center justify-center bg-zinc-200 text-sm text-muted-foreground">
+          <div v-if="!currentId" class="flex flex-1 items-center justify-center bg-canvas text-sm text-muted-foreground">
             {{ list.state.value === 'ready' ? '没有要看的文件' : '' }}
           </div>
-          <div v-else-if="missing" class="flex flex-1 items-center justify-center bg-zinc-200 text-sm text-muted-foreground">
+          <div v-else-if="missing" class="flex flex-1 items-center justify-center bg-canvas text-sm text-muted-foreground">
             文件已不存在（可能刚被删除或移走）
           </div>
           <CompareViewer
@@ -1367,7 +1367,7 @@ const emptyText = computed(() => {
             <button
               v-if="prevReject && current && current.review_round > 1"
               type="button"
-              class="absolute top-2 left-1/2 z-10 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-1.5 rounded-full bg-background/95 py-1 pr-1.5 pl-3 text-xs text-foreground shadow-[0_0_0_1px_rgba(180,83,9,0.25),0_2px_8px_rgba(0,0,0,0.08)] hover:bg-background"
+              class="absolute top-2 left-1/2 z-10 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-1.5 rounded-full bg-background/95 py-1 pr-1.5 pl-3 text-xs text-foreground ring-1 ring-warn/25 shadow-[0_2px_8px_rgba(0,0,0,0.08)] hover:bg-background"
               data-testid="viewer-prev-reject"
               @mousedown.prevent
               @click="openCompare()"
@@ -1403,7 +1403,7 @@ const emptyText = computed(() => {
 
         <!-- 状态栏 -->
         <div
-          class="flex h-7 shrink-0 items-center gap-3.5 overflow-hidden border-t bg-background px-3 font-mono text-[11px] whitespace-nowrap text-muted-foreground"
+          class="flex h-7 shrink-0 items-center gap-3.5 overflow-hidden border-t bg-background px-3 font-mono text-2xs whitespace-nowrap text-muted-foreground"
           data-testid="viewer-statusbar"
         >
           <span v-if="current" class="truncate">{{ current.file_name }}</span>

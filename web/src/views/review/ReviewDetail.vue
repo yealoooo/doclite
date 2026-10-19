@@ -14,8 +14,10 @@ import { computed, ref, watch } from 'vue'
 
 import type { FileImageItem, FileReviewRow, FileReviews, MyReviewItem, SnapshotItem } from '@/api/types'
 import CatalogPlacementInfo from '@/components/files/CatalogPlacementInfo.vue'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { formatDateTime } from '@/lib/format'
-import { colorModeLabel, formatBytes, formatSpec, snapshotTypeLabel } from '@/lib/files'
+import { colorModeLabel, formatBytes, formatSpec, REVIEW_STATUS, snapshotTypeLabel } from '@/lib/files'
+import type { StatusStyle } from '@/lib/status'
 import { rejectReasonsText } from '@/lib/reject-reasons'
 import { reviewRowLabel } from '@/lib/reviews'
 
@@ -109,12 +111,18 @@ const formatName = computed(() => {
   return m || '—'
 })
 
-function recordClass(r: FileReviewRow): string {
-  if (r.status === 'open') return 'bg-warn-soft text-warn'
-  if (r.status === 'cancelled') return 'bg-muted text-muted-foreground'
-  if (r.result === 'approved') return 'bg-ok-soft text-ok'
-  if (r.result === 'rejected') return 'bg-destructive-soft text-destructive'
-  return 'bg-muted text-muted-foreground'
+function recordStatus(r: FileReviewRow): StatusStyle {
+  const s =
+    r.status === 'open'
+      ? REVIEW_STATUS.pending
+      : r.status === 'cancelled'
+        ? REVIEW_STATUS.unassigned
+        : r.result === 'approved'
+          ? REVIEW_STATUS.approved
+          : r.result === 'rejected'
+            ? REVIEW_STATUS.rejected
+            : REVIEW_STATUS.unassigned
+  return { ...s, label: reviewRowLabel(r) }
 }
 </script>
 
@@ -129,7 +137,7 @@ function recordClass(r: FileReviewRow): string {
           </h2>
           <span
             v-if="props.item.review_round > 1"
-            class="shrink-0 rounded bg-warn-soft px-1.5 text-[11px] leading-5 text-warn"
+            class="shrink-0 rounded bg-warn-soft px-1.5 text-2xs leading-5 text-warn"
             data-testid="review-round"
           >第 {{ props.item.review_round }} 轮</span>
         </div>
@@ -139,7 +147,7 @@ function recordClass(r: FileReviewRow): string {
       <!-- 上一轮被驳回 -->
       <div
         v-if="props.prevReject && props.item.review_round > 1"
-        class="rounded-lg bg-warn-soft/70 px-3 py-2 text-xs leading-5 text-foreground shadow-[0_0_0_1px_rgba(180,83,9,0.18)]"
+        class="rounded-lg bg-warn-soft/70 px-3 py-2 text-xs leading-5 text-foreground ring-1 ring-warn/20"
         data-testid="prev-reject"
         :data-version="prevVersion ?? undefined"
       >
@@ -184,17 +192,17 @@ function recordClass(r: FileReviewRow): string {
             <div class="min-w-0 flex-1 text-xs leading-5">
               <div class="flex items-center gap-1.5">
                 <b class="font-medium text-foreground">v{{ s.version_no }} · {{ snapshotTypeLabel(s.snapshot_type) }}</b>
-                <span v-if="s.snapshot_id === currentSid" class="rounded bg-info-soft px-1 text-[10px] leading-4 text-info">当前</span>
-                <span v-if="isComparing(s.snapshot_id)" class="rounded bg-foreground/80 px-1 text-[10px] leading-4 text-background">对比中</span>
+                <span v-if="s.snapshot_id === currentSid" class="rounded bg-info-soft px-1 text-2xs leading-4 text-info">当前</span>
+                <span v-if="isComparing(s.snapshot_id)" class="rounded bg-foreground/80 px-1 text-2xs leading-4 text-background">对比中</span>
               </div>
               <div class="truncate text-muted-foreground">
                 {{ s.created_by_name ?? '系统' }} · {{ formatDateTime(s.created_at) }}<template v-if="snapshotNote(s)"> · {{ snapshotNote(s) }}</template>
               </div>
-              <div class="truncate text-muted-foreground/80">{{ formatSpec(s) }}</div>
+              <div class="truncate text-muted-foreground">{{ formatSpec(s) }}</div>
             </div>
             <label
               v-if="ordered.length > 1"
-              class="flex shrink-0 cursor-pointer items-start gap-1 pt-0.5 text-[11px] text-muted-foreground"
+              class="flex shrink-0 cursor-pointer items-start gap-1 pt-0.5 text-2xs text-muted-foreground"
               title="勾两个版本对比"
             >
               <input
@@ -211,7 +219,7 @@ function recordClass(r: FileReviewRow): string {
           <button
             v-if="ordered.length > 1"
             type="button"
-            class="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs shadow-[0_0_0_1px_rgba(0,0,0,0.1)] hover:bg-muted disabled:opacity-50"
+            class="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs shadow-outline hover:bg-muted disabled:opacity-50"
             :disabled="!pickedPair"
             data-testid="compare-picked"
             @mousedown.prevent
@@ -257,15 +265,15 @@ function recordClass(r: FileReviewRow): string {
             :data-result="r.result ?? undefined"
           >
             <div class="flex items-center gap-1.5">
-              <span class="rounded-full px-1.5 text-[11px] leading-4" :class="recordClass(r)">{{ reviewRowLabel(r) }}</span>
+              <StatusBadge :status="recordStatus(r)" />
               <span class="min-w-0 truncate text-foreground">{{ r.reviewer_name }}</span>
-              <span v-if="r.version_no" class="font-mono text-[11px] text-muted-foreground">审 v{{ r.version_no }}</span>
+              <span v-if="r.version_no" class="font-mono text-2xs text-muted-foreground">审 v{{ r.version_no }}</span>
               <span class="flex-1" />
-              <span class="shrink-0 text-[11px] text-muted-foreground">{{ formatDateTime(r.reviewed_at ?? r.assigned_at) }}</span>
+              <span class="shrink-0 text-2xs text-muted-foreground">{{ formatDateTime(r.reviewed_at ?? r.assigned_at) }}</span>
             </div>
             <div v-if="r.reject_reasons.length" class="text-destructive">原因：{{ rejectReasonsText(r.reject_reasons) }}</div>
             <div v-if="r.comment" class="break-words text-muted-foreground">说明：{{ r.comment }}</div>
-            <div class="text-[11px] text-muted-foreground/80">{{ r.assigned_by_name }} 分配于 {{ formatDateTime(r.assigned_at) }}</div>
+            <div class="text-2xs text-muted-foreground">{{ r.assigned_by_name }} 分配于 {{ formatDateTime(r.assigned_at) }}</div>
           </li>
         </ol>
       </section>

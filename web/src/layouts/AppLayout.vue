@@ -83,7 +83,7 @@ useTrayErrors()
         :class="collapsed ? 'flex-col gap-2' : 'gap-2.5 px-2'"
       >
         <span
-          class="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary text-[13px] font-semibold text-primary-foreground"
+          class="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary text-compact font-semibold text-primary-foreground"
         >D</span>
         <template v-if="!collapsed">
           <div v-if="inSystem" class="min-w-0 flex-1">
@@ -154,7 +154,7 @@ useTrayErrors()
         :icon="SettingsIcon"
         label="系统管理"
         :collapsed="collapsed"
-        class="mb-2 bg-background font-medium text-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.12)]"
+        class="mb-2 bg-background font-medium text-foreground shadow-outline"
         :class="collapsed ? '' : 'justify-center gap-1.5'"
         data-testid="nav-system"
       />

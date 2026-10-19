@@ -51,6 +51,7 @@ import type {
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import FolderTree from '@/components/files/FolderTree.vue'
 import { Button } from '@/components/ui/button'
+import { StatusBadge } from '@/components/ui/status-badge'
 import StreamStatus from '@/components/app/StreamStatus.vue'
 import { useFolderBrowser } from '@/composables/useFolderBrowser'
 import { useFolderTree } from '@/composables/useFolderTree'
@@ -687,17 +688,15 @@ useEventListener(window, 'focus', () => {
     <header class="flex h-14 shrink-0 items-center gap-3 border-b px-5">
       <h1 class="shrink-0 text-base font-semibold tracking-tight text-foreground">审核分配</h1>
       <div v-if="project.current" class="flex min-w-0 items-center gap-1.5 border-l pl-3" data-testid="project-counts">
-        <span
+        <StatusBadge
           v-for="s in STATUS_ORDER"
           :key="s"
-          class="inline-flex items-center gap-1 rounded-full px-2 text-xs leading-6"
-          :class="REVIEW_STATUS[s].badge"
+          :status="REVIEW_STATUS[s]"
+          size="md"
+          dot
           :data-testid="`count-${s}`"
           :data-count="rootCounts?.[s] ?? ''"
-        >
-          <span class="size-1.5 rounded-full" :class="REVIEW_STATUS[s].dot" />
-          {{ REVIEW_STATUS[s].label }} {{ formatCount(rootCounts?.[s]) }}
-        </span>
+        >{{ REVIEW_STATUS[s].label }} {{ formatCount(rootCounts?.[s]) }}</StatusBadge>
       </div>
       <div class="flex-1" />
       <StreamStatus v-if="project.current" :state="stream.state.value" />
@@ -769,8 +768,8 @@ useEventListener(window, 'focus', () => {
             <template #suffix="{ folder: f }">
               <span
                 v-if="counts.get(f.id)"
-                class="shrink-0 font-mono text-[11px] tabular-nums"
-                :class="counts.get(f.id)!.unassigned > 0 ? 'font-medium text-foreground' : 'text-muted-foreground/60'"
+                class="shrink-0 font-mono text-2xs tabular-nums"
+                :class="counts.get(f.id)!.unassigned > 0 ? 'font-medium text-foreground' : 'text-muted-foreground'"
                 :title="`含子文件夹：待分配 ${counts.get(f.id)!.unassigned}、待审 ${counts.get(f.id)!.pending}、通过 ${counts.get(f.id)!.approved}、驳回 ${counts.get(f.id)!.rejected}`"
                 data-testid="tree-unassigned"
                 :data-count="counts.get(f.id)!.unassigned"

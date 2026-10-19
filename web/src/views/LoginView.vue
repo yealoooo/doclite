@@ -57,7 +57,7 @@ async function submit() {
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center bg-[#fafafa] px-4">
+  <div class="flex min-h-screen items-center justify-center bg-sidebar px-4">
     <div class="w-full max-w-[360px]">
       <div class="mb-8 flex flex-col items-center gap-3 text-center">
         <span

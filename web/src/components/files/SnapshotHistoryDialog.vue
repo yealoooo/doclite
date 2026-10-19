@@ -82,7 +82,7 @@ watch(
             :data-version="s.version_no"
           >
             <FileCover v-if="props.fileId" :file-id="props.fileId" :info="s" class="w-[76px] shrink-0" />
-            <div class="grid min-w-0 flex-1 grid-cols-[5em_minmax(0,1fr)] gap-x-3 gap-y-1 text-[13px]">
+            <div class="grid min-w-0 flex-1 grid-cols-[5em_minmax(0,1fr)] gap-x-3 gap-y-1 text-compact">
               <div class="col-span-2 mb-0.5 flex items-center gap-2">
                 <span class="font-mono text-sm font-semibold text-foreground">v{{ s.version_no }}</span>
                 <span class="rounded bg-muted px-1.5 text-xs leading-5 text-foreground">
@@ -108,7 +108,7 @@ watch(
               <span class="text-xs leading-5 text-muted-foreground">存储</span>
               <span class="min-w-0">
                 {{ s.storage_profile_name }}
-                <span class="block font-mono text-[11px] break-all text-muted-foreground">{{ s.storage_key }}</span>
+                <span class="block font-mono text-2xs break-all text-muted-foreground">{{ s.storage_key }}</span>
               </span>
             </div>
           </li>

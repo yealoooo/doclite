@@ -51,7 +51,7 @@ const isActual = () => props.view?.zoom != null && Math.abs(props.view.zoom - 1)
     <button type="button" class="viewer-tool" :disabled="props.disabled" data-testid="viewer-zoom-out" title="缩小" @click="emit('zoomOut')">
       <MinusIcon class="size-3.5" />
     </button>
-    <span class="w-11 text-center font-mono text-[11px] text-muted-foreground tabular-nums" data-testid="viewer-zoom">
+    <span class="w-11 text-center font-mono text-2xs text-muted-foreground tabular-nums" data-testid="viewer-zoom">
       {{ props.view?.zoom == null ? '—' : `${Math.round(props.view.zoom * 100)}%` }}
     </span>
     <button type="button" class="viewer-tool" :disabled="props.disabled" data-testid="viewer-zoom-in" title="放大" @click="emit('zoomIn')">
@@ -78,7 +78,7 @@ const isActual = () => props.view?.zoom != null && Math.abs(props.view.zoom - 1)
     >
       <RotateCwIcon class="size-3.5" />
     </button>
-    <span v-if="props.view?.rotation" class="text-[11px] text-muted-foreground" data-testid="viewer-rotation">
+    <span v-if="props.view?.rotation" class="text-2xs text-muted-foreground" data-testid="viewer-rotation">
       已旋转 {{ props.view.rotation }}°（不保存）
     </span>
     <slot name="end" />
@@ -93,7 +93,7 @@ const isActual = () => props.view?.zoom != null && Math.abs(props.view.zoom - 1)
   height: 26px;
   padding: 0 8px;
   border-radius: 5px;
-  color: #4d4d4d;
+  color: var(--sidebar-foreground);
   white-space: nowrap;
 }
 .viewer-tool:hover:not(:disabled) {

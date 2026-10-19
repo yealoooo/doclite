@@ -80,7 +80,7 @@ const state = computed(() => (loadError.value ? 'error' : ready.value ? 'ready' 
 
 <template>
   <section
-    class="rounded-lg bg-violet-50 px-3 py-2 text-xs leading-5 text-violet-950 shadow-[0_0_0_1px_rgba(109,40,217,0.12)]"
+    class="rounded-lg bg-sealed-soft/50 px-3 py-2 text-xs leading-5 text-foreground ring-1 ring-sealed/15"
     data-testid="catalog-info"
     :data-state="state"
     :data-placed="ready ? String(!!placement) : undefined"
@@ -88,7 +88,7 @@ const state = computed(() => (loadError.value ? 'error' : ready.value ? 'ready' 
     :data-page-no="ready && placement ? placement.page_no : undefined"
     :data-item-id="ready && placement ? placement.item_id : undefined"
   >
-    <div class="flex items-center gap-1.5 text-[11px] text-violet-900/70">
+    <div class="flex items-center gap-1.5 text-2xs text-sealed">
       <span>归类信息（只读）</span>
       <span v-if="props.note">· {{ props.note }}</span>
       <LoaderCircleIcon v-if="loading" class="ml-auto size-3 animate-spin" />
@@ -99,19 +99,19 @@ const state = computed(() => (loadError.value ? 'error' : ready.value ? 'ready' 
         <div class="flex flex-wrap items-baseline gap-x-2" :title="`已归档：${placementNo(placement)} 第 ${placement.page_no} 页`">
           <b
             class="min-w-0 font-medium [overflow-wrap:anywhere] text-foreground"
-            :class="placement.archive_no ? 'font-mono text-[12px]' : ''"
+            :class="placement.archive_no ? 'font-mono text-xs leading-5' : ''"
             data-testid="catalog-info-no"
           >
             {{ placementNo(placement) }}
           </b>
           <span class="shrink-0 whitespace-nowrap text-foreground" data-testid="catalog-info-page">第 {{ placement.page_no }} 页</span>
         </div>
-        <div class="[overflow-wrap:anywhere] text-foreground/80" data-testid="catalog-info-title">
+        <div class="[overflow-wrap:anywhere] text-foreground" data-testid="catalog-info-title">
           {{ placement.title || '（还没填题名）' }}
         </div>
       </template>
-      <div v-else class="text-violet-900/80" data-testid="catalog-info-none">未归档</div>
+      <div v-else class="text-muted-foreground" data-testid="catalog-info-none">未归档</div>
     </template>
-    <div v-else class="text-violet-900/50">正在取…</div>
+    <div v-else class="text-muted-foreground">正在取…</div>
   </section>
 </template>

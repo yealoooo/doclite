@@ -165,7 +165,7 @@ async function submit() {
             <SearchIcon class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input v-model="keyword" placeholder="搜索登录名或姓名" class="h-8 pl-8" data-testid="access-search" />
           </div>
-          <div class="flex h-80 flex-col overflow-y-auto rounded-lg p-1 shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
+          <div class="flex h-80 flex-col overflow-y-auto rounded-lg p-1 shadow-outline">
             <label
               v-for="u in filteredUsers"
               :key="u.id"
@@ -186,7 +186,7 @@ async function submit() {
                   <span class="truncate font-mono text-xs text-muted-foreground">{{ u.username }}</span>
                   <span
                     v-if="u.status === 'disabled'"
-                    class="inline-flex shrink-0 items-center gap-0.5 rounded bg-destructive-soft px-1 text-[11px] text-destructive"
+                    class="inline-flex shrink-0 items-center gap-0.5 rounded bg-destructive-soft px-1 text-2xs text-destructive"
                     data-testid="disabled-badge"
                   ><UserXIcon class="size-3" />已停用</span>
                 </span>
@@ -205,7 +205,7 @@ async function submit() {
             <h3 class="text-sm font-medium text-foreground">授权给角色</h3>
             <span class="text-xs text-muted-foreground">已选 {{ roleIds.length }} 个</span>
           </div>
-          <div class="flex h-[364px] flex-col overflow-y-auto rounded-lg p-1 shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
+          <div class="flex h-[364px] flex-col overflow-y-auto rounded-lg p-1 shadow-outline">
             <div
               v-for="r in candidates.roles"
               :key="r.id"

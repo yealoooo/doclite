@@ -11,11 +11,15 @@
 //   data-status：open / done，data-result、data-review-status、data-round、data-history（不是当前结论）、
 //   data-current、data-selected）。
 import { useVirtualizer } from '@tanstack/vue-virtual'
-import { FolderIcon, HistoryIcon } from '@lucide/vue'
+import { HistoryIcon } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import type { MyReviewFolder, MyReviewItem } from '@/api/types'
+import { StatusBadge } from '@/components/ui/status-badge'
 import FileCover from '@/components/files/FileCover.vue'
+import FolderGlyph from '@/components/files/FolderGlyph.vue'
+import { REVIEW_STATUS } from '@/lib/files'
+import { type StatusStyle, unknownStatus } from '@/lib/status'
 import type { Selection } from '@/composables/useSelection'
 import { useImageInfoStore } from '@/stores/image-info'
 
@@ -154,11 +158,11 @@ function scrollToFile(fileId: string) {
 
 defineExpose({ scrollToFile })
 
-function statusLabel(item: MyReviewItem): { text: string; cls: string } {
-  if (item.status === 'open') return { text: '待审', cls: 'bg-warn-soft text-warn' }
-  if (item.result === 'approved') return { text: '通过', cls: 'bg-ok-soft text-ok' }
-  if (item.result === 'rejected') return { text: '驳回', cls: 'bg-destructive-soft text-destructive' }
-  return { text: item.status, cls: 'bg-muted text-muted-foreground' }
+function statusOf(item: MyReviewItem): StatusStyle {
+  if (item.status === 'open') return REVIEW_STATUS.pending
+  if (item.result === 'approved') return REVIEW_STATUS.approved
+  if (item.result === 'rejected') return REVIEW_STATUS.rejected
+  return unknownStatus(item.status)
 }
 
 function lowDpi(item: MyReviewItem): boolean {
@@ -181,7 +185,7 @@ function rowClass(it: MyReviewItem): string[] {
 <template>
   <div
     ref="scrollEl"
-    class="min-h-0 flex-1 overflow-y-auto outline-none [scrollbar-gutter:stable]"
+    class="min-h-0 flex-1 overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:ring-inset [scrollbar-gutter:stable]"
     tabindex="-1"
     data-testid="review-list"
     :data-rows="rows.length"
@@ -202,11 +206,11 @@ function rowClass(it: MyReviewItem): string[] {
           :data-folder-id="row.folderId"
           :title="`/${row.path}`"
         >
-          <FolderIcon class="size-3.5 shrink-0 fill-amber-300/70 text-amber-600" :stroke-width="1.5" />
+          <FolderGlyph class="size-3.5" />
           <span class="min-w-0 truncate font-medium text-foreground">{{ row.name }}</span>
           <span
             v-if="props.folders.get(row.folderId)"
-            class="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums"
+            class="shrink-0 font-mono text-2xs text-muted-foreground tabular-nums"
             data-testid="review-group-counts"
             :data-open="props.folders.get(row.folderId)!.counts.open"
             :data-all="props.folders.get(row.folderId)!.counts.all"
@@ -252,8 +256,8 @@ function rowClass(it: MyReviewItem): string[] {
             @broken="images.reportBroken(row.item.file_id)"
           />
           <div class="min-w-0 flex-1">
-            <div class="truncate text-[13px] text-foreground" :title="row.item.file_name">{{ row.item.file_name }}</div>
-            <div class="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <div class="truncate text-compact text-foreground" :title="row.item.file_name">{{ row.item.file_name }}</div>
+            <div class="mt-0.5 flex items-center gap-1.5 text-2xs text-muted-foreground">
               <span class="font-mono">v{{ row.item.version_no }}</span>
               <span v-if="row.item.review_round > 1" class="rounded bg-warn-soft px-1 leading-4 text-warn">第 {{ row.item.review_round }} 轮</span>
               <span
@@ -271,10 +275,8 @@ function rowClass(it: MyReviewItem): string[] {
               </span>
             </div>
           </div>
-          <span v-if="props.busyIds.has(row.item.file_id)" class="shrink-0 text-[11px] text-muted-foreground">提交中…</span>
-          <span v-else class="shrink-0 rounded-full px-1.5 text-[11px] leading-5" :class="statusLabel(row.item).cls">
-            {{ statusLabel(row.item).text }}
-          </span>
+          <span v-if="props.busyIds.has(row.item.file_id)" class="shrink-0 text-2xs text-muted-foreground">提交中…</span>
+          <StatusBadge v-else :status="statusOf(row.item)" />
         </div>
       </div>
     </div>

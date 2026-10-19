@@ -3,7 +3,7 @@
 // 管理器，中间"归档 →"。只能整个文件夹归档：没有待归类池、页序条、按页挂接、新建空条目、标记完成 / 退回草稿。
 //
 // - **左：文件目录**（FolderPane，要 files 或 scan 菜单，没有时给说明）：目录树 + 当前文件夹（地址栏 `?folder=`）；
-//   子文件夹显示归档状态；打开已归档的文件夹时顶部紫色（已封存）/ 橙色（修改中）横条。选中的文件夹拖到右边树上的节点、
+//   子文件夹显示归档状态；打开已归档的文件夹时顶部紫色（已封存）/ 青色（修改中）横条。选中的文件夹拖到右边树上的节点、
 //   件列表，或者点中间的"归档 →"（放到右边选中的节点），打开归档预览（ArchiveDialog）。
 // - **右：归档目录**：归类树（CategoryTree；工具栏和右键：新建、改名称编码类型、移动、删除、重新生成档号、导出）+
 //   选中节点的件列表（ItemList：件号、题名、页数、封存和锁定状态；勾选后批量锁定）；双击打开一件（ItemDetail，替换列表，
@@ -69,6 +69,7 @@ import CategoryPicker, { type PickedCategory } from '@/components/catalog/Catego
 import CategoryTree from '@/components/catalog/CategoryTree.vue'
 import UnsealDialog from '@/components/catalog/UnsealDialog.vue'
 import { Button } from '@/components/ui/button'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   ContextMenu,
@@ -83,6 +84,7 @@ import { useCategoryTree } from '@/composables/useCategoryTree'
 import { useEventBatch, useProjectStream } from '@/composables/useProjectStream'
 import { useSelection } from '@/composables/useSelection'
 import {
+  ARCHIVE_STATE,
   SAMPLE_CODES,
   describeArchiveNoTemplate,
   formatItemNo,
@@ -1071,7 +1073,7 @@ const templateHint = computed(() => {
       <button
         v-if="modifyingTotal"
         type="button"
-        class="flex shrink-0 items-center gap-1 rounded-full border border-orange-300 bg-orange-50 px-2.5 py-0.5 text-xs text-orange-700 hover:bg-orange-100"
+        class="flex shrink-0 items-center gap-1 rounded-full bg-modifying-soft px-2.5 py-0.5 text-xs text-modifying ring-1 ring-modifying/30 ring-inset hover:bg-modifying-soft/70"
         title="点开看是哪几件"
         data-testid="modifying-chip"
         :data-count="modifyingTotal"
@@ -1139,14 +1141,14 @@ const templateHint = computed(() => {
         >
           归档<ArrowRightIcon />
         </Button>
-        <p class="text-center text-[11px] leading-snug text-muted-foreground" data-testid="archive-tip">{{ midTip }}</p>
-        <p v-if="leftSelected.length" class="text-center text-[11px] text-info">已选 {{ leftSelected.length }} 个</p>
+        <p class="text-center text-2xs leading-snug text-muted-foreground" data-testid="archive-tip">{{ midTip }}</p>
+        <p v-if="leftSelected.length" class="text-center text-2xs text-info">已选 {{ leftSelected.length }} 个</p>
       </div>
 
       <!-- 右：归档目录 -->
       <section class="flex min-w-0 flex-[1.15] flex-col">
         <div class="flex h-10 shrink-0 items-center gap-2 border-b bg-muted/30 px-3">
-          <span class="shrink-0 text-[13px] font-semibold text-foreground">归档目录</span>
+          <span class="shrink-0 text-compact font-semibold text-foreground">归档目录</span>
           <span class="min-w-0 truncate text-xs text-muted-foreground" data-testid="catalog-crumb">
             <template v-if="atRoot">直接放在顶层的件</template>
             <template v-else-if="category">
@@ -1239,7 +1241,7 @@ const templateHint = computed(() => {
                     <button
                       v-if="tree.rootDirectCount.value > 0"
                       type="button"
-                      class="mb-px flex w-full items-center gap-1.5 rounded-md py-1 pr-2 pl-[26px] text-left text-[13px] hover:bg-muted"
+                      class="mb-px flex w-full items-center gap-1.5 rounded-md py-1 pr-2 pl-[26px] text-left text-compact hover:bg-muted"
                       :class="atRoot ? 'bg-info-soft font-medium text-info hover:bg-info-soft' : 'text-sidebar-foreground'"
                       title="直接放在顶层（没有归到任何节点下）的件，建议移到合适的节点"
                       data-testid="tree-root-items"
@@ -1247,7 +1249,7 @@ const templateHint = computed(() => {
                       @click="tree.rootId.value && selectCategory(tree.rootId.value)"
                     >
                       <span class="min-w-0 flex-1 truncate">（直接放在顶层的件）</span>
-                      <span class="shrink-0 font-mono text-[11px] text-warn tabular-nums">{{ tree.rootDirectCount.value.toLocaleString() }} 件</span>
+                      <span class="shrink-0 font-mono text-2xs text-warn tabular-nums">{{ tree.rootDirectCount.value.toLocaleString() }} 件</span>
                     </button>
                     <CategoryTree :tree="tree" :selected-id="categoryQuery" :drop-target-id="dropTarget" @select="selectCategory" />
                     <div v-if="!tree.topLevel.value.length" class="p-3 text-xs text-muted-foreground" data-testid="category-tree-empty">
@@ -1334,9 +1336,9 @@ const templateHint = computed(() => {
                   />
                 </span>
                 <span class="shrink-0 text-muted-foreground" data-testid="item-total" :data-count="listTotal">{{ listTotal.toLocaleString() }} 件</span>
-                <span class="shrink-0 rounded-full bg-muted px-1.5 leading-5 text-muted-foreground tabular-nums" data-testid="item-count-draft" :data-count="listCounts.draft">未锁定 {{ listCounts.draft }}</span>
-                <span class="shrink-0 rounded-full bg-violet-100 px-1.5 leading-5 text-violet-700 tabular-nums" data-testid="item-count-locked" :data-count="listCounts.locked">已锁定 {{ listCounts.locked }}</span>
-                <span v-if="listCounts.modifying" class="shrink-0 rounded-full border border-orange-300 bg-orange-50 px-1.5 leading-4 text-orange-700 tabular-nums" data-testid="item-count-modifying" :data-count="listCounts.modifying">修改中 {{ listCounts.modifying }}</span>
+                <StatusBadge :status="ARCHIVE_STATE.draft" class="tabular-nums" data-testid="item-count-draft" :data-count="listCounts.draft">未锁定 {{ listCounts.draft }}</StatusBadge>
+                <StatusBadge :status="ARCHIVE_STATE.locked" class="tabular-nums" data-testid="item-count-locked" :data-count="listCounts.locked">已锁定 {{ listCounts.locked }}</StatusBadge>
+                <StatusBadge v-if="listCounts.modifying" :status="ARCHIVE_STATE.modifying" class="tabular-nums" data-testid="item-count-modifying" :data-count="listCounts.modifying">修改中 {{ listCounts.modifying }}</StatusBadge>
                 <span class="flex-1" />
                 <Button
                   size="xs"
@@ -1389,7 +1391,7 @@ const templateHint = computed(() => {
                 @load-more="loadMore"
                 @retry-more="loadMore"
               />
-              <p v-if="items.length" class="shrink-0 border-t px-3 py-1 text-[11px] text-muted-foreground">双击打开一件 · 勾选后可以批量锁定</p>
+              <p v-if="items.length" class="shrink-0 border-t px-3 py-1 text-2xs text-muted-foreground">双击打开一件 · 勾选后可以批量锁定</p>
             </div>
             <div v-else class="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground" data-testid="catalog-empty">
               <p>在归类树里选一个节点，看它里面的件。</p>

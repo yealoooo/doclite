@@ -3,17 +3,18 @@
 
 import type { ColorMode, FileLog, ReviewStatus, SnapshotImageFields } from '@/api/types'
 import { rejectReasonLabel } from '@/lib/reviews'
+import { type StatusStyle, unknownStatus } from '@/lib/status'
 
 /** 审核状态的文字和颜色（design §2.2）。 */
-export const REVIEW_STATUS: Record<ReviewStatus, { label: string; dot: string; badge: string }> = {
+export const REVIEW_STATUS: Record<ReviewStatus, Required<Pick<StatusStyle, 'label' | 'badge' | 'dot'>>> = {
   unassigned: { label: '待分配', dot: 'bg-muted-foreground/45', badge: 'bg-muted text-muted-foreground' },
   pending: { label: '待审', dot: 'bg-warn', badge: 'bg-warn-soft text-warn' },
   approved: { label: '通过', dot: 'bg-ok', badge: 'bg-ok-soft text-ok' },
   rejected: { label: '驳回', dot: 'bg-destructive', badge: 'bg-destructive-soft text-destructive' },
 }
 
-export function reviewStatusOf(status: string) {
-  return REVIEW_STATUS[status as ReviewStatus] ?? { label: status, dot: 'bg-muted-foreground/45', badge: 'bg-muted text-muted-foreground' }
+export function reviewStatusOf(status: string): StatusStyle {
+  return REVIEW_STATUS[status as ReviewStatus] ?? unknownStatus(status)
 }
 
 const COLOR_MODE: Record<ColorMode, string> = { bw: '黑白', gray: '灰度', color: '彩色' }

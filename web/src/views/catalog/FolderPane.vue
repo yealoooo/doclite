@@ -3,8 +3,8 @@
 // 只读：整理（上传、删除、调顺序）在「文件目录」页做。要 files 或 scan 菜单（页面判断，没有时不挂这个组件）。
 //
 // - 目录树（FolderTree，按需加载）+ 当前文件夹（地址栏 `?folder=`，没有时是根文件夹）。树上修改中的文件夹和含有它的
-//   文件夹（已加载的子文件夹里有修改中的）带橙点。
-// - 打开的文件夹已归档时顶部横条（SealBanner：紫色已封存、橙色修改中）。
+//   文件夹（已加载的子文件夹里有修改中的）带青点。
+// - 打开的文件夹已归档时顶部横条（SealBanner：紫色已封存、青色修改中）。
 // - 子文件夹一行一个：名称、"n 个文件 / n 个文件夹"、归档状态（未归档 / 🔒 节点名 件号 / ✎ 修改中；盒子显示
 //   "已归档 n/m"，要它的子文件夹已经加载过）。单击选中、Ctrl/⌘ 加选、Shift 区间、Esc 取消、双击打开；选中的可以拖到
 //   右边（drag.ts），也可以点中间的"归档 →"。只能选文件夹。
@@ -12,7 +12,7 @@
 // - 实时：页面把 folders.changed、files.changed 转给 `onFoldersChanged`、`onFilesChanged`。
 // 截图脚本用的属性：根 data-testid=folder-pane（data-folder-id、data-state）；子文件夹行 pane-folder（data-folder-id、
 // data-selected、data-archive）；文件区 pane-files。
-import { ExternalLinkIcon, FolderIcon, LoaderCircleIcon } from '@lucide/vue'
+import { ExternalLinkIcon, LoaderCircleIcon, PencilLineIcon } from '@lucide/vue'
 import { computed, watch } from 'vue'
 import { toast } from 'vue-sonner'
 
@@ -20,11 +20,14 @@ import { probeFolder } from '@/api/folders'
 import { isApiError } from '@/api/http'
 import type { FileEntry, FolderArchive, SubfolderEntry } from '@/api/types'
 import FolderArchiveBadge from '@/components/catalog/FolderArchiveBadge.vue'
+import { StatusBadge } from '@/components/ui/status-badge'
 import SealBanner from '@/components/catalog/SealBanner.vue'
+import FolderGlyph from '@/components/files/FolderGlyph.vue'
 import FolderTree from '@/components/files/FolderTree.vue'
 import { useFolderBrowser } from '@/composables/useFolderBrowser'
 import { type TreeFolder, useFolderTree } from '@/composables/useFolderTree'
 import { useSelection } from '@/composables/useSelection'
+import { ARCHIVE_STATE } from '@/lib/catalog'
 import { useImageInfoStore } from '@/stores/image-info'
 import { type Entry, fileKey, folderKey } from '@/components/files/entries'
 import FileGrid from '@/components/files/FileGrid.vue'
@@ -141,7 +144,7 @@ const currentSummary = computed(() => {
   }
 })
 
-/** 树上带橙点：自己修改中，或者已加载的子文件夹里有修改中的。 */
+/** 树上带青点：自己修改中，或者已加载的子文件夹里有修改中的。 */
 function treeModifying(f: TreeFolder): boolean {
   if (f.archive?.source_status === 'modifying') return true
   const kids = tree.childrenOf(f)
@@ -218,7 +221,7 @@ const folderKeyOf = folderKey
 <template>
   <div class="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="folder-pane" :data-folder-id="folder?.id" :data-state="state">
     <div class="flex h-10 shrink-0 items-center gap-2 border-b bg-muted/30 px-3">
-      <span class="shrink-0 text-[13px] font-semibold text-foreground">文件目录</span>
+      <span class="shrink-0 text-compact font-semibold text-foreground">文件目录</span>
       <nav class="flex min-w-0 items-center gap-0.5 truncate text-xs text-muted-foreground" data-testid="pane-crumb">
         <template v-for="(c, i) in crumbs" :key="c.id">
           <span v-if="i > 0" class="px-0.5">/</span>
@@ -231,7 +234,7 @@ const folderKeyOf = folderKey
       <aside class="w-44 shrink-0 overflow-y-auto border-r bg-sidebar/60 px-1.5 py-2 xl:w-52">
         <FolderTree :tree="tree" :selected-id="folder?.id ?? currentId" @select="go">
           <template #suffix="{ folder: f }">
-            <span v-if="treeModifying(f)" class="size-1.5 shrink-0 rounded-full bg-orange-500" title="里面有修改中的文件夹（改完要重新归档）" data-testid="tree-modifying-dot" />
+            <span v-if="treeModifying(f)" class="flex shrink-0 text-modifying" title="里面有修改中的文件夹（改完要重新归档）" data-testid="tree-modifying-dot"><PencilLineIcon class="size-3" aria-hidden="true" /><span class="sr-only">修改中</span></span>
           </template>
         </FolderTree>
       </aside>
@@ -247,17 +250,16 @@ const folderKeyOf = folderKey
           @reseal="folder?.archive && emit('reseal', folder.archive)"
           @open-files="folder && emit('openFiles', folder.id)"
         />
-        <div class="flex h-8 shrink-0 items-center gap-2 border-b px-3 text-[11px] text-muted-foreground">
+        <div class="flex h-8 shrink-0 items-center gap-2 border-b px-3 text-2xs text-muted-foreground">
           <template v-if="subfolders.length">
             <span class="min-w-0 truncate">双击打开 · 选中文件夹（Ctrl/⌘、Shift 多选）拖到右边归档</span>
             <span class="flex-1" />
-            <span
+            <StatusBadge
               v-if="currentSummary"
-              class="shrink-0 rounded-full px-1.5 leading-[18px]"
-              :class="currentSummary.done === currentSummary.total ? 'bg-violet-100 text-violet-700' : 'bg-muted text-muted-foreground'"
+              :status="currentSummary.done === currentSummary.total ? ARCHIVE_STATE.archived : ARCHIVE_STATE.none"
               data-testid="pane-summary"
-            >已归档 {{ currentSummary.done }}/{{ currentSummary.total }}</span>
-            <span v-if="currentSummary?.modifying" class="shrink-0 rounded-full border border-orange-300 bg-orange-50 px-1.5 leading-4 text-orange-700">修改中 {{ currentSummary.modifying }}</span>
+            >已归档 {{ currentSummary.done }}/{{ currentSummary.total }}</StatusBadge>
+            <StatusBadge v-if="currentSummary?.modifying" :status="ARCHIVE_STATE.modifying">修改中 {{ currentSummary.modifying }}</StatusBadge>
           </template>
           <template v-else-if="folder">
             <span class="min-w-0 truncate">{{ files.length }} 个文件（按顺序）<template v-if="folder.archive?.source_status === 'sealed'"> · 已封存，只能重扫</template></span>
@@ -286,7 +288,7 @@ const folderKeyOf = folderKey
         <template v-else>
           <div
             v-if="subfolders.length"
-            class="min-h-0 overflow-y-auto outline-none"
+            class="min-h-0 overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:ring-inset"
             :class="files.length ? 'max-h-[45%] shrink-0 border-b' : 'flex-1'"
             tabindex="0"
             data-testid="pane-folders"
@@ -309,22 +311,18 @@ const folderKeyOf = folderKey
               @dragstart="onDragStart(f, $event)"
               @dragend="onDragEnd"
             >
-              <FolderIcon class="size-4 fill-amber-300/70 text-amber-600" :stroke-width="1.5" />
+              <FolderGlyph class="size-4" />
               <span class="flex min-w-0 items-baseline gap-1.5">
-                <span class="truncate text-[13px] text-foreground" :title="f.remark ? `${f.folder_name}（${f.remark}）` : f.folder_name">{{ f.folder_name }}</span>
-                <span class="shrink-0 text-[11px] text-muted-foreground">
+                <span class="truncate text-compact text-foreground" :title="f.remark ? `${f.folder_name}（${f.remark}）` : f.folder_name">{{ f.folder_name }}</span>
+                <span class="shrink-0 text-2xs text-muted-foreground">
                   {{ f.folder_count ? `${f.folder_count} 个文件夹` : `${f.file_count} 个文件` }}
                 </span>
               </span>
               <span class="flex min-w-0 items-center justify-end gap-1">
                 <template v-if="f.folder_count && !f.archive">
                   <template v-for="s in [boxSummary(f.id)]" :key="s ? 'sum' : 'none'">
-                    <span
-                      v-if="s"
-                      class="shrink-0 rounded-full px-1.5 text-[11px] leading-[18px]"
-                      :class="s.done === s.total ? 'bg-violet-100 text-violet-700' : 'bg-muted text-muted-foreground'"
-                    >已归档 {{ s.done }}/{{ s.total }}</span>
-                    <span v-if="s?.modifying" class="shrink-0 rounded-full border border-orange-300 bg-orange-50 px-1.5 text-[11px] leading-4 text-orange-700">修改中 {{ s.modifying }}</span>
+                    <StatusBadge v-if="s" :status="s.done === s.total ? ARCHIVE_STATE.archived : ARCHIVE_STATE.none">已归档 {{ s.done }}/{{ s.total }}</StatusBadge>
+                    <StatusBadge v-if="s?.modifying" :status="ARCHIVE_STATE.modifying">修改中 {{ s.modifying }}</StatusBadge>
                   </template>
                 </template>
                 <FolderArchiveBadge v-else :archive="f.archive" :item-no-width="props.itemNoWidth" show-none />

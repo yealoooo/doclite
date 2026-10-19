@@ -520,7 +520,7 @@ const problemHint = computed(() => {
 
 <template>
   <div
-    class="relative overflow-hidden bg-zinc-200 select-none"
+    class="relative overflow-hidden bg-canvas select-none"
     data-testid="image-viewer"
     :data-state="status.phase"
     :data-step="status.step ?? undefined"
@@ -548,7 +548,7 @@ const problemHint = computed(() => {
 
     <span
       v-if="showingCover"
-      class="pointer-events-none absolute top-2 right-2 rounded bg-foreground/70 px-1.5 text-[11px] leading-5 text-background"
+      class="pointer-events-none absolute top-2 right-2 rounded bg-foreground/70 px-1.5 text-2xs leading-5 text-background"
       data-testid="viewer-cover-badge"
     >封面（长边 400 像素）</span>
 
@@ -581,7 +581,7 @@ const problemHint = computed(() => {
       <!-- 失败、太大、解不了 -->
       <div
         v-else-if="status.phase === 'failed' || status.phase === 'too_large' || status.phase === 'unsupported'"
-        class="absolute bottom-4 left-1/2 w-[min(460px,calc(100%-2rem))] -translate-x-1/2 rounded-lg bg-background p-3 text-[13px] text-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.08),0_2px_2px_rgba(0,0,0,0.04),0_8px_16px_-4px_rgba(0,0,0,0.12)]"
+        class="absolute bottom-4 left-1/2 w-[min(460px,calc(100%-2rem))] -translate-x-1/2 rounded-lg bg-background p-3 text-compact text-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.08),0_2px_2px_rgba(0,0,0,0.04),0_8px_16px_-4px_rgba(0,0,0,0.12)]"
         data-testid="viewer-problem"
         :data-kind="status.phase"
         :data-code="status.code ?? undefined"

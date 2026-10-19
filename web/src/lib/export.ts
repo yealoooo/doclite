@@ -2,13 +2,11 @@
 // "新建导出"的地址约定（/catalog 的入口带着范围跳过来）。
 
 import type { ExportFormat, ExportTask } from '@/api/types'
+import { type StatusStyle, unknownStatus } from '@/lib/status'
 
 // ---------- 任务状态 ----------
 
-export interface TaskStatusInfo {
-  label: string
-  badge: string
-}
+export type TaskStatusInfo = StatusStyle
 
 /** 任务状态的中文名和徽标颜色（排队中、生成中、完成、失败、已取消）。 */
 export const TASK_STATUS: Record<string, TaskStatusInfo> = {
@@ -17,10 +15,14 @@ export const TASK_STATUS: Record<string, TaskStatusInfo> = {
   done: { label: '完成', badge: 'bg-ok-soft text-ok' },
   failed: { label: '失败', badge: 'bg-destructive-soft text-destructive' },
   canceled: { label: '已取消', badge: 'bg-muted text-muted-foreground' },
+  // 不是 server 的状态，是任务行按其他字段显示的：失败后等待重试、取消后正在清理、导出物已过期删除。
+  retrying: { label: '等待重试', badge: 'bg-warn-soft text-warn' },
+  cleaning: { label: '正在清理', badge: 'bg-muted text-muted-foreground' },
+  expired: { label: '已过期', badge: 'bg-muted text-muted-foreground' },
 }
 
 export function taskStatusOf(status: string): TaskStatusInfo {
-  return TASK_STATUS[status] ?? { label: status, badge: 'bg-muted text-muted-foreground' }
+  return TASK_STATUS[status] ?? unknownStatus(status)
 }
 
 /** 排队中、生成中：可以取消（已取消而还在清理的不能再取消）。 */

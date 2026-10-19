@@ -17,10 +17,10 @@
 // - 重扫件（M2-7）：文件夹摘要那一行的"只看已驳回"筛选（只筛当前文件夹直接放的文件，子文件夹照常显示）；一个已驳回的
 //   文件在右键菜单和选择栏里有"上传重扫件"（RescanDialog：客户端里走 `pick_and_rescan`）。
 // - 封存（M9，requirements 5.5"封存"、5.9"/files 也显示同样的横条和状态"）：打开的文件夹已归档时顶部横条（SealBanner：
-//   紫色已封存、橙色修改中）。已封存的文件夹里新建文件夹、上传、复制、改名、移动、删除的按钮和右键菜单置灰并写原因
+//   紫色已封存、青色修改中）。已封存的文件夹里新建文件夹、上传、复制、改名、移动、删除的按钮和右键菜单置灰并写原因
 //   （重扫、看图、下载、改备注照常）；子文件夹本身封存时它的改名、移动、删除置灰。有 catalog 菜单的人横条上能直接
 //   "解除封存去修改…"（UnsealDialog），修改中的给"改完了，去归类页重新归档"；没有的写"请联系归类员"。子文件夹的格子、
-//   行上显示归档状态（FileGrid）；树上修改中的文件夹带橙点。任何写操作碰到 409 `folder_archived`（例如把文件移进
+//   行上显示归档状态（FileGrid）；树上修改中的文件夹带青点。任何写操作碰到 409 `folder_archived`（例如把文件移进
 //   封存的文件夹）给 server 的说明和"去归类页查看"（useFileActions）。
 import {
   ChevronRightIcon,
@@ -37,6 +37,7 @@ import {
   LoaderCircleIcon,
   NotebookPenIcon,
   PencilIcon,
+  PencilLineIcon,
   Trash2Icon,
   UploadIcon,
 } from '@lucide/vue'
@@ -588,10 +589,10 @@ function onRescanFinished() {
           <template #suffix="{ folder: f }">
             <span
               v-if="f.archive?.source_status === 'modifying' || tree.childrenOf(f)?.some((k) => k.archive?.source_status === 'modifying')"
-              class="size-1.5 shrink-0 rounded-full bg-orange-500"
+              class="flex shrink-0 text-modifying"
               title="里面有修改中的文件夹（改完要重新归档）"
               data-testid="tree-modifying-dot"
-            />
+            ><PencilLineIcon class="size-3" aria-hidden="true" /><span class="sr-only">修改中</span></span>
           </template>
         </FolderTree>
       </aside>
@@ -687,12 +688,12 @@ function onRescanFinished() {
             <!-- 一个文件 -->
             <ContextMenuLabel
               v-if="sealed && menuKind !== 'folder' && menuKind !== 'folders'"
-              class="max-w-56 text-xs leading-relaxed font-normal text-violet-700"
+              class="max-w-56 text-xs leading-relaxed font-normal text-sealed"
               data-testid="menu-sealed-note"
             >{{ SEALED_REASON }}</ContextMenuLabel>
             <ContextMenuLabel
               v-else-if="menuKind === 'folder' && selectedFolderSealed"
-              class="max-w-56 text-xs leading-relaxed font-normal text-violet-700"
+              class="max-w-56 text-xs leading-relaxed font-normal text-sealed"
               data-testid="menu-sealed-note"
             >{{ FOLDER_SEALED_REASON }}</ContextMenuLabel>
             <template v-if="menuKind === 'file'">

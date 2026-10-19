@@ -196,7 +196,7 @@ const totalBytes = computed(() => files.value.reduce((n, f) => n + f.file_size, 
 
       <!-- 按件 -->
       <div v-show="view === 'items'" class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
-        <div class="grid shrink-0 grid-cols-[48px_minmax(0,1.3fr)_minmax(0,2fr)_72px_80px_96px] gap-3 border-b bg-muted/50 px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
+        <div class="grid shrink-0 grid-cols-[48px_minmax(0,1.3fr)_minmax(0,2fr)_72px_80px_96px] gap-3 border-b bg-muted/50 px-3 py-1.5 text-2xs font-medium text-muted-foreground">
           <span>序号</span><span>档号</span><span>题名</span><span class="text-right">页数</span><span class="text-right">原图</span><span>版本</span>
         </div>
         <div ref="itemsEl" class="min-h-0 flex-1 overflow-y-auto">
@@ -220,7 +220,7 @@ const totalBytes = computed(() => files.value.reduce((n, f) => n + f.file_size, 
               <span class="truncate text-foreground" :title="itemRows[v.index]!.title">{{ itemRows[v.index]!.title || '（未填题名）' }}</span>
               <span class="text-right text-foreground tabular-nums">{{ itemRows[v.index]!.partial ? '≥' : '' }}{{ itemRows[v.index]!.pages }}</span>
               <span class="text-right text-muted-foreground tabular-nums">{{ formatBytes(itemRows[v.index]!.bytes) }}</span>
-              <span class="truncate font-mono text-[11px] text-muted-foreground">{{ itemRows[v.index]!.versions }}</span>
+              <span class="truncate font-mono text-2xs text-muted-foreground">{{ itemRows[v.index]!.versions }}</span>
             </button>
           </div>
         </div>
@@ -228,7 +228,7 @@ const totalBytes = computed(() => files.value.reduce((n, f) => n + f.file_size, 
 
       <!-- 按页 -->
       <div v-show="view === 'pages'" class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
-        <div class="grid shrink-0 grid-cols-[minmax(0,1.2fr)_48px_minmax(0,1.4fr)_40px_minmax(0,1fr)_minmax(0,1fr)_72px] gap-3 border-b bg-muted/50 px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
+        <div class="grid shrink-0 grid-cols-[minmax(0,1.2fr)_48px_minmax(0,1.4fr)_40px_minmax(0,1fr)_minmax(0,1fr)_72px] gap-3 border-b bg-muted/50 px-3 py-1.5 text-2xs font-medium text-muted-foreground">
           <span>档号</span><span class="text-right">页号</span><span>文件名</span><span>版本</span><span>snapshot_id</span><span>sha256</span><span class="text-right">大小</span>
         </div>
         <div ref="pagesEl" class="min-h-0 flex-1 overflow-y-auto">
@@ -253,8 +253,8 @@ const totalBytes = computed(() => files.value.reduce((n, f) => n + f.file_size, 
                 :title="files[v.index]!.upload_name && files[v.index]!.upload_name !== files[v.index]!.file_name ? `原文件名：${files[v.index]!.upload_name}` : (files[v.index]!.file_name ?? undefined)"
               >{{ files[v.index]!.file_name ?? files[v.index]!.upload_name ?? '—' }}</span>
               <span class="font-mono text-muted-foreground">v{{ files[v.index]!.version_no }}</span>
-              <span class="truncate font-mono text-[11px] text-muted-foreground" :title="files[v.index]!.snapshot_id">{{ files[v.index]!.snapshot_id }}</span>
-              <span class="truncate font-mono text-[11px] text-muted-foreground" :title="files[v.index]!.content_sha256">{{ files[v.index]!.content_sha256 }}</span>
+              <span class="truncate font-mono text-2xs text-muted-foreground" :title="files[v.index]!.snapshot_id">{{ files[v.index]!.snapshot_id }}</span>
+              <span class="truncate font-mono text-2xs text-muted-foreground" :title="files[v.index]!.content_sha256">{{ files[v.index]!.content_sha256 }}</span>
               <span class="text-right text-muted-foreground tabular-nums">{{ formatBytes(files[v.index]!.file_size) }}</span>
             </div>
           </div>

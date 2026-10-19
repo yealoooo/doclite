@@ -10,13 +10,14 @@
 // - 截图脚本用的属性：容器 data-testid=item-list（data-rows）；行 data-testid=item-row（data-item-id、data-item-no、
 //   data-status、data-source、data-archive-no、data-pending、data-pages、data-current、data-selected、data-blocked）。
 import { useVirtualizer } from '@tanstack/vue-virtual'
-import { LockIcon, PencilLineIcon } from '@lucide/vue'
+import { LockIcon } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 
 import type { ArchiveItemSummary } from '@/api/types'
 import { Checkbox } from '@/components/ui/checkbox'
+import { StatusBadge } from '@/components/ui/status-badge'
 import type { Selection } from '@/composables/useSelection'
-import { formatItemNo, itemStatusOf } from '@/lib/catalog'
+import { ARCHIVE_STATE, formatItemNo, itemStatusOf } from '@/lib/catalog'
 
 const props = defineProps<{
   items: ArchiveItemSummary[]
@@ -100,7 +101,7 @@ defineExpose({ scrollToItem })
 <template>
   <div
     ref="scrollEl"
-    class="min-h-0 flex-1 overflow-y-auto outline-none [scrollbar-gutter:stable]"
+    class="min-h-0 flex-1 overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:ring-inset [scrollbar-gutter:stable]"
     tabindex="-1"
     data-testid="item-list"
     :data-rows="props.items.length"
@@ -153,11 +154,11 @@ defineExpose({ scrollToItem })
           >{{ formatItemNo(item.item_no, props.itemNoWidth) }}</span>
           <div class="min-w-0 flex-1">
             <div
-              class="truncate text-[13px]"
+              class="truncate text-compact"
               :class="item.title ? 'text-foreground' : 'text-muted-foreground'"
               :title="item.title || undefined"
             >{{ item.title || '（未填题名）' }}</div>
-            <div class="mt-0.5 flex items-center gap-1.5 overflow-hidden text-[11px] whitespace-nowrap text-muted-foreground">
+            <div class="mt-0.5 flex items-center gap-1.5 overflow-hidden text-2xs whitespace-nowrap text-muted-foreground">
               <span class="tabular-nums">{{ item.page_count }} 页</span>
               <span
                 v-if="item.page_counts.pending > 0"
@@ -180,18 +181,14 @@ defineExpose({ scrollToItem })
               >锁定后有新版本</span>
             </div>
           </div>
-          <span
+          <StatusBadge
             v-if="item.source_status === 'modifying'"
-            class="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-orange-300 bg-orange-50 px-1.5 text-[11px] leading-[18px] text-orange-700"
+            :status="ARCHIVE_STATE.modifying"
             :title="`来源文件夹修改中：${item.unsealed_by_name ?? ''} 解除封存${item.unseal_reason ? `，${item.unseal_reason}` : ''}`"
             data-testid="item-row-modifying"
-          ><PencilLineIcon class="size-3" />修改中</span>
-          <span v-else class="flex shrink-0" :title="`已封存（来源：${item.source_folder_path}）`"><LockIcon class="size-3.5 text-violet-600" /></span>
-          <span
-            class="shrink-0 rounded-full px-1.5 text-[11px] leading-5"
-            :class="itemStatusOf(item.status).badge"
-            data-testid="item-row-status"
-          >{{ itemStatusOf(item.status).label }}</span>
+          />
+          <span v-else-if="item.status !== 'locked'" class="flex shrink-0 text-sealed" :title="`已封存（来源：${item.source_folder_path}）`"><LockIcon class="size-3.5" aria-hidden="true" /><span class="sr-only">已封存</span></span>
+          <StatusBadge :status="itemStatusOf(item.status)" data-testid="item-row-status" />
         </div>
       </div>
     </div>
