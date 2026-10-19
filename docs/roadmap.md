@@ -353,7 +353,7 @@
 ### [x] M9-3 开发库重建、精简演示数据（脚本 commit 80105b0；开发库 2026-10-19 重建）
 - **结果（脚本）：** `npm run seed` 一个脚本造全部：9 个演示账号和授权、DEMO-A 44 页（盒 001 17 页、盒 002 19 页、格式样本 8 个）、审核（通过 10、驳回 2、待审 5）、归类树、盒 001 前 3 件已归档（0001 已锁定）；DEMO-B 空。临时库上跑两次，第二次不重复。删掉 seed-demo、m3-demo、m4-demo、m1-files、m4-export；改了 m3-dashboard、m3-catalog-info、m1-organize。
 - **结果（重建）：** 2026-10-19 删掉重建 `doclite_dev`，新 server 执行迁移 0001–0004、建 admin，`npm run seed` 约 1.5 分钟造完（44 页；通过 10、驳回 2、待审 5、待分配 27；已归档 9 页、3 件，锁定 1 件）。
-- **遗留：** m2-viewer、m2-viewer-lan、m2-accept 依赖旧的手工数据（200 MB TIFF 等），新库上跑不了；m1-accept 可能因没有 demo_reviewer 进不了的项目而失败。
+- **收尾（2026-10-19）：** m2-viewer、m2-viewer-lan、m1-accept、m2-accept 改用 seed 的数据，缺的样本（含 200 MB TIFF）脚本自己在项目里建，建议在临时库上跑；各在临时库上跑通（a9c16bf、75698f2）。客户端 `--smoke` 按新流程全部跑法通过，img_cache 默认跳过没有封面的文件夹（fec8f77）。
 - 用户同意删掉重建 `doclite_dev`（只动这个库；动手前告诉用户，用户的 9080 要停一下再起）。
 - 一个脚本造全部演示数据（取代 seed:demo + m3/m4 演示 + seed:files 的大数据），总共约 40 页：
   - 账号同现在（admin + demo_*），授权全部在脚本里做（不再手工补 demo_reviewer2 等）；
