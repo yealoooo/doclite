@@ -231,6 +231,13 @@ export function renderArchiveNo(
   return { value: missing.length ? null : out, missing }
 }
 
+/** 模板的中文写法（给人看）：占位符换成节点类型的名称，例如"全宗-门类·年度-保管期限-机构-件号"。 */
+export function describeArchiveNoTemplate(t: ParsedTemplate): string {
+  return t.segments
+    .map((s) => (s.kind === 'literal' ? s.text : s.kind === 'category' ? categoryTypeLabel(s.type) : '件号'))
+    .join('')
+}
+
 /** 编码里含有的分隔符（按出现顺序、不重复）。 */
 export function separatorsIn(code: string, separators: readonly string[]): string[] {
   const found: string[] = []

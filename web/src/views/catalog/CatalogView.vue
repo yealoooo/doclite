@@ -84,7 +84,16 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useCategoryTree } from '@/composables/useCategoryTree'
 import { useProjectStream } from '@/composables/useProjectStream'
 import { useSelection } from '@/composables/useSelection'
-import { CATEGORY_TYPES, categoryTypeLabel, formatItemNo, itemShortLabel, parseArchiveNoTemplate } from '@/lib/catalog'
+import {
+  CATEGORY_TYPES,
+  SAMPLE_CODES,
+  categoryTypeLabel,
+  describeArchiveNoTemplate,
+  formatItemNo,
+  itemShortLabel,
+  parseArchiveNoTemplate,
+  renderArchiveNo,
+} from '@/lib/catalog'
 import { newExportQuery } from '@/lib/export'
 import { useImageInfoStore } from '@/stores/image-info'
 import { useProjectStore } from '@/stores/project'
@@ -147,10 +156,8 @@ async function loadSettings() {
   }
 }
 
-const itemNoWidth = computed(() => {
-  const t = settings.value ? parseArchiveNoTemplate(settings.value.archive_no_template) : null
-  return t?.ok ? t.template.itemNoWidth : 0
-})
+const parsedTemplate = computed(() => (settings.value ? parseArchiveNoTemplate(settings.value.archive_no_template) : null))
+const itemNoWidth = computed(() => (parsedTemplate.value?.ok ? parsedTemplate.value.template.itemNoWidth : 0))
 
 // ---------- 归类树 ----------
 
@@ -1201,6 +1208,24 @@ onBeforeUnmount(() => {
 })
 
 const templateError = computed(() => settings.value?.archive_no_template_error ?? null)
+// 顶栏的档号规则：模板的中文写法，悬停看示例和原始模板。解析不了时原样显示（下面另有错误提示）。
+const templateLabel = computed(() =>
+  parsedTemplate.value?.ok ? describeArchiveNoTemplate(parsedTemplate.value.template) : settings.value?.archive_no_template ?? '',
+)
+const templateHint = computed(() => {
+  const st = settings.value
+  if (!st) return ''
+  const lines: string[] = []
+  const p = parsedTemplate.value
+  if (p?.ok) {
+    lines.push(`档号规则：${describeArchiveNoTemplate(p.template)}`)
+    lines.push(`例如：${renderArchiveNo(p.template, SAMPLE_CODES, 1).value}`)
+    if (p.template.itemNoWidth) lines.push(`件号 ${p.template.itemNoWidth} 位，不足补 0`)
+  }
+  lines.push(`项目设置里的档号模板：${st.archive_no_template}`)
+  if (st.lock_requires_approved) lines.push('锁定要求全部页审核通过')
+  return lines.join('\n')
+})
 </script>
 
 <template>
@@ -1218,10 +1243,10 @@ const templateError = computed(() => settings.value?.archive_no_template_error ?
       <h1 class="shrink-0 text-base font-semibold tracking-tight text-foreground">归类</h1>
       <span
         v-if="settings"
-        class="hidden min-w-0 truncate border-l pl-3 font-mono text-xs text-muted-foreground xl:inline"
-        :title="`档号模板：${settings.archive_no_template}${settings.lock_requires_approved ? '；锁定要求全部页审核通过' : ''}`"
+        class="hidden min-w-0 truncate border-l pl-3 text-xs text-muted-foreground xl:inline"
+        :title="templateHint"
         data-testid="catalog-template"
-      >{{ settings.archive_no_template }}</span>
+      >档号：{{ templateLabel }}</span>
       <button
         v-if="modifyingTotal"
         type="button"
