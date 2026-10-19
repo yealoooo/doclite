@@ -330,6 +330,13 @@ WHERE id = $1 AND status = 'running' AND attempts = $2`, job.ID, job.Attempt, pr
 		return
 	}
 	if tag.RowsAffected() == 0 {
+		// Run 刚在业务的事务里把这次执行改成了 done（结果还没交回来）：不是被别人接管，等 finish 收尾。
+		var status string
+		var attempt int
+		if err := e.pool.QueryRow(ctx, `SELECT status, attempts FROM background_jobs WHERE id = $1`, job.ID).
+			Scan(&status, &attempt); err == nil && status == string(Done) && attempt == job.Attempt {
+			return
+		}
 		e.log.Error("后台任务：job 已经不归这次执行了，停下", "job_id", job.ID)
 		cancel(errLost)
 		return

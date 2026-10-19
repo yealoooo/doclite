@@ -388,7 +388,7 @@
 
 ### [x] M10-3 client 性能、清理、壳页配色（commit aa46dfe）
 - **结果：** 上传队列库统计、取队首改走索引，启动时删 30 天前结束且本地文件已不在的行，KnownPaths 增量维护；热文件夹按目录增量扫描，60 秒全量兜底；封面先 2ⁿ 平均缩小再精缩（和切块共用代码）；图片缓存锁外做磁盘 I/O，删不掉的文件稍后再删、启动时清孤儿；批量入队一个事务；修了选文件夹上传会带上 Windows 隐藏和系统文件（共用 `upload.WalkImages`）；正式命令里不再有自检分支；壳页配色、字体、卡片宽度和 web 对齐。go test -race 通过，make build 通过。
-- **遗留：** `--smoke` 没实跑（要开窗口）；批量入队仍逐个发 `upload:item`（web 只靠它刷新列表）；runtimeguard 的分块重组没删（文件操作的 file_ids 没上限，请求体可能超过 512 KB）。
+- **遗留：** 批量入队仍逐个发 `upload:item`（web 只靠它刷新列表）；runtimeguard 的分块重组没删（文件操作的 file_ids 没上限，请求体可能超过 512 KB）。
 
 ### [x] M10-4 server 去重、精简执行器、统一命名（commit 288ec33）
 - **结果：** 项目设置统一 `project.ParseSettings/ReadSettings`；重扫复用上传的入库流水线（`file.Staged`）；快照一个结构、一个 INSERT；公用 `db.ReadTx`、`httpx.QueryLimit/QueryUUID/MaxBatchIDs/InvalidState`、错误码常量、`names.OptionalText`、`platform/xslices`；删 14 个镜像请求结构；后台任务执行器去掉单实例咨询锁、keep、reaper（按 requirements 5.11 的"可简化"），启动时放回 running 一次；删 3 个没人设的环境变量和一批死代码；folder 的 Entry 改名 FolderFile，`SetReviewState` 改 `SetReviewStatusAndRound`。净少约 870 行。完整测试通过（API 595 秒）。
@@ -398,3 +398,8 @@
 ### [x] M10-5 web 主题统一（commit 73eff2c）
 - **结果：** 新 token `--sealed`（紫）、`--modifying`（青，和 warn 的琥珀色分开）、`--canvas`、`--folder`，`--muted-foreground` 调深到 #666；归类状态统一用 `ARCHIVE_STATE`（未归档灰、已归档浅紫、已锁定实心紫、修改中浅青 + 铅笔），审计页也用它；新组件 StatusBadge、NativeSelect、StateBanner、FolderGlyph；按钮加 `success`、`modify` 变体；字号 `text-2xs`（11px）、`text-compact`（13px）；`shadow-outline`；删掉没开启的深色模式；按钮键盘焦点环统一。components/ui 以外写死的调色板颜色 0 处。m9-catalog 截图 13/13。总控补：shell.css 的 muted 同步 #666，审计里补 `done`、`cancelled` 的中文。
 - **遗留：** 列表里"已锁定"的实心紫偏重，要调只改 `ARCHIVE_STATE.locked`；m3-dashboard 截图没跑（verify 库没有 seed 数据）。
+
+### [x] M10-6 收尾验证（用户 2026-10-19）
+- **结果：** `npm run release`、客户端 `make build`；server 起在 29080 连 `doclite_verify`，客户端 `--smoke`（后台模式、隔离数据目录，PAGES + 主流程五步，admin）31/31 通过，两次。
+- **顺带修：** 执行器心跳和 Run 收尾之间的竞态（原来就有）：Run 刚在业务事务里把 job 改成 done、心跳正好更新不到 running 行，记了一条误报的 ERROR "job 已经不归这次执行了"；现在心跳更新不到时先看是不是这次执行自己已经 done。导出、存储迁移的 API 测试通过。
+- **须知：** 用户的 9080 还是旧程序（14:32 启动），重启后会执行迁移 0005；样式问题用户最后统一验收。
