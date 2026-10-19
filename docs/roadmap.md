@@ -372,3 +372,29 @@
 - **接口：** catalog-summary 的每组 counts 加 `items{total, locked, modifying, exportable, exportable_pages}`（按来源文件夹归组的未删除件；exportable 和导出预检勾"只导出审核通过的"时的就绪同一组条件，API 测试拿预检的就绪件数、页数核对）；children 每项加 `folder_count`、`archive`（和文件目录 children 的相同）。去掉了 `matrix` 和按文件数的 `exportable`（只有看板用）。多一次查询（按件的计数）和一次归档信息查询（两条 SQL）。
 - **测试：** `TestCatalogSummary` 重写（修改中、档号为空、有驳回页的已锁定件、require_locked_item=false、整个归档成一件的文件夹自己的 direct_counts、children 的 archive）；归类模块的 API 测试、TestExportPrecheck、TestClientDisconnect 过。m3-dashboard 截图脚本 5/5（临时库，1440 和 1366 宽）。
 - **须知：** 验收清单第 11 节改成 DASH-01…DASH-04（共 182 条）；DASH-03 的数字是按 CAT 各步推的，没在客户端里点过。`perf_test.go` 的看板断言（< 200 ms）没跑（远程不跑 perf）。
+
+## M10 代码审查后的优化和清理（用户 2026-10-19）
+
+**已定：** 用户看了审查结果（冗余、过度设计、性能、主题、命名）后说"优化下吧，用不到的、冗余代码都可以清理，包括冗余的单测"。交付只有客户端，所以只给浏览器用的上传、封面、TIFF 解码一起删；新增只加索引的迁移 0005。接口约定、表结构（除索引）没改。
+
+### [x] M10-1 server 性能（commit b39bc57）
+- **结果：** 看板和审核计数加进程内短时缓存（`platform/memo`，同一个键 5 秒内只算一次，键里带 `events.Bus.Version`，发事件后不会读到旧数）；迁移 0005 加 `archive_item_files (project_id, file_id)` 和 `file_reviews (project_id, reviewer_id) WHERE status='open'` 两个索引；删文件夹子树上限 1 万个文件（400，先数后锁）；连接池默认 20、`lock_timeout` 30 秒（55P03 → 503 `busy`）；我的审核改 DISTINCT ON；导出任务头按 job 缓存，不再每秒解压 payload；档号咨询锁一条语句拿完；file_logs 每 1 万条一批。
+- **测试：** 相关模块 API 测试 448 秒通过。
+- **遗留：** 导出明细分页仍要展开整个 payload（不改表没好办法）；导出 complete 失败后整体重来、导出预取没做。
+
+### [x] M10-2 web 清理和去重（commit f60c1af）
+- **结果：** 删掉只给浏览器用的上传、前端封面、浏览器 TIFF 解码（浏览器里提示"请在客户端中使用"，看图只显示封面），去掉 utif、pako；抽出 useFolderBrowser、useEventBatch、useSnapshotCompare、lib/original.ts、StreamStatus；`HANDLE_ALL` 代替位置参数 `true`；`isTauri` 改 `isShell`；修了许可证到期时非管理员弹两条提示。约 +1900 / −7300 行，dist 小约 17%。截图脚本删掉只测浏览器的几张，要上传的改用接口。
+- **遗留：** `useMyReviews.ts` 没简化；m2-review-unseen（只看了封面）现在没有截图覆盖；server 菜单数据里的 `system.plugins` 占位页还在（要迁移才能去）。
+
+### [x] M10-3 client 性能、清理、壳页配色（commit aa46dfe）
+- **结果：** 上传队列库统计、取队首改走索引，启动时删 30 天前结束且本地文件已不在的行，KnownPaths 增量维护；热文件夹按目录增量扫描，60 秒全量兜底；封面先 2ⁿ 平均缩小再精缩（和切块共用代码）；图片缓存锁外做磁盘 I/O，删不掉的文件稍后再删、启动时清孤儿；批量入队一个事务；修了选文件夹上传会带上 Windows 隐藏和系统文件（共用 `upload.WalkImages`）；正式命令里不再有自检分支；壳页配色、字体、卡片宽度和 web 对齐。go test -race 通过，make build 通过。
+- **遗留：** `--smoke` 没实跑（要开窗口）；批量入队仍逐个发 `upload:item`（web 只靠它刷新列表）；runtimeguard 的分块重组没删（文件操作的 file_ids 没上限，请求体可能超过 512 KB）。
+
+### [x] M10-4 server 去重、精简执行器、统一命名（commit 288ec33）
+- **结果：** 项目设置统一 `project.ParseSettings/ReadSettings`；重扫复用上传的入库流水线（`file.Staged`）；快照一个结构、一个 INSERT；公用 `db.ReadTx`、`httpx.QueryLimit/QueryUUID/MaxBatchIDs/InvalidState`、错误码常量、`names.OptionalText`、`platform/xslices`；删 14 个镜像请求结构；后台任务执行器去掉单实例咨询锁、keep、reaper（按 requirements 5.11 的"可简化"），启动时放回 running 一次；删 3 个没人设的环境变量和一批死代码；folder 的 Entry 改名 FolderFile，`SetReviewState` 改 `SetReviewStatusAndRound`。净少约 870 行。完整测试通过（API 595 秒）。
+- **须知：** 没有单实例锁之后，几个 server 连同一个库都会执行后台任务，后起的会把先起的正在执行的导出放回队列；开发时只留一个执行，别的设 `JOB_CONCURRENCY=0`（README 已写）。存储备注现在也拒收控制字符；几处参数错误的提示文字略有变化。
+- **遗留（接口/表约定，没动）：** `cancelled` 和 `canceled` 两种写法、`files:check` 的 `sha256/size`、布尔字段前缀、路径参数命名。
+
+### [x] M10-5 web 主题统一（commit 73eff2c）
+- **结果：** 新 token `--sealed`（紫）、`--modifying`（青，和 warn 的琥珀色分开）、`--canvas`、`--folder`，`--muted-foreground` 调深到 #666；归类状态统一用 `ARCHIVE_STATE`（未归档灰、已归档浅紫、已锁定实心紫、修改中浅青 + 铅笔），审计页也用它；新组件 StatusBadge、NativeSelect、StateBanner、FolderGlyph；按钮加 `success`、`modify` 变体；字号 `text-2xs`（11px）、`text-compact`（13px）；`shadow-outline`；删掉没开启的深色模式；按钮键盘焦点环统一。components/ui 以外写死的调色板颜色 0 处。m9-catalog 截图 13/13。总控补：shell.css 的 muted 同步 #666，审计里补 `done`、`cancelled` 的中文。
+- **遗留：** 列表里"已锁定"的实心紫偏重，要调只改 `ARCHIVE_STATE.locked`；m3-dashboard 截图没跑（verify 库没有 seed 数据）。

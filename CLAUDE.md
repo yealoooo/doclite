@@ -60,6 +60,8 @@ server/                 Go 模块 doclite/server（只提供 /api）
       imagehdr/             JPEG、PNG、TIFF 文件头解析（不解码像素；客户端有一份副本，改动两边同步）
       names/                文件名、Windows 保留名、编码等规则
       archiveno/            档号模板的解析和渲染（catalog、project 用）
+      memo/                 进程内短时缓存（单飞 + TTL，键里带 events.Bus 的 Version；看板、审核计数用）
+      xslices/              切片小工具（去重、排序去重、最长递增子序列）
     auth/                 登录、会话、菜单权限、项目授权检查
     user/ role/ project/ storage/
     folder/ file/         文件目录、上传、重扫、快照、图片信息、日志
@@ -84,7 +86,7 @@ docs/
 - `service.go`：业务规则、事务边界、发事件；
 - `store.go`：SQL。
 
-模块之间通过对方的 service 调用，不直接查对方的表（只读的查询可以例外，写在 store 里并注明）。一个文件太长就按功能拆（`upload.go`、`move.go`……），不要一个文件几千行。
+模块之间通过对方的 service 调用，不直接查对方的表（只读的查询可以例外，写在 store 里并注明）。公用的先找现成的再写：只读事务 `db.ReadTx`，查询参数 `httpx.QueryLimit`/`QueryUUID`，批量上限 `httpx.MaxBatchIDs`，项目设置 `project.ReadSettings`，文件夹路径 `file.FolderPaths`，可选文本 `names.OptionalText`。一个文件太长就按功能拆（`upload.go`、`move.go`……），不要一个文件几千行。
 
 ## 开发环境（macOS；数据库在远程，S3 在本机 Docker）
 

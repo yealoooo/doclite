@@ -322,7 +322,9 @@ const STATUS_LABELS: Record<string, string> = {
   modifying: '修改中',
   queued: '排队',
   running: '执行中',
+  done: '已完成',
   canceled: '已取消',
+  cancelled: '已取消',
   failed: '失败',
 }
 
