@@ -988,49 +988,55 @@ export interface ArchiveCategoryList {
   items: ArchiveCategory[]
 }
 
-/** 矩阵的一行（一种审核状态）：按归类状态分的文件数。 */
-export interface CatalogRowCounts {
+/** 按归档状态的文件数（页数）；`cataloged = unlocked + locked`。 */
+export interface CatalogColumnCounts {
   /** 未归档。 */
   uncataloged: number
   /** 已归档未锁定（含修改中）。 */
   unlocked: number
   /** 已锁定。 */
   locked: number
-  total: number
-}
-
-/** 4 种审核状态 × 3 种归类状态。 */
-export interface CatalogMatrix {
-  unassigned: CatalogRowCounts
-  pending: CatalogRowCounts
-  approved: CatalogRowCounts
-  rejected: CatalogRowCounts
-}
-
-/** 每列（归类状态）的合计；`cataloged = unlocked + locked`。 */
-export interface CatalogColumnCounts {
-  uncataloged: number
-  unlocked: number
-  locked: number
   cataloged: number
   total: number
 }
 
+/**
+ * 按件的计数（2026-10-19）：来源文件夹（`archive_items.source_folder_id`）在这一组里的未删除条目。子树的计数算来源
+ * 文件夹在子树里的件，`direct_counts` 算来源文件夹就是这个文件夹本身的件。
+ */
+export interface CatalogItemCounts {
+  /** 已归档的件数。 */
+  total: number
+  /** 其中已锁定的。 */
+  locked: number
+  /** 其中修改中的（来源文件夹解除了封存）。 */
+  modifying: number
+  /** 可导出的件数：和导出预检勾"只导出审核通过的"时的"就绪"相同（不在修改中、要求锁定时已锁定、档号不空、≥ 1 页、全部页通过）。 */
+  exportable: number
+  /** 可导出的件的页数。 */
+  exportable_pages: number
+}
+
 /** catalog-summary 的一组计数（一个文件夹整棵子树、直接放的文件或一个子文件夹的子树）。 */
 export interface CatalogCounts {
+  /** 文件数（页数）。 */
   total: number
-  /** 每行的合计，和 review-summary 的 counts 相同。 */
+  /** 按审核状态的页数，和 review-summary 的 counts 相同。 */
   review: ReviewStatusCounts
+  /** 按归档状态的页数。 */
   catalog: CatalogColumnCounts
-  matrix: CatalogMatrix
-  /** 可导出的文件数（按 `export.require_locked_item`：true 只算已锁定的，false 算已归档的），按审核状态分开。 */
-  exportable: ReviewStatusCounts
+  /** 按件。 */
+  items: CatalogItemCounts
 }
 
 /** catalog-summary 的 children：未删除的子文件夹，各自整棵子树的计数。 */
 export interface CatalogSummaryChild {
   folder_id: string
   folder_name: string
+  /** 未删除的直接子文件夹数（同文件目录 children 的 folder_count）。 */
+  folder_count: number
+  /** 它自己的归档信息（同文件目录 children 的 archive）；没归档为 null。 */
+  archive: FolderArchive | null
   counts: CatalogCounts
 }
 

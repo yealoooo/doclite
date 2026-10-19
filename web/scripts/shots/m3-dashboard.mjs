@@ -1,27 +1,31 @@
-// M3-7 的截图清单和断言：项目看板 /dashboard（demo_manager 看）。
+// M3-7 的截图清单和断言：项目看板 /dashboard（demo_manager 看；2026-10-19 简化成"一行五个数 + 按文件夹的表"，M9-5）。
 //
 //   INIT_ADMIN_PASSWORD=admin123456 \
 //     npm run screenshots -- --spec scripts/shots/m3-dashboard.mjs --base http://localhost:<preview 端口>
 //
 // 前端地址是 vite preview 或 dev（/api 代理到 server）。要先有 npm run seed 的演示数据（M9-3）：DEMO-A 的
-// 「2025 文书档案 / 盒 WS-2025-002 / 附件（含下级）」、全宗 Z001「文书档案」；demo_manager（有 dashboard 菜单）、
+// 「2025 文书档案 / 盒 WS-2025-001、盒 WS-2025-002 / 附件（含下级）」、全宗 Z001「文书档案」；demo_manager（有 dashboard 菜单）、
 // demo_reviewer 能进 DEMO-A（密码 demo123456，可用 DEMO_PASSWORD 覆盖）。
 // 每张会建的临时数据（「截图验证 M3-7 …」文件夹、临时归类节点和条目）都在 after 里删掉，前面失败了也删，可以反复跑；
 // 不改演示数据的审核、归档状态。
 //
 // 断言（失败时这一张算失败，脚本退出码 1）：
-// - m3-dashboard：KPI（已上传、审核通过、待重扫、已归档、已锁定、可导出的主数字和次要数字）和矩阵的 4×3 格、每行合计、
-//   可导出列、合计行，都和接口 catalog-summary（不带 folder_id）一致。
-// - m3-dashboard-expand：展开「2025 文书档案」再展开「盒 WS-2025-002」：每行的文件数、通过、驳回、已归档、已锁定、可导出
-//   和接口（这两个文件夹的 catalog-summary 的 children、direct_counts）一致，盒 002 下多一行"直接放在这里的文件"。
+// - m3-dashboard：一行五个数（已上传 N 页、审核通过 x / N 页和待分配、待审、驳回、已归档 n 件 · m 页、已锁定 a / n 件、
+//   可导出 e 件 · p 页）和接口 catalog-summary（不带 folder_id）的 counts 一致，可导出的小字按 require_locked_item；
+//   第一层文件夹的行（页数、审核通过、已归档件数和页数、已锁定件数、自己的归档信息）和接口的 children 一致。打印五个数
+//   （seed 的 DEMO-A 应是：44；10（待分配 27、待审 5、驳回 2）；3 件 9 页；1 / 3 件；1 件 3 页）。
+// - m3-dashboard-expand：展开「2025 文书档案」「盒 WS-2025-001」「盒 WS-2025-002」：每行和接口（这几个文件夹的
+//   catalog-summary 的 children、direct_counts）一致；盒 001 下归档了的 3 个文件夹写档号、其中 1 个"已锁定"，盒 002 下
+//   多一行"直接放在这里的文件"。截图收起盒 002（和 Mockup v2 一样展开「2025 文书档案」「盒 WS-2025-001」）。
 // - m3-dashboard-live：页面之外建临时文件夹（含一个子文件夹）、传 4 页 → 分给 demo_reviewer → 驳回子文件夹里的 1 页
-//   （子文件夹那一层没加载，要按路径补祖先链）→ 展开临时文件夹后通过 2 页：每一步之后 3 秒内 KPI、矩阵和临时文件夹
+//   （子文件夹那一层没加载，要按路径补祖先链）→ 展开临时文件夹后通过 2 页：每一步之后 3 秒内五个数和临时文件夹
 //   （展开后还有子文件夹、"直接放在这里的文件"）的行都和接口一致，打印每一步用了多久。
 // - m3-dashboard-link（M9-3 起按整个文件夹归档）：临时文件夹传 3 页，在全宗 Z001 下经接口建一条完整的临时链（门类 /
 //   年度 / 保管期限 / 机构，档号才完整）→ 把临时文件夹整个归档（items:from-folders，发 files.changed、folders.changed
-//   和 catalog.changed）→ 3 秒内已归档 +3 且和接口一致；填必填著录、这 3 页分给 demo_reviewer 并审核通过（锁定要求
-//   全部页通过）→ 没锁定时"可导出"不变；再锁定 → 3 秒内已锁定 +3、可导出的主数字（通过且可导出）和次要数字都 +3。
-//   after 里条目解锁、撤销归档，临时链删掉。
+//   和 catalog.changed）→ 3 秒内已归档 +1 件 +3 页、临时文件夹那一行写档号，和接口一致；填必填著录、这 3 页分给
+//   demo_reviewer 并审核通过（锁定要求全部页通过）→ 没锁定时"可导出"不变；再锁定 → 3 秒内已锁定 +1 件、可导出 +1 件
+//   +3 页，那一行"已锁定"；再解锁、解除封存 → 那一行带"修改中"标记，可导出回到原样。
+//   after 里撤销归档（已锁定的先解锁），临时链删掉。
 // - m3-dashboard-requests（审查第 1 轮：收起的文件夹不再刷新、一轮刷新不叠加）：拦截页面的 catalog-summary 请求计数。
 //   展开「2025 文书档案」「盒 WS-2025-002」后发一条 catalog.changed（经接口给全宗节点改名）→ 正好取 3 次（根、2025、
 //   盒 002）；收起「2025 文书档案」（盒 002 一起收起）后再发一条 → 只取根 1 次；再展开 → 重新取 2025、盒 002 是收起的；
@@ -40,12 +44,13 @@ const OUT = '../docs/screenshots/m3'
 const LIVE_MS = 3000
 /** npm run seed 的演示数据（M9-3）：展开的两层文件夹、第 3 层的子文件夹、全宗。 */
 const M37_FOLDER = '2025 文书档案'
+const BOX1 = '盒 WS-2025-001'
 const BOX = '盒 WS-2025-002'
 const EXTRA = '附件（含下级）'
 const FONDS_CODE = 'Z001'
 const M37_FONDS_NAME = '文书档案'
 
-/** 找到 npm run seed 建的文件夹和全宗，返回 {project, folders: {top, box3, extra}, categories: {fonds}}。 */
+/** 找到 npm run seed 建的文件夹和全宗，返回 {project, folders: {top, box1, box3, extra}, categories: {fonds}}。 */
 async function seedData(admin) {
   const project = (await admin('GET', '/api/projects')).find((p) => p.project_code === 'DEMO-A')
   if (!project) throw new Error('找不到 DEMO-A，先跑 npm run seed')
@@ -55,11 +60,12 @@ async function seedData(admin) {
     return f
   }
   const top = await child(project.root_folder_id, M37_FOLDER)
+  const box1 = await child(top.id, BOX1)
   const box3 = await child(top.id, BOX)
   const extra = await child(box3.id, EXTRA)
   const fonds = (await admin('GET', `/api/projects/${project.id}/archive-categories`)).items.find((c) => c.category_code === FONDS_CODE)
   if (!fonds) throw new Error(`找不到全宗 ${FONDS_CODE}，先跑 npm run seed`)
-  return { project, folders: { top, box3, extra }, categories: { fonds } }
+  return { project, folders: { top, box1, box3, extra }, categories: { fonds } }
 }
 
 /** 删掉临时条目（已锁定的先解锁；撤销归档时页一并移出）。 */
@@ -96,70 +102,84 @@ async function summary(ctx, folderId) {
   return ctx.mgr('GET', `/api/projects/${ctx.pid}/catalog-summary${folderId ? `?folder_id=${folderId}` : ''}`)
 }
 
-/** 页面上的 KPI、矩阵、文件夹行（都从 data-* 读）。 */
+/** 页面上的五个数、文件夹行（都从 data-* 读）。 */
 function readPage(page) {
   return page.evaluate(() => {
-    const kpi = {}
-    for (const el of document.querySelectorAll('[data-testid=kpi]')) {
-      kpi[el.dataset.kind] = Number(el.dataset.value)
-      if (el.dataset.total !== undefined) kpi[`${el.dataset.kind}_total`] = Number(el.dataset.total)
-    }
-    const matrix = {}
-    for (const el of document.querySelectorAll('[data-testid=matrix-cell]')) matrix[`${el.dataset.review}.${el.dataset.catalog}`] = Number(el.dataset.value)
-    const rows = {}
-    for (const el of document.querySelectorAll('[data-testid=folder-row]')) {
-      rows[`${el.dataset.kind}:${el.dataset.folderId}`] = {
-        depth: Number(el.dataset.depth),
-        total: Number(el.dataset.total),
-        approved: Number(el.dataset.approved),
-        rejected: Number(el.dataset.rejected),
-        cataloged: Number(el.dataset.cataloged),
-        locked: Number(el.dataset.locked),
-        exportable: Number(el.dataset.exportable),
+    const flow = {}
+    for (const el of document.querySelectorAll('[data-testid=flow-step]')) {
+      for (const [k, v] of Object.entries(el.dataset)) {
+        if (k === 'testid' || k === 'kind') continue
+        flow[k === 'value' ? el.dataset.kind : `${el.dataset.kind}.${k}`] = Number(v)
       }
     }
-    return { kpi, matrix, rows }
+    const rows = {}
+    for (const el of document.querySelectorAll('[data-testid=folder-row]')) {
+      const d = el.dataset
+      rows[`${d.kind}:${d.folderId}`] = {
+        depth: Number(d.depth),
+        total: Number(d.total),
+        approved: Number(d.approved),
+        items: Number(d.items),
+        cataloged: Number(d.cataloged),
+        lockedItems: Number(d.lockedItems),
+        archiveNo: d.archiveNo ?? null,
+        archiveLocked: d.archiveLocked ?? null,
+        archiveModifying: d.archiveModifying ?? null,
+      }
+    }
+    return { flow, rows }
   })
 }
 
-/** 接口的 counts 应该在页面上显示成什么样。 */
+/** 接口的 counts 应该在页面上显示成什么样（五个数）。 */
 function expectedTop(c) {
-  const kpi = {
-    total: c.total,
-    approved: c.review.approved,
-    rejected: c.review.rejected,
-    cataloged: c.catalog.cataloged,
-    locked: c.catalog.locked,
-    exportable: c.exportable.approved,
-    exportable_total: c.exportable.total,
+  return {
+    flow: {
+      uploaded: c.total,
+      approved: c.review.approved,
+      'approved.total': c.total,
+      'approved.unassigned': c.review.unassigned,
+      'approved.pending': c.review.pending,
+      'approved.rejected': c.review.rejected,
+      archived: c.items.total,
+      'archived.pages': c.catalog.cataloged,
+      'archived.modifying': c.items.modifying,
+      locked: c.items.locked,
+      'locked.total': c.items.total,
+      exportable: c.items.exportable,
+      'exportable.pages': c.items.exportable_pages,
+    },
   }
-  const matrix = {}
-  for (const r of ['unassigned', 'pending', 'approved', 'rejected']) {
-    for (const col of ['uncataloged', 'unlocked', 'locked', 'total']) matrix[`${r}.${col}`] = c.matrix[r][col]
-    matrix[`${r}.exportable`] = c.exportable[r]
-  }
-  for (const col of ['uncataloged', 'unlocked', 'locked']) matrix[`total.${col}`] = c.catalog[col]
-  matrix['total.total'] = c.total
-  matrix['total.exportable'] = c.exportable.total
-  return { kpi, matrix }
 }
 
-function rowOf(c) {
+/** 一行（counts 是这一行的计数，archive 是文件夹自己的归档信息，直接放的文件为 null）。 */
+function rowOf(c, archive = null) {
   return {
     total: c.total,
     approved: c.review.approved,
-    rejected: c.review.rejected,
+    items: c.items.total,
     cataloged: c.catalog.cataloged,
-    locked: c.catalog.locked,
-    exportable: c.exportable.approved,
+    lockedItems: c.items.locked,
+    archiveNo: archive ? (archive.archive_no ?? `第 ${archive.item_no} 件`) : null,
+    archiveLocked: archive ? String(archive.locked) : null,
+    archiveModifying: archive ? String(archive.source_status === 'modifying') : null,
   }
+}
+
+/** children 里的一个子文件夹的行。 */
+const childRow = (ch) => rowOf(ch.counts, ch.archive)
+
+/** 父文件夹（null 是根）的 children 里 folderId 那一行（键 → 期望）。 */
+async function childRowOf(ctx, parentId, folderId) {
+  const ch = (await summary(ctx, parentId)).children.find((x) => x.folder_id === folderId)
+  if (!ch) throw new Error(`接口的 children 里没有 ${folderId}`)
+  return { [`folder:${folderId}`]: childRow(ch) }
 }
 
 /** 页面和期望的差异（空数组表示一致）。`rows` 是 {行键: 期望的行}。 */
 function diff(actual, want) {
   const out = []
-  for (const [k, v] of Object.entries(want.kpi ?? {})) if (actual.kpi[k] !== v) out.push(`KPI ${k}: 页面 ${actual.kpi[k]}，接口 ${v}`)
-  for (const [k, v] of Object.entries(want.matrix ?? {})) if (actual.matrix[k] !== v) out.push(`矩阵 ${k}: 页面 ${actual.matrix[k]}，接口 ${v}`)
+  for (const [k, v] of Object.entries(want.flow ?? {})) if (actual.flow[k] !== v) out.push(`总数 ${k}: 页面 ${actual.flow[k]}，接口 ${v}`)
   for (const [k, v] of Object.entries(want.rows ?? {})) {
     const a = actual.rows[k]
     if (!a) {
@@ -195,7 +215,7 @@ async function waitConsistent(page, ctx, { timeout = LIVE_MS, rowsFor = async ()
 
 async function openDashboard(page) {
   await page.waitForSelector('[data-testid=dashboard-page][data-state=ready][data-stream=open]', { timeout: 15000 })
-  await page.waitForSelector('[data-testid=kpi]')
+  await page.waitForSelector('[data-testid=flow-step]')
 }
 
 async function toggleRow(page, folderId, want) {
@@ -283,12 +303,18 @@ export default {
         await openDashboard(page)
         const ms = await waitConsistent(page, ctx, { timeout: 5000 })
         const root = await summary(ctx, null)
+        const c = root.counts
         console.log(
-          `  KPI 和矩阵和接口一致（${ms} ms）：已上传 ${root.counts.total}、通过 ${root.counts.review.approved}、驳回 ${root.counts.review.rejected}、` +
-            `已归档 ${root.counts.catalog.cataloged}、已锁定 ${root.counts.catalog.locked}、可导出 ${root.counts.exportable.approved} / ${root.counts.exportable.total}`,
+          `  五个数和接口一致（${ms} ms）：已上传 ${c.total} 页；通过 ${c.review.approved}（待分配 ${c.review.unassigned}、待审 ${c.review.pending}、` +
+            `驳回 ${c.review.rejected}）；已归档 ${c.items.total} 件 ${c.catalog.cataloged} 页；已锁定 ${c.items.locked} / ${c.items.total} 件；` +
+            `可导出 ${c.items.exportable} 件 ${c.items.exportable_pages} 页`,
         )
+        // 可导出的小字按 require_locked_item。
+        const note = await page.$eval('[data-testid=flow-step][data-kind=exportable]', (el) => el.textContent)
+        const want = root.require_locked_item ? '已锁定且全部页审核通过' : '已归档且全部页审核通过'
+        assert(note.includes(want), `可导出的小字应是"${want}"，页面是：${note}`)
         // 第一层每个文件夹的行也对。
-        const rows = Object.fromEntries(root.children.map((c) => [`folder:${c.folder_id}`, rowOf(c.counts)]))
+        const rows = Object.fromEntries(root.children.map((ch) => [`folder:${ch.folder_id}`, childRow(ch)]))
         const d = diff(await readPage(page), { rows })
         assert(d.length === 0, `第一层文件夹的行和接口不一致：${d.slice(0, 5).join('；')}`)
         await page.evaluate(() => document.querySelector('[data-testid=dashboard-page] section')?.scrollTo(0, 0))
@@ -301,16 +327,16 @@ export default {
       prepare: async (page) => {
         const ctx = await context(page)
         await openDashboard(page)
-        const top = ctx.demo.folders.top
-        const box3 = ctx.demo.folders.box3
+        const { top, box1, box3 } = ctx.demo.folders
         await toggleRow(page, top.id, true)
+        await toggleRow(page, box1.id, true)
         await toggleRow(page, box3.id, true)
         const s1 = await summary(ctx, top.id)
+        const sb1 = await summary(ctx, box1.id)
         const s3 = await summary(ctx, box3.id)
         const rows = {
-          [`folder:${top.id}`]: rowOf(s1.counts),
-          ...Object.fromEntries(s1.children.map((c) => [`folder:${c.folder_id}`, rowOf(c.counts)])),
-          ...Object.fromEntries(s3.children.map((c) => [`folder:${c.folder_id}`, rowOf(c.counts)])),
+          ...(await childRowOf(ctx, null, top.id)),
+          ...Object.fromEntries([...s1.children, ...sb1.children, ...s3.children].map((ch) => [`folder:${ch.folder_id}`, childRow(ch)])),
           [`direct:${box3.id}`]: rowOf(s3.direct_counts),
         }
         await page.waitForSelector(`[data-testid=folder-row][data-kind=direct][data-folder-id="${box3.id}"]`, { timeout: 5000 })
@@ -318,10 +344,15 @@ export default {
         const d = diff(actual, { rows })
         assert(d.length === 0, `展开后的行和接口不一致：${d.slice(0, 5).join('；')}`)
         assert(actual.rows[`folder:${ctx.demo.folders.extra.id}`]?.depth === 2, `「${EXTRA}」应该在第 3 层（depth 2）`)
+        const archivedRows = sb1.children.map((ch) => actual.rows[`folder:${ch.folder_id}`]).filter((r) => r?.archiveNo)
+        assert(archivedRows.length > 0 && archivedRows.some((r) => r.archiveLocked === 'true'), `${BOX1} 下应有写档号的行、其中有已锁定的`)
         console.log(
-          `  展开「${M37_FOLDER}」「${BOX}」：${Object.keys(rows).length} 行和接口一致；${M37_FOLDER} 共 ${s1.counts.total} 页，` +
-            `已归档 ${s1.counts.catalog.cataloged}、已锁定 ${s1.counts.catalog.locked}`,
+          `  展开「${M37_FOLDER}」「${BOX1}」「${BOX}」：${Object.keys(rows).length} 行和接口一致；${M37_FOLDER} 共 ${s1.counts.total} 页，` +
+            `已归档 ${s1.counts.items.total} 件 ${s1.counts.catalog.cataloged} 页、已锁定 ${s1.counts.items.locked} 件；` +
+            `${BOX1} 下写档号的 ${archivedRows.map((r) => `${r.archiveNo}${r.archiveLocked === 'true' ? '（已锁定）' : ''}`).join('、')}`,
         )
+        // 截图和 Mockup v2 一样：展开「2025 文书档案」「盒 WS-2025-001」。
+        await toggleRow(page, box3.id, false)
       },
     },
     {
@@ -333,7 +364,7 @@ export default {
         await openDashboard(page)
         const temp = await makeTemp(ctx, '看板实时', { pages: 2, subPages: 2 })
         temps.push(temp)
-        const tempRow = async (c) => ({ [`folder:${temp.id}`]: rowOf((await summary(c, temp.id)).counts) })
+        const tempRow = (c) => childRowOf(c, null, temp.id)
         let ms = await waitConsistent(page, ctx, { rowsFor: tempRow })
         console.log(`  页面之外建临时文件夹、传 4 页：${ms} ms 后看板和接口一致`)
 
@@ -350,21 +381,21 @@ export default {
         })
         ms = await waitConsistent(page, ctx, { rowsFor: tempRow })
         assert(ms <= LIVE_MS, `驳回之后 ${ms} ms 才更新`)
-        console.log(`  页面之外驳回子文件夹里的 1 页（子文件夹那一层没加载）：${ms} ms 后 KPI、矩阵、临时文件夹那一行和接口一致`)
+        console.log(`  页面之外驳回子文件夹里的 1 页（子文件夹那一层没加载）：${ms} ms 后五个数、临时文件夹那一行和接口一致`)
 
         // 展开临时文件夹后通过 2 页（一页在顶层、一页在子文件夹里）：展开的各行也要跟上。
         await toggleRow(page, temp.id, true)
         await ctx.rev('POST', `/api/projects/${ctx.pid}/reviews:approve`, { file_ids: [temp.files[0].file_id, temp.subFiles[0].file_id] })
         const rowsExpanded = async (c) => ({
           ...(await tempRow(c)),
-          [`folder:${temp.sub.id}`]: rowOf((await summary(c, temp.sub.id)).counts),
+          ...(await childRowOf(c, temp.id, temp.sub.id)),
           [`direct:${temp.id}`]: rowOf((await summary(c, temp.id)).direct_counts),
         })
         ms = await waitConsistent(page, ctx, { rowsFor: rowsExpanded })
         assert(ms <= LIVE_MS, `通过之后 ${ms} ms 才更新`)
-        console.log(`  页面之外通过 2 页（展开着）：${ms} ms 后 KPI、矩阵、临时文件夹、子文件夹和"直接放在这里的文件"的行都和接口一致`)
+        console.log(`  页面之外通过 2 页（展开着）：${ms} ms 后五个数、临时文件夹、子文件夹和"直接放在这里的文件"的行都和接口一致`)
         const t = (await readPage(page)).rows[`folder:${temp.id}`]
-        assert(t.approved === 2 && t.rejected === 1 && t.total === 4, `临时文件夹那一行应为 4 页、通过 2、驳回 1，页面是 ${JSON.stringify(t)}`)
+        assert(t.approved === 2 && t.total === 4 && t.items === 0, `临时文件夹那一行应为 4 页、通过 2、没有归档，页面是 ${JSON.stringify(t)}`)
         await page.evaluate(() => document.querySelector('[data-testid=dashboard-page] section')?.scrollTo(0, 0))
       },
       after: dropTemps,
@@ -378,7 +409,7 @@ export default {
         await openDashboard(page)
         const temp = await makeTemp(ctx, '看板归档', { pages: 3 })
         temps.push(temp)
-        const tempRow = async (c) => ({ [`folder:${temp.id}`]: rowOf((await summary(c, temp.id)).counts) })
+        const tempRow = (c) => childRowOf(c, null, temp.id)
         // 一条完整的临时链（门类 / 年度 / 保管期限 / 机构）：档号完整才能锁定。
         const node = (parentId, type, code, name) =>
           ctx.admin('POST', `/api/projects/${ctx.pid}/archive-categories`, { parent_id: parentId, category_type: type, category_code: code, category_name: name })
@@ -397,8 +428,16 @@ export default {
         let ms = await waitConsistent(page, ctx, { rowsFor: tempRow })
         assert(ms <= LIVE_MS, `归档之后 ${ms} ms 才更新`)
         const after1 = (await summary(ctx, null)).counts
-        assert(after1.catalog.cataloged === before.catalog.cataloged + 3, `已归档应该 +3（${before.catalog.cataloged} → ${after1.catalog.cataloged}）`)
-        console.log(`  经接口把临时文件夹整个归档（3 页）：${ms} ms 后已归档 ${before.catalog.cataloged} → ${after1.catalog.cataloged}，和接口一致`)
+        assert(
+          after1.items.total === before.items.total + 1 && after1.catalog.cataloged === before.catalog.cataloged + 3,
+          `已归档应该 +1 件 +3 页（${before.items.total} 件 ${before.catalog.cataloged} 页 → ${after1.items.total} 件 ${after1.catalog.cataloged} 页）`,
+        )
+        const row1 = (await readPage(page)).rows[`folder:${temp.id}`]
+        assert(row1.archiveNo === it.archive_no && row1.archiveLocked === 'false', `临时文件夹那一行应写档号 ${it.archive_no}：${JSON.stringify(row1)}`)
+        console.log(
+          `  经接口把临时文件夹整个归档（3 页）：${ms} ms 后已归档 ${before.items.total} 件 ${before.catalog.cataloged} 页 → ` +
+            `${after1.items.total} 件 ${after1.catalog.cataloged} 页，那一行写档号 ${row1.archiveNo}，和接口一致`,
+        )
 
         // 锁定要求必填著录合格、全部页审核通过（DEMO-A 的 lock_requires_approved 是默认 true）。
         it = await ctx.admin('PATCH', `/api/archive-items/${it.id}`, { row_version: it.row_version, extra_fields: await requiredFieldValues(ctx.admin, ctx.pid) })
@@ -407,7 +446,7 @@ export default {
         await ctx.rev('POST', `/api/projects/${ctx.pid}/reviews:approve`, { file_ids: three })
         ms = await waitConsistent(page, ctx, { rowsFor: tempRow })
         const beforeLock = (await summary(ctx, null)).counts
-        assert(beforeLock.exportable.approved === before.exportable.approved, '没锁定时审核通过不改"可导出"（要求锁定）')
+        assert(beforeLock.items.exportable === before.items.exportable, '没锁定时审核通过不改"可导出"（要求锁定）')
         console.log(`  这 3 页分给 demo_reviewer 并通过：${ms} ms 后和接口一致；审核通过 ${before.review.approved} → ${beforeLock.review.approved}`)
 
         it = await ctx.admin('POST', `/api/archive-items/${it.id}/lock`, { row_version: it.row_version })
@@ -415,13 +454,27 @@ export default {
         ms = await waitConsistent(page, ctx, { rowsFor: tempRow })
         assert(ms <= LIVE_MS, `锁定之后 ${ms} ms 才更新`)
         const after2 = (await summary(ctx, null)).counts
-        assert(after2.catalog.locked === before.catalog.locked + 3, '已锁定应该 +3')
-        assert(after2.exportable.total === before.exportable.total + 3, '全部可导出应该 +3')
-        assert(after2.exportable.approved === before.exportable.approved + 3, '通过且可导出应该 +3（这 3 页审核通过了）')
-        console.log(
-          `  锁定 + catalog.changed：${ms} ms；已锁定 ${before.catalog.locked} → ${after2.catalog.locked}，` +
-            `可导出 ${before.exportable.approved} / ${before.exportable.total} → ${after2.exportable.approved} / ${after2.exportable.total}`,
+        assert(after2.items.locked === before.items.locked + 1, '已锁定应该 +1 件')
+        assert(
+          after2.items.exportable === before.items.exportable + 1 && after2.items.exportable_pages === before.items.exportable_pages + 3,
+          '可导出应该 +1 件 +3 页（这 3 页审核通过了）',
         )
+        assert((await readPage(page)).rows[`folder:${temp.id}`].archiveLocked === 'true', '临时文件夹那一行应写"已锁定"')
+        console.log(
+          `  锁定 + catalog.changed：${ms} ms；已锁定 ${before.items.locked} → ${after2.items.locked} 件，` +
+            `可导出 ${before.items.exportable} 件 ${before.items.exportable_pages} 页 → ${after2.items.exportable} 件 ${after2.items.exportable_pages} 页`,
+        )
+
+        // 解锁、解除封存：那一行带"修改中"标记，可导出回到原样（修改中的导出预检不就绪）。
+        it = await ctx.admin('POST', `/api/archive-items/${it.id}/unlock`, { row_version: it.row_version })
+        it = await ctx.admin('POST', `/api/archive-items/${it.id}/unseal`, { row_version: it.row_version, reason: 'M3-7 截图脚本：看板的修改中标记' })
+        assert(it.source_status === 'modifying', `条目应在修改中，现在是 ${it.source_status}`)
+        ms = await waitConsistent(page, ctx, { rowsFor: tempRow })
+        assert(ms <= LIVE_MS, `解除封存之后 ${ms} ms 才更新`)
+        const after3 = (await summary(ctx, null)).counts
+        assert(after3.items.modifying === before.items.modifying + 1 && after3.items.exportable === before.items.exportable, '修改中 +1 件、可导出回到原样')
+        assert(await page.$(`[data-testid=folder-row][data-folder-id="${temp.id}"] [data-testid=archive-modifying]`), '临时文件夹那一行应带"修改中"标记')
+        console.log(`  解锁、解除封存：${ms} ms；那一行带"修改中"标记，修改中 ${after3.items.modifying} 件，可导出回到 ${after3.items.exportable} 件`)
         await page.evaluate(() => document.querySelector('[data-testid=dashboard-page] section')?.scrollTo(0, 0))
       },
       after: async () => {

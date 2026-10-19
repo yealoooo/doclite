@@ -366,3 +366,9 @@
 ### [x] M9-4 验收清单（commit 3774c76）
 - **结果：** 第 10 节重写为 CAT-01…CAT-26，其他节的挂接、定稿、旧数据跟着改；共 183 条，结果表同步。数字是按清单推的，没在客户端里点过。
 - `docs/acceptance-checklist.md` 归类一节按新流程重写（归档、封存挡住整理、解除封存、重新归档、锁定、导出），其他节里"挂接""定稿"的说法跟着改，数据改用 M9-3 的。
+
+### [x] M9-5 看板简化（用户 2026-10-19，Mockup `doclite-project/doclite-dashboard-redesign.html` v2）
+- **结果：** /dashboard 按 Mockup v2 重写：一行五个数（已上传 → 审核通过 → 已归档 → 已锁定 → 可导出，各一条单色进度条）+ 按文件夹的表（页数、审核通过、已归档、已锁定）；去掉 KPI 卡、"审核 × 归类"矩阵、多色进度条，删掉 KpiTiles、StatusMatrix、StackedBar。审核按页，归档、锁定、导出按件。seed 的 DEMO-A：44 页；通过 10（待分配 27、待审 5、驳回 2）；已归档 3 件 9 页；已锁定 1 / 3 件；可导出 1 件 3 页。
+- **接口：** catalog-summary 的每组 counts 加 `items{total, locked, modifying, exportable, exportable_pages}`（按来源文件夹归组的未删除件；exportable 和导出预检勾"只导出审核通过的"时的就绪同一组条件，API 测试拿预检的就绪件数、页数核对）；children 每项加 `folder_count`、`archive`（和文件目录 children 的相同）。去掉了 `matrix` 和按文件数的 `exportable`（只有看板用）。多一次查询（按件的计数）和一次归档信息查询（两条 SQL）。
+- **测试：** `TestCatalogSummary` 重写（修改中、档号为空、有驳回页的已锁定件、require_locked_item=false、整个归档成一件的文件夹自己的 direct_counts、children 的 archive）；归类模块的 API 测试、TestExportPrecheck、TestClientDisconnect 过。m3-dashboard 截图脚本 5/5（临时库，1440 和 1366 宽）。
+- **须知：** 验收清单第 11 节改成 DASH-01…DASH-04（共 182 条）；DASH-03 的数字是按 CAT 各步推的，没在客户端里点过。`perf_test.go` 的看板断言（< 200 ms）没跑（远程不跑 perf）。

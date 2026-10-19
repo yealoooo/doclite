@@ -40,7 +40,7 @@
 
 - 上一版（Rust）M0–M3 用户已确认【用户 2026-10-14】；Go 重写版 M1–M7 已完成（2026-10-16）；打包交付（M8）等用户在自己电脑上验证后再定【用户 2026-10-16】；插件和二期不排期。
 - 审核和归类同时处理同一文件夹：不互相拒绝、不死锁、等待 < 1 秒【用户 2026-10-14】。
-- 10 万文件：审核读接口 < 200 ms，看板矩阵 < 200 ms，500 个文件的"挂在哪" < 100 ms。导出 2000 件 / 5 万页：预检、建任务、交付后变更各 < 1 秒（建任务本机实测 0.97–1.04 秒，用户 2026-10-16 接受、正式硬件重测）；单任务 ≤ 20 万页。
+- 10 万文件：审核读接口 < 200 ms，看板 < 200 ms，500 个文件的"挂在哪" < 100 ms。导出 2000 件 / 5 万页：预检、建任务、交付后变更各 < 1 秒（建任务本机实测 0.97–1.04 秒，用户 2026-10-16 接受、正式硬件重测）；单任务 ≤ 20 万页。
 - 另一个窗口 3 秒内看到变化。server 内存不随文件大小、页数增长。
 
 ## 2. 硬性规则（违反就是 bug）
@@ -328,7 +328,14 @@
 
 ### 5.10 项目看板（M3）
 
-【用户 2026-10-14，Q6】只有 dashboard 能看；实时聚合，不建汇总表。矩阵 = 4 种审核状态 × 3 种归档状态（未归档、已归档未锁定（含修改中）、已锁定）加行列合计；可导出按 `require_locked_item` 算、按审核状态拆开；KPI：已上传、通过、待重扫、已归档、已锁定、可导出（主数字"通过且可导出"）【总控】；文件夹进度表逐层展开（`catalog-summary?folder_id=`，结构同审核的按文件夹计数）。人员统计、今天 / 本周不做。
+【用户 2026-10-14，Q6】只有 dashboard 能看；实时聚合，不建汇总表；人员统计、今天 / 本周不做。
+
+【用户 2026-10-19，Mockup `doclite-project/doclite-dashboard-redesign.html` v2】原来的看板（6 个 KPI、"审核 × 归类"矩阵、两条多色进度条、文件夹表每行两条多色条）同一组数字说了几遍、看着乱，改成**只要简单的统计**：去掉矩阵、多色进度条和"待办"之类的东西；**审核按页数，归档、锁定、导出按件数**（一个文件夹归档成一件，页数做补充）。
+
+- **总数**（整个项目，按流程从左到右一行五个数，每个一条单色进度条）：已上传 `N 页` → 审核通过 `x / N 页 · %`（小字：待分配 · 待审 · 驳回）→ 已归档 `n 件 · m 页`（小字：`m / N 页 · %`；有修改中的件时加"修改中 k 件"）→ 已锁定 `a / n 件`（小字：未锁定 `n − a` 件）→ 可导出 `e 件 · p 页`（小字：`require_locked_item` 为 true 时"已锁定且全部页审核通过"，false 时"已归档且全部页审核通过"）。
+- **可导出的件** = 导出预检勾"只导出审核通过的"时的**就绪**（5.11）：不在修改中、（`require_locked_item` 时）已锁定、档号不空、≥ 1 页、全部页 approved；页 = 挂接行里文件和所在文件夹都未删除的。两边的条件要一起改。
+- **按文件夹**的表（`catalog-summary?folder_id=` 逐层展开；有子文件夹又直接放了文件的，展开后多一行"直接放在这里的文件"）：每行页数、审核通过（单色条 + `x/y`）、已归档、已锁定。有下级文件夹的行（盒子等）写下面的合计：已归档 `n 件 · m 页`、已锁定 `a 件`；整个归档成一件的文件夹写档号（为空写"第 n 件"，修改中加标记），已锁定写"已锁定"或"—"；没归档的写"—"。
+- 件算在来源文件夹（`archive_items.source_folder_id`）里；页（文件）算在它现在所在的文件夹里。
 
 ### 5.11 导出（M4）
 
@@ -413,7 +420,7 @@
 | GET …/review-settings · …/catalog-settings · POST …/catalog-placements · GET files/{fid}/catalog · …/stream | 能进项目 | 设置、归类信息、SSE |
 | projects/{pid}/archive-categories（GET/POST）· {id}（PATCH/DELETE） | catalog | 节点 |
 | GET archive-categories/{id}/items · POST archive-categories/{id}/items:from-folders · archive-items/{id}（GET/PATCH/DELETE）· {id}/lock · {id}/unlock · {id}/unseal · GET {id}/reseal-preview · POST {id}/reseal · GET projects/{pid}/archive-items:modifying · projects/{pid}/archive-items:lock · :renumber | catalog | 条目、归档、封存、锁定解锁（2026-10-19 去掉 POST items、mark-done、back-to-draft、PUT files；解锁不再要 review_assign） |
-| GET projects/{pid}/catalog-summary | dashboard | 看板 |
+| GET projects/{pid}/catalog-summary | dashboard | 看板（5.10）：`folder_id`（不传是根文件夹）、`folder_name`、`parent_id`、`require_locked_item`；`counts`（整棵子树）、`direct_counts`（直接放在里面的）各是 `{total, review{unassigned,pending,approved,rejected,total}, catalog{uncataloged,unlocked,locked,cataloged,total}, items{total,locked,modifying,exportable,exportable_pages}}`——total、review、catalog 是页数，items 是件数（2026-10-19 加：未删除的件，按来源文件夹归组，子树算来源文件夹在子树里的、direct 算来源文件夹就是它自己的；exportable 同预检勾"只导出审核通过的"时的就绪）；`children[]` 是 `{folder_id, folder_name, folder_count, archive, counts}`（folder_count、archive 和文件目录 children 里文件夹的相同，2026-10-19 加）。原来的 `matrix`、按文件数的 `exportable` 2026-10-19 去掉 |
 | POST projects/{pid}/export-tasks:precheck · export-tasks（POST/GET）· export-tasks/{id} · /files · /changes · /download · /cancel | export | 导出 |
 
 **错误码**：400 `invalid_license`、`license_mismatch`、`license_file_expired`（M7-1 导入）；400 `invalid_input`（参数、名称、格式、著录 `details.fields`、批量跨项目、空列表或 > 500）、`invalid_client_version`、`checksum_mismatch`、`invalid_image`、`invalid_cover`；401 `unauthorized`、`invalid_credentials`；403 `forbidden`、`admin_required`、`user_disabled`、`not_assignee`、`license_missing`、`license_expired`、`license_seats_full`（M7-1）；404 `not_found`（批量 details.ids：文件目录批量是 folder_files id，审核和挂接是 file_id，批量定稿是条目 id，导出是节点或条目 id）；405 `method_not_allowed`；409 `conflict`（唯一冲突、版本过期、件号占用、显式改件号撞号、审的不是当前快照）、`invalid_state`（状态不允许、定稿前置、导出不就绪）、`tree_cycle`、`tree_full`、`root_folder_locked`、`file_cataloged`、`folder_archived`（文件夹已封存，2026-10-19）、`duplicate_content`、`storage_changed`、`storage_unavailable`、`storage_not_active`、`storage_is_default`、`storage_in_use`、`project_not_empty`、`item_locked`、`category_not_empty`、`last_admin`、`cannot_disable_self`、`builtin_role`、`admin_menus_locked`；413 `payload_too_large`；415 `unsupported_media_type`；426 `client_upgrade_required`；500 `internal`、`secret_unreadable`；503 `busy`。
@@ -428,6 +435,7 @@
 - **2026-10-14**：先做完图像处理以外的流程，M6 和二期不排期；确认 M2；M3 全部按建议（Q1 著录项、Q2 档号件号、Q3 一文件一条目 / ≤ 2000 页 / 原生拖放 / 不做页号和案卷、Q4 待归类池、Q5 定稿解锁批量定稿、Q6 看板、Q7 互不阻塞定义和新事件错误码、Q8 删除移动、Q9 不改表、Q10 归类信息）。
 - **2026-10-15**：确认 M3；M4 Q1（用户改选）放不进 PDF 的由 server 无损转换；Q2 导出物格式；Q3 xlsx + CSV；Q4 建任务时冻结；Q5 存 S3 直连下载、保留 7 天；Q6 交付后变更和补交；Q7 预检、并发 2、可取消、重试 3 次；QA 迁移 0003；QB 项目保存版本检查；接受"保存著录设置写入默认值"。
 - **2026-10-18、19（归类改成整个文件夹归档，Mockup `doclite-project/doclite-catalog-redesign.html` v3.1）**：一个文件只能归类一次（照旧）；只能整个文件夹归档，选盒子时每个直接子文件夹一件，题名默认文件夹名，含下级文件夹的跳过并提示；数据单向，文件目录自己维护，归档后文件夹封存（盒子本身不封存）；可以重扫；要改走"解除封存（原因选填）→ 修改 → 重新归档（给对比）"，件号档号著录保留、绑定不断，修改中不能锁定和导出，到处提示；撤销归档 = 删除这一件；条目状态去掉"已完成"，只有未锁定 / 已锁定，必填在锁定时查；归类全部操作（含解锁）只要 catalog + 能进项目，不另设负责人。为此同意改表（迁移 0004）和接口。取代 2026-10-14 的 Q3（按页挂接、原生拖放排序）、Q4（待归类池）、Q5 里的"已完成"和"解锁要 review_assign"。
+- **2026-10-19（看板简化，Mockup `doclite-project/doclite-dashboard-redesign.html` v2）**：去掉矩阵、多色进度条和"待办"，只要简单的统计——一行五个数（已上传 → 审核通过 → 已归档 → 已锁定 → 可导出）+ 按文件夹的表（页数、审核通过、已归档、已锁定）；审核按页，归档、锁定、导出按件（页数做补充）；同意为此给 catalog-summary 加字段（不改表）。见 5.10。
 
 ## 10. 总控代定的规则
 
@@ -450,7 +458,7 @@
 | 根下直接放的条目单列 | 否则看不见、移不走 |
 | 客户端关原生文件拖放 | Windows 上页面拖拽会失效 |
 | catalog.changed item_ids 三种含义 | 分清"无条目变"和"太多" |
-| 看板可导出按审核状态拆，主 KPI"通过且可导出" | 和导出默认勾选一致 |
+| ~~看板可导出按审核状态拆，主 KPI"通过且可导出"~~（2026-10-19 看板简化，可导出按件、同预检就绪） | 和导出默认勾选一致 |
 | 执行中取消：任务立即 canceled，job 清理完再改 | server 被杀时不停在 running |
 | 冻结的条目信息不改、job 永久保留、重试复用 | 交付后变更要和它比 |
 | 补交用 resubmit_of 不受 5000 限制 | 重新生成档号后可能上万件 |

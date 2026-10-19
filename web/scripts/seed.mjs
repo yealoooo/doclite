@@ -328,5 +328,6 @@ for (const [i, f] of subs1.slice(0, 3).entries()) {
 const sum = (await admin('GET', `/api/projects/${pid}/catalog-summary`)).counts
 console.log(
   `DEMO-A：${sum.total} 页（通过 ${sum.review.approved}、驳回 ${sum.review.rejected}、待审 ${sum.review.pending}、` +
-    `待分配 ${sum.review.unassigned}；已归档 ${sum.catalog.cataloged}、已锁定 ${sum.catalog.locked}）`,
+    `待分配 ${sum.review.unassigned}；已归档 ${sum.items.total} 件 ${sum.catalog.cataloged} 页、已锁定 ${sum.items.locked} 件、` +
+    `可导出 ${sum.items.exportable} 件 ${sum.items.exportable_pages} 页）`,
 )

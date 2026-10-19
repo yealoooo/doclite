@@ -1,8 +1,9 @@
 <script setup lang="ts">
-// 项目看板 /dashboard（M3-7，参考 plan.html 的 p-dash Mockup；菜单码 dashboard；用户决定 Q6）。
+// 项目看板 /dashboard（M3-7；菜单码 dashboard；用户决定 Q6）。2026-10-19 用户决定简化（Mockup v2）：去掉 KPI 卡、
+// "审核 × 归类"矩阵和多色进度条，只要简单的统计——一行五个数 + 按文件夹的表；审核按页，归档、锁定、导出按件。
 //
-// - 数据：`GET /api/projects/{pid}/catalog-summary?folder_id=`（M3-4，每次实时聚合）。根文件夹（不传 folder_id）是
-//   整个项目：KPI（KpiTiles）和"审核状态 × 归类状态"矩阵（StatusMatrix）；它的 children 是文件夹进度表的第一层，
+// - 数据：`GET /api/projects/{pid}/catalog-summary?folder_id=`（每次实时聚合）。根文件夹（不传 folder_id）是整个项目：
+//   总数（FlowSteps：已上传 → 审核通过 → 已归档 → 已锁定 → 可导出）；它的 children 是按文件夹的表的第一层，
 //   点箭头逐层展开（FolderProgressTable，展开时取那个文件夹的 catalog-summary）。
 // - 计数用 `useFolderSummaries`（和 /review-assign 的 useReviewCounts 同一套）：每个加载过的文件夹记下 parent 关系，
 //   `files.changed` 只带文件直接所在的文件夹，沿 parent 链刷新祖先里已加载的（不认识的文件夹用
@@ -14,7 +15,7 @@
 //   再补一轮，不叠加（审查第 1 轮）。展开的文件夹被删掉（404）、移到收起的地方后自动收起。
 // - 人员统计、"今天 / 本周"不做（Q6）。
 // 截图脚本用的属性：data-testid=dashboard-page（data-stream、data-state：idle、loading、ready、error，
-// data-updates：根文件夹的结果更新了几次）；kpi、matrix-cell、folder-row 见各组件。
+// data-updates：根文件夹的结果更新了几次）；flow-step、folder-row 见各组件。
 import { LoaderCircleIcon, RefreshCwIcon } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
@@ -25,23 +26,11 @@ import type { CatalogCounts, CatalogSummary, ProjectEvent } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { useFolderSummaries } from '@/composables/useFolderSummaries'
 import { useProjectStream } from '@/composables/useProjectStream'
-import { REVIEW_STATUS } from '@/lib/files'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 
-import {
-  CATALOG_COLOR,
-  CATALOG_COLUMN_LABEL,
-  catalogSegments,
-  num,
-  percentText,
-  REVIEW_COLOR,
-  reviewSegments,
-} from './dashboard'
+import FlowSteps from './FlowSteps.vue'
 import FolderProgressTable, { type ProgressRow } from './FolderProgressTable.vue'
-import KpiTiles from './KpiTiles.vue'
-import StackedBar from './StackedBar.vue'
-import StatusMatrix from './StatusMatrix.vue'
 
 const project = useProjectStore()
 const session = useSessionStore()
@@ -176,9 +165,11 @@ const rows = computed<ProgressRow[]>(() => {
         name: c.folder_name,
         depth,
         counts: sums.get(c.folder_id) ?? c.counts,
+        archive: c.archive,
+        // 展开过的以它自己的结果为准（parent 的 folder_count 可能还没刷新）。
+        hasChildren: own ? own.children.length > 0 : c.folder_count > 0,
         expanded: isOpen,
         loading: isOpen && !own,
-        leaf: !!own && own.children.length === 0,
       })
       if (isOpen && own) walk(c.folder_id, depth + 1)
     }
@@ -190,9 +181,10 @@ const rows = computed<ProgressRow[]>(() => {
         name: s.folder_name,
         depth,
         counts: s.direct_counts,
+        archive: null,
+        hasChildren: false,
         expanded: false,
         loading: false,
-        leaf: true,
       })
     }
   }
@@ -315,7 +307,7 @@ function timeText(d: Date | null): string {
     <header class="flex h-14 shrink-0 items-center gap-3 border-b px-6">
       <h1 class="shrink-0 text-base font-semibold tracking-tight text-foreground">项目看板</h1>
       <span v-if="project.current" class="min-w-0 truncate border-l pl-3 text-sm text-muted-foreground">
-        {{ project.current.project_name }} · 整个项目
+        {{ project.current.project_name }}
       </span>
       <div class="flex-1" />
       <span v-if="refreshError && rootState === 'ready'" class="truncate text-xs text-destructive" :title="refreshError">
@@ -361,78 +353,26 @@ function timeText(d: Date | null): string {
       </div>
     </div>
 
-    <section v-else class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-6 py-5">
-      <KpiTiles :counts="counts" :require-locked="requireLocked" />
-
-      <div class="grid grid-cols-[minmax(0,600px)_minmax(0,1fr)] items-start gap-5">
-        <!-- 状态矩阵 -->
-        <div class="rounded-lg p-4 shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
-          <div class="mb-3 flex items-baseline gap-2">
-            <h2 class="text-sm font-semibold text-foreground">状态矩阵：审核 × 归类</h2>
-            <span class="text-xs text-muted-foreground">文件数，整个项目</span>
-          </div>
-          <StatusMatrix :counts="counts" :require-locked="requireLocked" />
-          <p class="mt-3 text-[11.5px] leading-relaxed text-muted-foreground">
-            审核和归类互不限制，可以先归类再审。可导出按项目设置算：{{
-              requireLocked ? '只算已锁定的件里的文件' : '已归档的文件都算'
-            }}；绿框是"通过且可导出"，导出时默认只导出审核通过的。
-          </p>
+    <section v-else class="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-6 py-5">
+      <div>
+        <div class="mb-2.5 flex items-baseline gap-2.5">
+          <h2 class="text-sm font-semibold text-foreground">总数</h2>
+          <span class="text-xs text-muted-foreground">整个项目，按流程从左到右</span>
         </div>
-
-        <!-- 总体进度 -->
-        <div class="flex flex-col gap-5 rounded-lg p-4 shadow-[0_0_0_1px_rgba(0,0,0,0.08)]" data-testid="overall-progress">
-          <div>
-            <div class="mb-2 flex items-baseline gap-2">
-              <h2 class="text-sm font-semibold text-foreground">审核进度</h2>
-              <span class="text-xs text-muted-foreground">通过 {{ percentText(counts.review.approved, counts.total) }}</span>
-            </div>
-            <StackedBar :segments="reviewSegments(counts)" :total="counts.total" :height="12" />
-            <ul class="mt-2.5 grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
-              <li v-for="s in reviewSegments(counts)" :key="s.key" class="flex items-center gap-1.5">
-                <span class="size-2 rounded-[2px]" :class="s.color" />
-                <span class="text-muted-foreground">{{ s.label }}</span>
-                <span class="ml-auto tabular-nums text-foreground">{{ num(s.value) }}</span>
-                <span class="w-9 text-right tabular-nums text-muted-foreground">{{ percentText(s.value, counts.total) }}</span>
-              </li>
-            </ul>
-          </div>
-          <div>
-            <div class="mb-2 flex items-baseline gap-2">
-              <h2 class="text-sm font-semibold text-foreground">归类进度</h2>
-              <span class="text-xs text-muted-foreground">已归档 {{ percentText(counts.catalog.cataloged, counts.total) }}</span>
-            </div>
-            <StackedBar :segments="catalogSegments(counts)" :total="counts.total" :height="12" />
-            <ul class="mt-2.5 grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
-              <li v-for="k in (['locked', 'unlocked', 'uncataloged'] as const)" :key="k" class="flex items-center gap-1.5">
-                <span class="size-2 rounded-[2px]" :class="k === 'uncataloged' ? 'bg-muted shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]' : CATALOG_COLOR[k]" />
-                <span class="text-muted-foreground">{{ CATALOG_COLUMN_LABEL[k] }}</span>
-                <span class="ml-auto tabular-nums text-foreground">{{ num(counts.catalog[k]) }}</span>
-                <span class="w-9 text-right tabular-nums text-muted-foreground">{{ percentText(counts.catalog[k], counts.total) }}</span>
-              </li>
-            </ul>
-          </div>
-        </div>
+        <FlowSteps :counts="counts" :require-locked="requireLocked" />
+        <p class="mt-2 text-xs text-muted-foreground">
+          审核按页数，归档、锁定、导出按件数（一个文件夹归档成一件）。审核和归档可以同时进行，不分先后。
+        </p>
       </div>
 
-      <!-- 文件夹进度 -->
-      <div class="rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.08)]">
-        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3">
-          <h2 class="text-sm font-semibold text-foreground">文件夹进度</h2>
-          <span class="text-xs text-muted-foreground">点箭头逐层展开</span>
+      <div>
+        <div class="mb-2.5 flex items-baseline gap-2.5">
+          <h2 class="text-sm font-semibold text-foreground">按文件夹</h2>
+          <span class="text-xs text-muted-foreground">点箭头展开下一层</span>
           <div class="flex-1" />
-          <div class="flex items-center gap-3 text-[11px] text-muted-foreground">
-            <span>审核</span>
-            <span v-for="s in (['approved', 'pending', 'rejected', 'unassigned'] as const)" :key="s" class="flex items-center gap-1">
-              <span class="size-2 rounded-[2px]" :class="REVIEW_COLOR[s]" />{{ REVIEW_STATUS[s].label }}
-            </span>
-            <span class="ml-2">归类</span>
-            <span v-for="k in (['locked', 'unlocked'] as const)" :key="k" class="flex items-center gap-1">
-              <span class="size-2 rounded-[2px]" :class="CATALOG_COLOR[k]" />{{ CATALOG_COLUMN_LABEL[k] }}
-            </span>
-          </div>
           <Button v-if="expanded.size" variant="ghost" size="xs" data-testid="collapse-all" @click="collapseAll">全部收起</Button>
         </div>
-        <FolderProgressTable class="border-t" :rows="rows" :require-locked="requireLocked" @toggle="toggle" />
+        <FolderProgressTable class="overflow-hidden rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.08)]" :rows="rows" @toggle="toggle" />
       </div>
     </section>
   </div>
