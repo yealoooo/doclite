@@ -39,6 +39,7 @@ import (
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/memo"
 	"doclite/server/internal/project"
 	"doclite/server/internal/storage"
 )
@@ -98,12 +99,15 @@ type Service struct {
 	files   *file.Service
 	// rescans：同一个文件的重扫串行（进程内，硬性规则 16）。
 	rescans keyedMutex
+	// summaries 是按文件夹的状态计数的短时缓存（queries.go 的 Summary）。
+	summaries *memo.Cache[summaryKey, *Summary]
 }
 
 // NewService 建 Service。
 func NewService(pool *pgxpool.Pool, bus *events.Bus, authSvc *auth.Service, storageSvc *storage.Service,
 	folderSvc *folder.Service, fileSvc *file.Service) *Service {
-	return &Service{pool: pool, events: bus, auth: authSvc, storage: storageSvc, folders: folderSvc, files: fileSvc}
+	return &Service{pool: pool, events: bus, auth: authSvc, storage: storageSvc, folders: folderSvc, files: fileSvc,
+		summaries: memo.New[summaryKey, *Summary](summaryTTL)}
 }
 
 // readOnly 在一个只读的可重复读事务里执行 fn：一个读接口的计数、列表、路径看到同一个快照。

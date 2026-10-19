@@ -272,7 +272,7 @@ func TestMigrations(t *testing.T) {
 	env := NewEnv(t)
 	ctx := context.Background()
 	versions := QueryValue[[]string](env, "SELECT array_agg(version ORDER BY version) FROM schema_migrations")
-	if strings.Join(versions, ",") != "0001_init,0002_review_indexes,0003_item_no_index,0004_folder_archive" {
+	if strings.Join(versions, ",") != "0001_init,0002_review_indexes,0003_item_no_index,0004_folder_archive,0005_perf_indexes" {
 		t.Fatalf("schema_migrations：%v", versions)
 	}
 	ran, err := db.Migrate(ctx, env.Pool, migrations.FS, nil)

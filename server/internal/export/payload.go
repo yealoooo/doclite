@@ -24,7 +24,8 @@ import (
 //	             "row_version", "page_count"}]
 //	}
 //
-// items 按导出顺序。列表、详情只取 `payload - 'items'`。读 payload 先查 payload_version，不认识是内部错误。
+// items 按导出顺序。列表、详情只取 `payload - 'items'`（每个 job 读一次后缓存在进程里，见 store.go 的 fillHeaders）。
+// 读 payload 先查 payload_version，不认识是内部错误。
 
 // PayloadVersion 是 payload 的格式版本。
 const PayloadVersion = 1

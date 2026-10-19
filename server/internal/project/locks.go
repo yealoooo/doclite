@@ -3,7 +3,6 @@ package project
 import (
 	"context"
 	"hash/fnv"
-	"slices"
 
 	"github.com/google/uuid"
 
@@ -82,18 +81,12 @@ func LockContent(ctx context.Context, tx db.Querier, projectID uuid.UUID, sha []
 	return err
 }
 
-// LockContents 拿同一个 sha256 在几个项目里的内容锁：按锁的键升序、去重（两个事务各拿几把时不会互相等成死锁）。
-// 存储迁移用：一个对象的快照一般只在一个项目里。
+// LockContents 拿同一个 sha256 在几个项目里的内容锁：按锁的键升序、去重，一条语句拿完（两个事务各拿几把时不会互相等成
+// 死锁）。存储迁移用：一个对象的快照一般只在一个项目里。
 func LockContents(ctx context.Context, tx db.Querier, projectIDs []uuid.UUID, sha []byte) error {
 	keys := make([]int32, 0, len(projectIDs))
 	for _, p := range projectIDs {
 		keys = append(keys, contentKey(p, sha))
 	}
-	slices.Sort(keys)
-	for _, k := range slices.Compact(keys) {
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1::int4, $2::int4)`, lockClassContent, k); err != nil {
-			return err
-		}
-	}
-	return nil
+	return db.AdvisoryXactLocks(ctx, tx, lockClassContent, keys)
 }

@@ -262,6 +262,16 @@ WHERE f.project_id = $1 AND f.path_code >= $2 COLLATE "C" AND f.path_code < $3 C
 		projectID, lo, hi)
 }
 
+// subtreeLiveFileCount 是子树里未删除的文件数，最多数到 limit。
+func subtreeLiveFileCount(ctx context.Context, q db.Querier, projectID uuid.UUID, prefix string, limit int) (int, error) {
+	lo, hi := subtreeRange(prefix)
+	var n int
+	err := q.QueryRow(ctx, `SELECT count(*) FROM (SELECT 1 FROM folder_files ff JOIN folders f ON f.id = ff.folder_id
+WHERE f.project_id = $1 AND f.path_code >= $2 COLLATE "C" AND f.path_code < $3 COLLATE "C" AND ff.deleted_at IS NULL
+LIMIT $4) x`, projectID, lo, hi, limit).Scan(&n)
+	return n, err
+}
+
 // subtreeLiveFolderIDs 是子树里未删除的文件夹。
 func subtreeLiveFolderIDs(ctx context.Context, q db.Querier, projectID uuid.UUID, prefix string) ([]uuid.UUID, error) {
 	lo, hi := subtreeRange(prefix)

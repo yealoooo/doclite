@@ -50,8 +50,21 @@ type Log struct {
 	Detail any
 }
 
-// WriteLogs 在调用方的事务里写文件日志（一条 INSERT，按给的顺序，id 递增）。
+// logBatch 是 WriteLogs 一条 INSERT 最多写的行数（导出完成一次写全部页，几万行时分几条语句，参数不至于太大）。
+const logBatch = 10000
+
+// WriteLogs 在调用方的事务里写文件日志（每 logBatch 条一条 INSERT，按给的顺序，id 递增）。
 func WriteLogs(ctx context.Context, q db.Querier, logs ...Log) error {
+	for len(logs) > logBatch {
+		if err := writeLogs(ctx, q, logs[:logBatch]); err != nil {
+			return err
+		}
+		logs = logs[logBatch:]
+	}
+	return writeLogs(ctx, q, logs)
+}
+
+func writeLogs(ctx context.Context, q db.Querier, logs []Log) error {
 	if len(logs) == 0 {
 		return nil
 	}

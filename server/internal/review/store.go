@@ -308,25 +308,38 @@ WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL`, *folderID, projectID)
 	return &f, nil
 }
 
-// subtreeUnassigned 是子树里未删除的待分配文件（不加锁，按文件夹分配的候选）。最多取 limit 个。
-func subtreeUnassigned(ctx context.Context, q db.Querier, projectID uuid.UUID, f *scopeFolder, limit int) ([]uuid.UUID, error) {
+// subtreeUnassigned 是子树里未删除的待分配文件（不加锁，按文件夹分配的候选，最多取 limit 个），和不是待分配的文件数
+// （按文件夹分配的 skipped，只是提示：在锁住 files 行之前数，一条语句里出，不在锁里再数一遍整棵子树）。
+func subtreeUnassigned(ctx context.Context, q db.Querier, projectID uuid.UUID, f *scopeFolder, limit int) (ids []uuid.UUID,
+	notUnassigned int, err error) {
 	lo, hi := f.subtreeRange()
-	return collectIDs(ctx, q, `SELECT ff.file_id FROM folders f
+	rows, err := q.Query(ctx, `SELECT NULL::uuid, count(*) FROM folders f
+JOIN folder_files ff ON ff.folder_id = f.id AND ff.project_id = $1 AND ff.deleted_at IS NULL
+WHERE f.project_id = $1 AND f.path_code >= $2 AND f.path_code < $3 AND f.deleted_at IS NULL
+  AND ff.review_status <> 'unassigned'
+UNION ALL
+(SELECT ff.file_id, 0 FROM folders f
 JOIN folder_files ff ON ff.folder_id = f.id AND ff.project_id = $1 AND ff.deleted_at IS NULL
 WHERE f.project_id = $1 AND f.path_code >= $2 AND f.path_code < $3 AND f.deleted_at IS NULL
   AND ff.review_status = 'unassigned'
-LIMIT $4`, projectID, lo, hi, limit)
-}
-
-// subtreeNotUnassigned 是子树里未删除、不是待分配的文件数（按文件夹分配的 skipped）。
-func subtreeNotUnassigned(ctx context.Context, q db.Querier, projectID uuid.UUID, f *scopeFolder) (int, error) {
-	lo, hi := f.subtreeRange()
-	var n int
-	err := q.QueryRow(ctx, `SELECT count(*) FROM folders f
-JOIN folder_files ff ON ff.folder_id = f.id AND ff.project_id = $1 AND ff.deleted_at IS NULL
-WHERE f.project_id = $1 AND f.path_code >= $2 AND f.path_code < $3 AND f.deleted_at IS NULL
-  AND ff.review_status <> 'unassigned'`, projectID, lo, hi).Scan(&n)
-	return n, err
+LIMIT $4)`, projectID, lo, hi, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id *uuid.UUID
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, 0, err
+		}
+		if id == nil {
+			notUnassigned = n
+		} else {
+			ids = append(ids, *id)
+		}
+	}
+	return ids, notUnassigned, rows.Err()
 }
 
 // subtreeOpenOf 是某人在子树里未删除文件上的 open 分配的 file_id（不加锁，按子树改派的候选）。最多取 limit 个。

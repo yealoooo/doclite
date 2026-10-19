@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -17,6 +18,10 @@ import (
 //     locked。只含未删除的文件（所在文件夹也未删除），一个文件算在它所在的文件夹里。
 //   - 按件（items）：未删除的条目，算在它的来源文件夹（archive_items.source_folder_id，未删除的文件夹）里：子树的计数
 //     算来源文件夹在子树里的件，direct_counts 算来源文件夹就是这个文件夹本身的件。"可导出"见 [summaryItemBuckets]。
+//
+// 每次实时聚合（整个项目时是全项目的文件和挂接），实时事件一来几个客户端会同时重新取：同一个（项目、文件夹、
+// require_locked_item、项目的数据版本 events.Bus.Version）在 summaryTTL 内只算一次，同时来的合并成一次
+// （internal/platform/memo）。发了事件就换键，所以看不到事件之前的旧结果；没发事件的变化（改显示名）最多晚 summaryTTL。
 //
 // 界面取数：已上传 total；审核通过 review.approved（小字待分配、待审、驳回）；已归档 items.total 件 · catalog.cataloged
 // 页；已锁定 items.locked / items.total 件；可导出 items.exportable 件 · items.exportable_pages 页。
@@ -127,14 +132,34 @@ type Summary struct {
 
 var errFolderNotFound = httpx.NotFound("文件夹")
 
-// Summary 是看板：folderID 为 nil 时是根文件夹（整个项目）；文件夹不在这个项目里或已删除 404。
+// summaryTTL 是看板结果的缓存时间。
+const summaryTTL = 5 * time.Second
+
+// summaryKey 是看板缓存的键：根文件夹的 folder 是 uuid.Nil。
+type summaryKey struct {
+	project, folder uuid.UUID
+	requireLocked   bool
+	version         uint64
+}
+
+// Summary 是看板：folderID 为 nil 时是根文件夹（整个项目）；文件夹不在这个项目里或已删除 404。返回的结果是共用的，不能改。
 func (s *Service) Summary(ctx context.Context, projectID uuid.UUID, folderID *uuid.UUID) (*Summary, error) {
+	version := s.events.Version(projectID) // 先取版本再读库
 	st, err := loadSettings(ctx, s.pool, projectID)
 	if err != nil {
 		return nil, err
 	}
+	key := summaryKey{project: projectID, requireLocked: st.requireLockedItem, version: version}
+	if folderID != nil {
+		key.folder = *folderID
+	}
+	return s.summaries.Get(ctx, key, func() (*Summary, error) { return s.summary(ctx, projectID, folderID, st) })
+}
+
+// summary 是不经缓存的看板。
+func (s *Service) summary(ctx context.Context, projectID uuid.UUID, folderID *uuid.UUID, st *settings) (*Summary, error) {
 	var out *Summary
-	err = readSnapshot(ctx, s.pool, func(tx pgx.Tx) error {
+	err := readSnapshot(ctx, s.pool, func(tx pgx.Tx) error {
 		f, err := summaryFolder(ctx, tx, projectID, folderID)
 		if err != nil {
 			return err

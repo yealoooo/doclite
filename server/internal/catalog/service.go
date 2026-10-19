@@ -30,6 +30,7 @@ import (
 	"doclite/server/internal/platform/archiveno"
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/memo"
 )
 
 var (
@@ -41,11 +42,13 @@ var (
 type Service struct {
 	pool   *pgxpool.Pool
 	events *events.Bus
+	// summaries 是看板的短时缓存（summary.go）。
+	summaries *memo.Cache[summaryKey, *Summary]
 }
 
 // NewService 建 Service。
 func NewService(pool *pgxpool.Pool, bus *events.Bus) *Service {
-	return &Service{pool: pool, events: bus}
+	return &Service{pool: pool, events: bus, summaries: memo.New[summaryKey, *Summary](summaryTTL)}
 }
 
 // ProjectOfCategory 是未删除节点所在的项目；节点不存在或已删除 404（项目已删除由 auth.InProject 按 404 处理）。

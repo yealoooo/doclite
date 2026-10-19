@@ -128,6 +128,16 @@ func TestFolderTree(t *testing.T) {
 	mkdir(scan, a.ID, "扫描员建的")
 	scan.Patch("/api/folders/"+a.ID.String(), map[string]any{"remark": "x"}).ExpectError(403, "forbidden")
 
+	// 子树里的文件超过 1 万个不能一次删 400（直接造数据：子文件夹里插 10001 个文件），什么都不改。
+	big := mkdir(admin, root, "大")
+	bigSub := mkdir(admin, big.ID, "里面")
+	env.Exec(`WITH f AS (SELECT gen_random_uuid() AS id, g FROM generate_series(1, 10001) g),
+ins AS (INSERT INTO files (id) SELECT id FROM f)
+INSERT INTO folder_files (id, project_id, folder_id, file_id, file_name, sort_no, created_by)
+SELECT gen_random_uuid(), $1, $2, f.id, 'x' || f.g || '.jpg', f.g, $3 FROM f`, p.ID, bigSub.ID, env.UserID("admin"))
+	admin.Delete("/api/folders/"+big.ID.String()).ExpectError(400, "invalid_input")
+	admin.Get("/api/folders/" + bigSub.ID.String()).Expect(200)
+
 	// 删除空文件夹：子树一起删（软删除），之后 404，编码不回收。
 	admin.Delete("/api/folders/" + d.ID.String()).Expect(204)
 	admin.Get("/api/folders/"+c.ID.String()).ExpectError(404, "not_found")

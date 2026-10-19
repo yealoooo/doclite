@@ -20,11 +20,13 @@ type Bus struct {
 	subs   map[uuid.UUID]map[*Subscription]struct{}
 	done   chan struct{}
 	closed bool
+	// versions 是每个项目发过的事件数（[Bus.Version]，不算 export.changed）。
+	versions map[uuid.UUID]uint64
 }
 
 // NewBus 建事件总线。
 func NewBus() *Bus {
-	return &Bus{subs: map[uuid.UUID]map[*Subscription]struct{}{}, done: make(chan struct{})}
+	return &Bus{subs: map[uuid.UUID]map[*Subscription]struct{}{}, done: make(chan struct{}), versions: map[uuid.UUID]uint64{}}
 }
 
 // Subscription 是一个订阅（一条 SSE 连接）：从 C 读本项目的事件，用完调 Close。
@@ -93,10 +95,22 @@ func (b *Bus) Publish(evs ...Event) {
 		return
 	}
 	for _, ev := range evs {
+		if ev.Type != TypeExportChanged {
+			b.versions[ev.ProjectID]++
+		}
 		for s := range b.subs[ev.ProjectID] {
 			s.deliver(ev)
 		}
 	}
+}
+
+// Version 是项目的数据版本：这个项目每发一条事件加一（不论有没有订阅者；export.changed 不算：导出执行中每秒都发，
+// 只是导出任务自己的进度）。聚合查询的短时缓存（internal/platform/memo）把它放进键里：发了事件（文件目录、审核、归类
+// 变了）之后就不再用之前算的结果。要在查询之前取。
+func (b *Bus) Version(projectID uuid.UUID) uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.versions[projectID]
 }
 
 // deliver 在 bus.mu 下调用（发送方只有持锁的 Publish，所以清空之后一定放得下 resync）。

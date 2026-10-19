@@ -522,9 +522,30 @@ func equalPtr(a, b *string) bool {
 	return *a == *b
 }
 
-// Delete 软删除文件夹和整棵子树（项目 projectID 的授权已经查过）。文件夹本身封存 409 folder_archived；子树里有
-// 已归类的文件（修改中的条目的页除外）409 file_cataloged，什么都不改；否则子树里的文件夹和文件都打上 deleted_at，进行中的分配改成 cancelled，每个文件记一条 delete。
+// MaxDeleteFiles 是删除文件夹时子树里最多的文件数（未删除的）：删子树要拿文件树排他锁，整个项目的上传、审核都要等它，
+// 所以一次删的不能太多，多了让用户先分批删子文件夹（和审核按文件夹分配的上限相同）。
+const MaxDeleteFiles = 10000
+
+func tooManyToDelete() error {
+	return httpx.Invalid("文件夹里（含子文件夹）的文件超过 %d 个，不能一次删除，请先分批删除它的子文件夹", MaxDeleteFiles)
+}
+
+// Delete 软删除文件夹和整棵子树（项目 projectID 的授权已经查过）。子树里的文件超过 MaxDeleteFiles 个 400（拿排他锁之前
+// 先数一次，锁住之后再看一次）；文件夹本身封存 409 folder_archived；子树里有已归类的文件（修改中的条目的页除外）
+// 409 file_cataloged，什么都不改；否则子树里的文件夹和文件都打上 deleted_at，进行中的分配改成 cancelled，每个文件记一条 delete。
 func (s *Service) Delete(ctx context.Context, userID, projectID, id uuid.UUID) error {
+	// 不加锁先数：太多的不用去排排他锁的队。
+	if f, err := getFolder(ctx, s.pool, id); err != nil {
+		return err
+	} else if f != nil && !f.Deleted && f.ProjectID == projectID && f.ParentID != nil {
+		n, err := subtreeLiveFileCount(ctx, s.pool, projectID, f.PathCode, MaxDeleteFiles+1)
+		if err != nil {
+			return err
+		}
+		if n > MaxDeleteFiles {
+			return tooManyToDelete()
+		}
+	}
 	return s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
 		if err := project.LockFileTree(ctx, tx, projectID, true); err != nil {
 			return err
@@ -547,6 +568,9 @@ func (s *Service) Delete(ctx context.Context, userID, projectID, id uuid.UUID) e
 		fileIDs, err := subtreeLiveFileIDs(ctx, tx, projectID, f.PathCode)
 		if err != nil {
 			return err
+		}
+		if len(fileIDs) > MaxDeleteFiles {
+			return tooManyToDelete()
 		}
 		if err := file.LockFiles(ctx, tx, fileIDs); err != nil {
 			return err

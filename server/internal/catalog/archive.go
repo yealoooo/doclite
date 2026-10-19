@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -511,18 +510,11 @@ func (s *Service) createArchived(ctx context.Context, tx pgx.Tx, ev *events.Pend
 	return nil
 }
 
-// lockArchiveNos 按键排序拿这些档号的咨询锁（一次拿多个时顺序一致，不会和别的归档互相等成环）。
+// lockArchiveNos 按键排序拿这些档号的咨询锁（一次拿多个时顺序一致，不会和别的归档互相等成环；一条语句拿完）。
 func lockArchiveNos(ctx context.Context, tx db.Querier, projectID uuid.UUID, nos []string) error {
 	keys := make([]int32, 0, len(nos))
 	for _, no := range nos {
 		keys = append(keys, archiveNoKey(projectID, no))
 	}
-	slices.Sort(keys)
-	keys = slices.Compact(keys)
-	for _, k := range keys {
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1::int4, $2::int4)`, lockClassArchiveNo, k); err != nil {
-			return err
-		}
-	}
-	return nil
+	return db.AdvisoryXactLocks(ctx, tx, lockClassArchiveNo, keys)
 }

@@ -19,7 +19,9 @@ import (
 //
 // 索引：我的审核走 0002 的 ix_file_reviews_reviewer_project (reviewer_id, project_id) WHERE status <> 'cancelled'，
 // 当前版本按文件逐个取（file_snapshots 的 (file_id, version_no) 唯一索引）；状态计数、待重扫带 ff.project_id，能用
-// ix_folder_files_review (project_id, review_status)；文件夹子树用 folders 的 (project_id, path_code) 唯一索引。
+// ix_folder_files_review (project_id, review_status)；文件夹子树用 folders 的 (project_id, path_code) 唯一索引；
+// 一个项目 open 的分配（可以分配的人、改派列表）走 0005 的 ix_file_reviews_project_open (project_id, reviewer_id)
+// WHERE status = 'open'。
 
 const unnamed = pgx.QueryExecModeDescribeExec
 
@@ -48,17 +50,16 @@ type myRow struct {
 }
 
 // myReviews 一条 SQL 出按文件夹的计数（不受 state、low_dpi 影响）和这一页（limit 行，调用方多要一行判断有没有下一页）。
-// 每个文件取最近一次分给我、没有取消的那一行（反连接，按 id 不按时间）；is_current：这个文件上没有 id 更大的分配。
+// 每个文件取最近一次分给我、没有取消的那一行（DISTINCT ON，按 id 不按时间：只扫一遍我在这个项目里的行再排序，
+// 不用每行再按 file_id 回查一次）；is_current：这个文件上没有 id 更大的分配。
 func myReviews(ctx context.Context, q db.Querier, userID, projectID uuid.UUID, lo, hi, state string, lowDPI bool,
 	after *keyset, limit int) ([]myRow, error) {
 	cPath, cSort, cFile := after.args()
 	rows, err := q.Query(ctx, `WITH mine AS (
-  SELECT r.id, r.file_id, r.status, r.result
+  SELECT DISTINCT ON (r.file_id) r.id, r.file_id, r.status, r.result
   FROM file_reviews r
   WHERE r.reviewer_id = $1 AND r.project_id = $2 AND r.status <> 'cancelled'
-    AND NOT EXISTS (SELECT 1 FROM file_reviews n
-                    WHERE n.file_id = r.file_id AND n.reviewer_id = $1 AND n.project_id = $2
-                      AND n.status <> 'cancelled' AND n.id > r.id)),
+  ORDER BY r.file_id, r.id DESC),
 base AS MATERIALIZED (
   SELECT m.id, m.file_id, m.status, m.result, ff.folder_id, ff.sort_no, f.path_code, s.version_no, s.dpi
   FROM mine m

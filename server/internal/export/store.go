@@ -3,6 +3,7 @@ package export
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -269,7 +270,7 @@ type taskInsert struct {
 // ---------------------------------------------------------------------------
 // 任务的读
 
-// taskRow 是任务和它的 job（payload 只取 items 以外的部分）。
+// taskRow 是任务和它的 job（payload 只取 items 以外的部分，见 [fillHeaders]）。
 type taskRow struct {
 	ID               uuid.UUID
 	ProjectID        uuid.UUID
@@ -302,27 +303,88 @@ const taskSelect = `SELECT t.id, t.project_id, t.scope_type, t.scope_ids, t.expo
   t.storage_profile_id, t.output_key, t.output_size, t.expires_at, (t.expires_at IS NOT NULL AND t.expires_at <= now()),
   t.created_by, u.display_name, t.created_at, t.finished_at,
   t.job_id, j.status, COALESCE(j.progress_done, 0), COALESCE(j.progress_total, 0), COALESCE(j.attempts, 0),
-  COALESCE(j.max_attempts, 0), j.error_message, j.started_at, j.payload - 'items'
+  COALESCE(j.max_attempts, 0), j.error_message, j.started_at
 FROM export_tasks t
 LEFT JOIN background_jobs j ON j.id = t.job_id
 LEFT JOIN users u ON u.id = t.created_by`
 
 func scanTask(sc interface{ Scan(...any) error }) (*taskRow, error) {
 	var r taskRow
-	var header []byte
 	if err := sc.Scan(&r.ID, &r.ProjectID, &r.ScopeType, &r.ScopeIDs, &r.Format, &r.OnlyApproved, &r.Status,
 		&r.StorageProfileID, &r.OutputKey, &r.OutputSize, &r.ExpiresAt, &r.Expired,
 		&r.CreatedBy, &r.CreatedByName, &r.CreatedAt, &r.FinishedAt,
 		&r.JobID, &r.JobStatus, &r.ProgressDone, &r.ProgressTotal, &r.Attempts, &r.MaxAttempts, &r.ErrorMessage,
-		&r.StartedAt, &header); err != nil {
+		&r.StartedAt); err != nil {
 		return nil, err
 	}
-	if header != nil {
-		if err := json.Unmarshal(header, &r.Header); err != nil {
-			return nil, errInternal("导出任务 %s 的 payload 不对：%v", r.ID, err)
+	return &r, nil
+}
+
+// headers 缓存 job id → payload 去掉 items 的部分（taskRow.Header）。导出的 payload 写后不改、job 行永久保留，
+// 所以缓存不用失效：执行中的任务每秒被轮询一次，不用每次把整个 payload（几万个条目时几 MB）从 TOAST 里解压出来。
+// job id 是 UUIDv7，几个 Service（测试里几个库）共用一份也不会串。条目太多时整个清掉重来。
+var headers = struct {
+	sync.Mutex
+	m map[uuid.UUID]payload
+}{m: map[uuid.UUID]payload{}}
+
+const maxCachedHeaders = 4096
+
+// fillHeaders 填这些任务的 Header：缓存里没有的用一条语句读 `payload - 'items'`。
+func fillHeaders(ctx context.Context, q db.Querier, rows []*taskRow) error {
+	var miss []uuid.UUID
+	headers.Lock()
+	for _, r := range rows {
+		if r.JobID == nil {
+			continue
+		}
+		if h, ok := headers.m[*r.JobID]; ok {
+			r.Header = h
+		} else {
+			miss = append(miss, *r.JobID)
 		}
 	}
-	return &r, nil
+	headers.Unlock()
+	if len(miss) == 0 {
+		return nil
+	}
+	res, err := q.Query(ctx, `SELECT id, payload - 'items' FROM background_jobs WHERE id = ANY($1)`, miss)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	got := map[uuid.UUID]payload{}
+	for res.Next() {
+		var id uuid.UUID
+		var raw []byte
+		if err := res.Scan(&id, &raw); err != nil {
+			return err
+		}
+		var h payload
+		if err := json.Unmarshal(raw, &h); err != nil {
+			return errInternal("后台任务 %s 的 payload 不对：%v", id, err)
+		}
+		got[id] = h
+	}
+	if err := res.Err(); err != nil {
+		return err
+	}
+	headers.Lock()
+	if len(headers.m)+len(got) > maxCachedHeaders {
+		clear(headers.m)
+	}
+	for id, h := range got {
+		headers.m[id] = h
+	}
+	headers.Unlock()
+	for _, r := range rows {
+		if r.JobID != nil {
+			if h, ok := got[*r.JobID]; ok {
+				r.Header = h
+			}
+		}
+	}
+	return nil
 }
 
 // getTask 读一个任务；不存在为 nil。
@@ -331,7 +393,13 @@ func getTask(ctx context.Context, q db.Querier, id uuid.UUID) (*taskRow, error) 
 	if db.IsNoRows(err) {
 		return nil, nil
 	}
-	return r, err
+	if err != nil {
+		return nil, err
+	}
+	if err := fillHeaders(ctx, q, []*taskRow{r}); err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 // listTasks 是项目的任务，最新的在前（keyset：created_at、id 倒序），多取一个判断还有没有下一页。
@@ -352,7 +420,14 @@ LIMIT $4`, projectID, afterAt, afterID, limit+1)
 		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if err := fillHeaders(ctx, q, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // taskProject 是任务所在的项目；没有为 uuid.Nil。

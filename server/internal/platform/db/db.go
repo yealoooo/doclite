@@ -10,6 +10,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,13 +28,28 @@ type Querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// DefaultMaxConns 是连接串里没写 pool_max_conns 时连接池的连接数上限（pgx 自己的默认是 CPU 核数、至少 4 个，
+// 少核的服务器上几个导出、SSE 之外的请求就要排队）。连接用到时才建。
+const DefaultMaxConns = 20
+
+// LockTimeout 是每个连接的 lock_timeout（连接串里没写时）：等锁（行锁、咨询锁，比如删大文件夹拿着的文件树排他锁）
+// 超过这么久就报错（SQLSTATE 55P03，接口返回 503 busy），不无限地等下去。不设 statement_timeout：导出要读很久。
+const LockTimeout = "30s"
+
 // Open 建连接池并确认能连上。连接串含密码，不要打到日志里。
 //
-// 每个连接的 timestamptz 都按 UTC 读出，接口返回的时间统一是 `…Z` 的形式。
+// 每个连接的 timestamptz 都按 UTC 读出，接口返回的时间统一是 `…Z` 的形式。连接串里没写 pool_max_conns、lock_timeout
+// 时用 [DefaultMaxConns]、[LockTimeout]。
 func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("DATABASE_URL 格式不对：%w", err)
+	}
+	if !strings.Contains(databaseURL, "pool_max_conns") {
+		cfg.MaxConns = DefaultMaxConns
+	}
+	if _, ok := cfg.ConnConfig.RuntimeParams["lock_timeout"]; !ok {
+		cfg.ConnConfig.RuntimeParams["lock_timeout"] = LockTimeout // 连接时带上，不多一次往返
 	}
 	cfg.AfterConnect = func(_ context.Context, conn *pgx.Conn) error {
 		conn.TypeMap().RegisterType(&pgtype.Type{
@@ -77,6 +94,24 @@ func InTx(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) (er
 	return tx.Commit(ctx)
 }
 
+// AdvisoryXactLocks 在事务 tx 里拿 (class, key) 的排他咨询锁（事务级），一条语句拿完：键去重、按升序拿（几个事务
+// 各拿几把时顺序一致，不会互相等成环）。
+func AdvisoryXactLocks(ctx context.Context, tx Querier, class int32, keys []int32) error {
+	keys = slices.Clone(keys)
+	slices.Sort(keys)
+	keys = slices.Compact(keys)
+	switch len(keys) {
+	case 0:
+		return nil
+	case 1:
+		_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1::int4, $2::int4)`, class, keys[0])
+		return err
+	}
+	// 数组已经升序；ORDER BY 再保证一次（易变函数在排序之后才算）。
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1::int4, k) FROM unnest($2::int4[]) AS k ORDER BY k`, class, keys)
+	return err
+}
+
 // NewID 生成主键（UUIDv7）。
 func NewID() uuid.UUID {
 	return uuid.Must(uuid.NewV7())
@@ -89,6 +124,12 @@ func UniqueViolation(err error, constraint string) bool {
 		return false
 	}
 	return constraint == "" || pgErr.ConstraintName == constraint
+}
+
+// LockTimedOut 判断 err 是不是等锁超过了 lock_timeout（SQLSTATE 55P03）。
+func LockTimedOut(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "55P03"
 }
 
 // IsNoRows 判断 err 是不是"查询没有结果"。

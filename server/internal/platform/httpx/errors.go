@@ -6,6 +6,7 @@
 // handler 返回 error：
 //   - [*Error] 按它的状态码和错误码输出；
 //   - 客户端已经断开造成的（[clientGone]）不算错误：只写状态码 499，日志不报错；
+//   - 等锁超时（lock_timeout，见 db.LockTimeout）503 `busy`；
 //   - 其他错误一律 500 `internal`，细节只写日志，不返回给调用方。
 package httpx
 
@@ -14,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+
+	"doclite/server/internal/platform/db"
 )
 
 // Error 是带 HTTP 状态码和错误码的错误。service 里也用它表达业务错误（`last_admin` 之类）。
@@ -144,8 +147,14 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 			w.WriteHeader(StatusClientClosedRequest)
 			return
 		}
-		LoggerFrom(r.Context()).Error("请求处理失败", "method", r.Method, "path", r.URL.Path, "error", err)
-		e = NewError(http.StatusInternalServerError, CodeInternal, "服务器内部错误，请稍后重试或联系管理员")
+		if db.LockTimedOut(err) {
+			// 等锁超过了 lock_timeout（db.LockTimeout）：别的大操作正拿着锁，稍后再试就好。
+			LoggerFrom(r.Context()).Warn("等锁超时", "method", r.Method, "path", r.URL.Path, "error", err)
+			e = NewError(http.StatusServiceUnavailable, CodeBusy, "有别的操作正在进行（比如删除或移动很大的文件夹），请稍后再试")
+		} else {
+			LoggerFrom(r.Context()).Error("请求处理失败", "method", r.Method, "path", r.URL.Path, "error", err)
+			e = NewError(http.StatusInternalServerError, CodeInternal, "服务器内部错误，请稍后重试或联系管理员")
+		}
 	}
 	WriteJSON(w, e.Status, errorBody{Code: e.Code, Message: e.Message, Details: e.Details})
 }

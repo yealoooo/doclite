@@ -319,8 +319,27 @@ type Summary struct {
 	Children     []SummaryChild `json:"children"`
 }
 
-// Summary 是一个文件夹（nil 是根文件夹）和它每个子文件夹的子树状态计数。
+// summaryTTL 是状态计数的缓存时间：实时事件一来几个客户端同时重新取，同一个（项目、文件夹、项目的数据版本
+// events.Bus.Version）在这段时间里只算一次，同时来的合并成一次（internal/platform/memo）。发了事件就换键。
+const summaryTTL = 5 * time.Second
+
+// summaryKey 是状态计数缓存的键：根文件夹的 folder 是 uuid.Nil。
+type summaryKey struct {
+	project, folder uuid.UUID
+	version         uint64
+}
+
+// Summary 是一个文件夹（nil 是根文件夹）和它每个子文件夹的子树状态计数。返回的结果是共用的，不能改。
 func (s *Service) Summary(ctx context.Context, projectID uuid.UUID, folderID *uuid.UUID) (*Summary, error) {
+	key := summaryKey{project: projectID, version: s.events.Version(projectID)}
+	if folderID != nil {
+		key.folder = *folderID
+	}
+	return s.summaries.Get(ctx, key, func() (*Summary, error) { return s.summary(ctx, projectID, folderID) })
+}
+
+// summary 是不经缓存的状态计数。
+func (s *Service) summary(ctx context.Context, projectID uuid.UUID, folderID *uuid.UUID) (*Summary, error) {
 	var out *Summary
 	err := s.readOnly(ctx, func(tx pgx.Tx) error {
 		sc, err := scope(ctx, tx, projectID, folderID)

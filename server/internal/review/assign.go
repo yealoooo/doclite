@@ -55,6 +55,7 @@ func (s *Service) Assign(ctx context.Context, userID, projectID uuid.UUID, in As
 		}
 		var scope *scopeFolder
 		var candidates []uuid.UUID
+		var notUnassigned int
 		if byFolder {
 			var err error
 			if scope, err = getScopeFolder(ctx, tx, projectID, in.FolderID); err != nil {
@@ -63,7 +64,7 @@ func (s *Service) Assign(ctx context.Context, userID, projectID uuid.UUID, in As
 			if scope == nil {
 				return errFolderNotFound
 			}
-			if candidates, err = subtreeUnassigned(ctx, tx, projectID, scope, MaxFolderFiles+1); err != nil {
+			if candidates, notUnassigned, err = subtreeUnassigned(ctx, tx, projectID, scope, MaxFolderFiles+1); err != nil {
 				return err
 			}
 			if len(candidates) > MaxFolderFiles {
@@ -88,11 +89,7 @@ func (s *Service) Assign(ctx context.Context, userID, projectID uuid.UUID, in As
 			}
 		}
 		if byFolder {
-			n, err := subtreeNotUnassigned(ctx, tx, projectID, scope)
-			if err != nil {
-				return err
-			}
-			out.Skipped = n
+			out.Skipped = notUnassigned
 		} else {
 			out.Skipped = len(candidates) - len(picked)
 		}
