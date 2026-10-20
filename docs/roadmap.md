@@ -407,3 +407,13 @@
 ### [x] M10-7 去掉"插件能力"占位菜单（用户 2026-10-19）
 - **结果：** 迁移 0006 删掉菜单 `system.plugins`（role_menus 级联）；删 `auth.MenuSystemPlugins`、web 的占位路由、PlaceholderView、菜单图标；验收清单 LOGIN-05 去掉这一步。
 - **其余 M10 遗留（用户 2026-10-19 定）：** 导出明细翻页、导出收尾失败整份重做，等有真实大数据再做；`cancelled`/`canceled` 不改。
+
+### [x] M10-8 修 Codex 验收发现的问题（2026-10-20，commit c2c4bfb）
+- **验收记录：** `docs/acceptance-results-2026-10-19.md`（Codex，不提交）：通过 136、失败 11、跳过 35。
+- **结果：**
+  - M10-2 带出的两处回退：看图状态栏恢复"客户端分块"（`viewerModeLabel`）、恢复 `web/scripts/samples/encoding/` 的两个拒收样本（FILE-21 准备用）；
+  - STOR-03：存储表单 `novalidate`，所有字段的错误一起显示；
+  - END-02：ConfirmDialog 执行中、已关闭时不再发 confirm，`confirmDelete` 防重复提交（按代码推断，没复现）；
+  - 验收清单 LOGIN-04、SCAN-01、CLIENT-01…04、CLIENT-10…12 改成设置页的入口，FILE-03 注明"入库时间"列要够宽才显示。
+- **不改：** FILE-03、CAT-02、DASH-04 的 4 件 14 页 vs 清单 3 件 9 页，是开发库数据漂移。
+- **要人工的：** 悬停提示、托盘、拖放归档（CAT-05/06）、重置密码、停服务器的 RT-06/CLIENT-13。
