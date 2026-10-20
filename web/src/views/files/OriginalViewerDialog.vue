@@ -13,7 +13,7 @@ import { getFileLogs, getFileSnapshots } from '@/api/files'
 import type { FileEntry, FileLog, SnapshotItem } from '@/api/types'
 import CompareViewer, { type CompareSide, type CompareSideKey } from '@/components/viewer/CompareViewer.vue'
 import ImageViewer, { type ViewerStatus, type ViewerView } from '@/components/viewer/ImageViewer.vue'
-import { staleInfo, viewerStatusText } from '@/components/viewer/viewer-status'
+import { staleInfo, viewerModeLabel, viewerStatusText } from '@/components/viewer/viewer-status'
 import ViewerToolbar from '@/components/viewer/ViewerToolbar.vue'
 import { useSnapshotCompare } from '@/composables/useSnapshotCompare'
 import { formatSpec } from '@/lib/files'
@@ -104,6 +104,7 @@ function target() {
 }
 
 const statusText = computed(() => viewerStatusText(status.value))
+const modeLabel = computed(() => viewerModeLabel(status.value))
 
 // ---------- 对比上一版 ----------
 
@@ -301,6 +302,7 @@ const spec = computed(() => (info.value ? formatSpec(info.value) : ''))
         >
           <span v-if="entry" class="truncate">{{ entry.file_name }}</span>
           <span v-if="spec">{{ spec }}</span>
+          <span v-if="!compare && modeLabel">{{ modeLabel }}</span>
           <span class="flex-1" />
           <span v-if="!compare">{{ statusText }}</span>
           <span v-if="view?.zoom != null">{{ Math.round(view.zoom * 100) }}%</span>

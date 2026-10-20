@@ -323,7 +323,8 @@ export function useFileActions(opts: Options) {
 
   async function confirmDelete() {
     const cur = opts.folder()
-    if (!cur) return
+    // 请求在途、对话框已关时不再提交（验收 END-02：重复提交第二次会报"文件已不存在"）。
+    if (!cur || remove.loading || !remove.open) return
     remove.loading = true
     let deleted = 0
     try {

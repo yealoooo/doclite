@@ -7,6 +7,11 @@ export function staleInfo(s: ViewerStatus): boolean {
   return s.phase === 'failed' && ['http', 'not_found', 'no_url'].includes(s.code ?? '')
 }
 
+/** 状态栏上的看图方式：客户端切块显示时是"客户端分块"，其他情况不显示。 */
+export function viewerModeLabel(s: ViewerStatus | null | undefined): string {
+  return s?.mode === 'tiles' ? '客户端分块' : ''
+}
+
 /** 状态栏上的一句话。 */
 export function viewerStatusText(s: ViewerStatus | null | undefined): string {
   if (!s) return ''

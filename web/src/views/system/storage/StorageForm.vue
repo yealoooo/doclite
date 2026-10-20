@@ -172,26 +172,29 @@ function keepEditing() {
   acknowledgedAt.value = props.profile?.updated_at ?? null
 }
 
-/** 连接参数的校验（测试和保存都要）。新增时 Access Key、Secret Key 必填；编辑时 Secret Key 可以留空。 */
-function validateConnection(): string {
-  return (
-    checkEndpoint(form.endpoint, 'server 访问地址', true) ||
-    checkEndpoint(form.publicEndpoint, '工作站访问地址', false) ||
-    checkBucket(form.bucket) ||
-    checkPathPrefix(form.pathPrefix) ||
-    checkRegion(form.region) ||
-    checkKey(form.accessKey, 'Access Key', true) ||
-    checkKey(form.secretKey, 'Secret Key', !isEdit.value)
-  )
+/**
+ * 连接参数的校验（测试和保存都要）。新增时 Access Key、Secret Key 必填；编辑时 Secret Key 可以留空。
+ * 不在第一个错处停下：所有不对的字段一起报，一行一条（验收 STOR-03）。
+ */
+function validateConnection(): string[] {
+  return [
+    checkEndpoint(form.endpoint, 'server 访问地址', true),
+    checkEndpoint(form.publicEndpoint, '工作站访问地址', false),
+    checkBucket(form.bucket),
+    checkPathPrefix(form.pathPrefix),
+    checkRegion(form.region),
+    checkKey(form.accessKey, 'Access Key', true),
+    checkKey(form.secretKey, 'Secret Key', !isEdit.value),
+  ].filter(Boolean)
 }
 
-function validateAll(): string {
-  return (
-    checkProfileName(form.profileName) ||
-    validateConnection() ||
-    checkUrlExpireHours(form.urlExpireHours) ||
-    checkRemark(form.remark)
-  )
+function validateAll(): string[] {
+  return [
+    checkProfileName(form.profileName),
+    ...validateConnection(),
+    checkUrlExpireHours(form.urlExpireHours),
+    checkRemark(form.remark),
+  ].filter(Boolean)
 }
 
 /** 表单上的连接参数（Secret Key 留空时不带）。 */
@@ -210,7 +213,7 @@ function connectionFields(): UpdateStorageBody {
 }
 
 async function runTest() {
-  error.value = validateConnection()
+  error.value = validateConnection().join('\n')
   if (error.value) return
   // 结果和发起时的编辑对象绑定：中途换了编辑对象（loadFrom 让代数加一），回来的结果直接丢弃。
   const seq = ++testSeq
@@ -255,7 +258,7 @@ function changedFields(): UpdateStorageBody {
 }
 
 async function submit() {
-  error.value = validateAll()
+  error.value = validateAll().join('\n')
   if (error.value) return
   const startedFor = loadedId.value
   saving.value = true
@@ -296,7 +299,8 @@ defineExpose({
 </script>
 
 <template>
-  <form class="flex flex-col gap-3.5" data-testid="storage-form" @submit.prevent="submit">
+  <!-- novalidate：校验都由上面的 check* 做（中文提示、所有错一起报），不让浏览器先弹英文的原生提示（验收 STOR-03） -->
+  <form class="flex flex-col gap-3.5" data-testid="storage-form" novalidate @submit.prevent="submit">
     <div class="flex items-center gap-2">
       <h2 class="text-sm font-semibold text-foreground">
         {{ isEdit ? `编辑：${profile?.profile_name}` : '新增存储（S3 兼容）' }}
@@ -398,9 +402,12 @@ defineExpose({
       <Input id="sf-remark" v-model="form.remark" autocomplete="off" placeholder="可选" />
     </div>
 
-    <p v-if="error" class="rounded-md bg-destructive-soft px-3 py-2 text-sm text-destructive" role="alert" data-testid="storage-form-error">
-      {{ error }}
-    </p>
+    <p
+      v-if="error"
+      class="rounded-md bg-destructive-soft px-3 py-2 text-sm whitespace-pre-line text-destructive"
+      role="alert"
+      data-testid="storage-form-error"
+    >{{ error }}</p>
 
     <div class="flex gap-2">
       <Button type="button" variant="outline" :disabled="testing || saving" data-testid="storage-test" @click="runTest">

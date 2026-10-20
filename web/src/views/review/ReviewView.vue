@@ -55,7 +55,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import CompareViewer, { type CompareSide, type CompareSideKey } from '@/components/viewer/CompareViewer.vue'
 import ImageViewer, { type ViewerStatus, type ViewerView } from '@/components/viewer/ImageViewer.vue'
-import { staleInfo, viewerStatusText } from '@/components/viewer/viewer-status'
+import { staleInfo, viewerModeLabel, viewerStatusText } from '@/components/viewer/viewer-status'
 import ViewerToolbar from '@/components/viewer/ViewerToolbar.vue'
 import StreamStatus from '@/components/app/StreamStatus.vue'
 import { useEventBatch, useProjectStream } from '@/composables/useProjectStream'
@@ -463,6 +463,9 @@ function target() {
 
 const statusText = computed(() =>
   viewerStatus.value?.fileId === currentId.value ? viewerStatusText(viewerStatus.value?.status) : '',
+)
+const modeLabel = computed(() =>
+  viewerStatus.value?.fileId === currentId.value ? viewerModeLabel(viewerStatus.value?.status) : '',
 )
 
 // ---------- 对比（C） ----------
@@ -1410,6 +1413,7 @@ const emptyText = computed(() => {
           <span v-if="positionText">{{ positionText }}</span>
           <span v-if="current">v{{ current.version_no }}</span>
           <span v-if="spec">{{ spec }}</span>
+          <span v-if="!compare && modeLabel">{{ modeLabel }}</span>
           <span class="flex-1" />
           <span>{{ statusText }}</span>
           <span v-if="view?.zoom != null">{{ Math.round(view.zoom * 100) }}%</span>
