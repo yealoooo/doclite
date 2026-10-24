@@ -6,6 +6,7 @@ import 'vue-sonner/style.css'
 import { setHttpHandlers } from '@/api/http'
 import { isShell } from '@/lib/client'
 import { watchCspViolations } from '@/lib/csp'
+import { installTitleTips } from '@/lib/title-tips'
 import { useSessionStore } from '@/stores/session'
 import { useShellStore } from '@/stores/shell'
 
@@ -14,6 +15,7 @@ import router from './router'
 import './style.css'
 
 if (isShell()) watchCspViolations()
+installTitleTips()
 
 const app = createApp(App)
 const pinia = createPinia()
