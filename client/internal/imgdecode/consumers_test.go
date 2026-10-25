@@ -36,7 +36,7 @@ func TestCoverAndTilesJPEGTIFF(t *testing.T) {
 		ref  image.Image
 	}{{ycbcr, lzw}, {rgbIDs, crop(160, 136)}} { // 封面是整页缩小的，和 LZW 样本整页比
 		t.Run("封面 "+filepath.Base(c.path), func(t *testing.T) {
-			cv := upload.MakeCover(c.path)
+			cv := upload.MakeCover(context.Background(), c.path)
 			if cv.Data == nil {
 				t.Fatalf("没有生成封面：%s", cv.Reason)
 			}

@@ -57,8 +57,6 @@ const (
 type Plan struct {
 	src  *imgdecode.Source
 	info imagehdr.Info
-	// pngDepth、pngColorType：PNG 的 IHDR（估算内存用）。
-	pngDepth, pngColorType int
 
 	// Width、Height 是转正后的宽高（最高一级的尺寸）。
 	Width, Height int
@@ -85,15 +83,6 @@ func NewPlan(path string) (*Plan, error) {
 	default:
 		p.Mode, p.Format = ModeRGB, "jpg"
 	}
-	if info.Format == imagehdr.PNG {
-		if f, err := os.Open(path); err == nil {
-			var ihdr [26]byte
-			if _, err := f.ReadAt(ihdr[:], 0); err == nil {
-				p.pngDepth, p.pngColorType = int(ihdr[24]), int(ihdr[25])
-			}
-			f.Close()
-		}
-	}
 	p.Estimate = p.estimate()
 	return p, nil
 }
@@ -106,24 +95,52 @@ func (p *Plan) channels() int {
 	return 1
 }
 
-// estimate 是进程内存峰值的估算：同时存活的数据 ×2 + 余量。同时存活的是解码出来的图 + max（TIFF 读一个条带的
-// 缓冲，转正后的那一份）+ 下一级；×2 是 Go 的垃圾回收留的余量（堆涨到存活数据的两倍才回收）和解码器读条带时
+// estimate 是切块时进程内存峰值的估算：同时存活的数据 ×2 + 余量。同时存活的是解码出来的图 + max（TIFF 读一个条带
+// 的缓冲，转正后的那一份）+ 下一级；×2 是 Go 的垃圾回收留的余量（堆涨到存活数据的两倍才回收）和解码器读条带时
 // 缓冲逐步变大留下的旧缓冲。实测 200 MB 的无压缩 RGB TIFF（7016×9921）进程峰值约 950 MB，估算约 990 MB。
-// 解码出来的每像素字节数按 Go 的解码器：JPEG 灰度 1、彩色 YCbCr 最多 3；PNG 灰度 1（16 位 2）、调色板 1、
-// 其余 RGBA 4（16 位 8）；TIFF 黑白和灰度 1、彩色 RGBA 4（JPEG 压缩的 TIFF 也是：整张 RGBA 或 CMYK，加上一个条带的
-// 解码结果——最多是整张 YCbCr 每像素 3 字节，记在 raw 里；只有一个条带的 YCbCr、灰度直接用解码结果，更省）。
 func (p *Plan) estimate() int64 {
-	px := int64(p.info.Width) * int64(p.info.Height)
-	var decoded, raw int64
-	switch p.info.Format {
+	decoded, raw := decodeBytes(p.src)
+	level0 := pixels(p.info) * int64(p.channels())
+	return 2*(decoded+max(raw, level0)+level0/4) + 16<<20
+}
+
+// DecodeEstimate 是只整张解码、再按行缩小（封面，internal/upload）时内存峰值的估算：（解码出来的图 + TIFF 读条带
+// 的缓冲）×2 + 余量，×2 的道理同切块（[Plan.Estimate]）。
+func DecodeEstimate(src *imgdecode.Source) int64 {
+	decoded, raw := decodeBytes(src)
+	return 2*(decoded+raw) + 16<<20
+}
+
+// pixels 是像素总数（封顶 2⁴⁰：没有像素上限时乘上每像素的字节数也不溢出，照样远超预算）。
+func pixels(info imagehdr.Info) int64 {
+	return min(int64(info.Width)*int64(info.Height), 1<<40)
+}
+
+// decodeBytes 是整张解码时同时存活的数据（字节）：decoded 是解码出来的图，raw 是 TIFF 读一个条带的缓冲（最多整张）。
+// 解码出来的每像素字节数按 Go 的解码器：JPEG 灰度 1、彩色 YCbCr 最多 3；PNG 灰度 1（16 位 2）、调色板 1、其余 RGBA 4
+// （16 位 8）；TIFF 黑白和灰度 1（16 位 2）、彩色 RGBA 4（16 位 RGBA64 8），条带缓冲是 样本数 × 位数 ÷ 8。JPEG 压缩的
+// TIFF 也是这样：整张 RGBA 或 CMYK，加上一个条带的解码结果——最多是整张 YCbCr 每像素 3 字节，算在 raw 里；只有一个
+// 条带的 YCbCr、灰度直接用解码结果，更省。位深从 PNG 的 IHDR、TIFF 的第一个 IFD 读，读不出来按最大的估。
+func decodeBytes(src *imgdecode.Source) (decoded, raw int64) {
+	info := src.Info
+	px := pixels(info)
+	switch info.Format {
 	case imagehdr.JPEG:
 		decoded = px * 3
-		if p.info.ColorMode == imagehdr.ColorGray {
+		if info.ColorMode == imagehdr.ColorGray {
 			decoded = px
 		}
 	case imagehdr.PNG:
-		bytes := int64(max(1, p.pngDepth/8))
-		switch p.pngColorType {
+		depth, colorType := 16, 6
+		if f, err := os.Open(src.Path); err == nil {
+			var ihdr [26]byte
+			if _, err := f.ReadAt(ihdr[:], 0); err == nil {
+				depth, colorType = int(ihdr[24]), int(ihdr[25])
+			}
+			f.Close()
+		}
+		bytes := int64(max(1, depth/8))
+		switch colorType {
 		case 0:
 			decoded = px * bytes
 		case 3:
@@ -132,17 +149,18 @@ func (p *Plan) estimate() int64 {
 			decoded = px * 4 * bytes
 		}
 	case imagehdr.TIFF:
-		switch p.info.ColorMode {
-		case imagehdr.ColorBW:
-			decoded, raw = px, px/8
-		case imagehdr.ColorGray:
-			decoded, raw = px, px
-		default:
-			decoded, raw = px*4, px*3
+		bits, samples, ok := src.TIFFSamples()
+		if !ok {
+			bits, samples = 16, 4
+		}
+		bytes := int64(max(1, bits/8))
+		raw = px * int64(samples) * int64(bits) / 8
+		decoded = px * 4 * bytes
+		if info.ColorMode == imagehdr.ColorBW || info.ColorMode == imagehdr.ColorGray {
+			decoded = px * bytes
 		}
 	}
-	level0 := px * int64(p.channels())
-	return 2*(decoded+max(raw, level0)+level0/4) + 16<<20
+	return decoded, raw
 }
 
 // decode 整张解码（imgdecode，文件里存的方向）。

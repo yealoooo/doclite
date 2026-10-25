@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"image"
 	"io"
+	"os"
 
 	"golang.org/x/image/tiff"
 )
@@ -183,6 +184,26 @@ func (d *ifd) bytes(tag uint16, maxCount int) ([]byte, error) {
 		return bytes.Clone(e.val[:e.count]), nil
 	}
 	return d.read(int64(d.bo.Uint32(e.val[:])), int64(e.count))
+}
+
+// TIFFSamples 读 TIFF 第一个 IFD 的每个样本的位数（BitsPerSample 的第一个值，没写按 1）和每像素的样本数
+// （SamplesPerPixel，没写按 1），估算整张解码要多少内存用（internal/tiles）。读不出来时 ok 为 false。
+func (s *Source) TIFFSamples() (bits, samples int, ok bool) {
+	f, err := os.Open(s.Path)
+	if err != nil {
+		return 0, 0, false
+	}
+	defer f.Close()
+	d, err := readIFD(f, s.Size)
+	if err != nil {
+		return 0, 0, false
+	}
+	b, err1 := d.uint(tagBitsPerSample, 1)
+	n, err2 := d.uint(tagSamplesPerPixel, 1)
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return int(min(b, 64)), int(min(n, 64)), true
 }
 
 // decodeTIFF：JPEG 压缩的自己解，其余交给 x/image/tiff。第一个 IFD 读不出来时也交给它（由它报错）。

@@ -270,3 +270,61 @@ func fixCRC(chunk []byte) {
 	n := len(chunk)
 	binary.BigEndian.PutUint32(chunk[n-4:], crc32.ChecksumIEEE(chunk[4:n-4]))
 }
+
+// writeTIFF 写一张 w×h、一个条带、不压缩的 RGB TIFF（每个样本 bits 位，像素全 0）。
+func writeTIFF(t *testing.T, path string, w, h, bits int) {
+	t.Helper()
+	le := binary.LittleEndian
+	const entries = 9
+	bitsAt := 8 + 2 + entries*12 + 4 // BitsPerSample 的 3 个值放在 IFD 后面
+	dataAt := bitsAt + 6
+	size := w * h * 3 * bits / 8
+	b := le.AppendUint32([]byte("II*\x00"), 8)
+	b = le.AppendUint16(b, entries)
+	short := func(tag uint16, v int) { // SHORT，一个值
+		b = le.AppendUint16(le.AppendUint16(b, tag), 3)
+		b = le.AppendUint16(le.AppendUint32(b, 1), uint16(v))
+		b = le.AppendUint16(b, 0)
+	}
+	long := func(tag uint16, v int) { // LONG，一个值
+		b = le.AppendUint16(le.AppendUint16(b, tag), 4)
+		b = le.AppendUint32(le.AppendUint32(b, 1), uint32(v))
+	}
+	short(256, w)
+	short(257, h)
+	b = le.AppendUint16(le.AppendUint16(b, 258), 3)
+	b = le.AppendUint32(le.AppendUint32(b, 3), uint32(bitsAt))
+	short(259, 1) // 不压缩
+	short(262, 2) // RGB
+	long(273, dataAt)
+	short(277, 3)
+	short(278, h)
+	long(279, size)
+	b = le.AppendUint32(b, 0)
+	for range 3 {
+		b = le.AppendUint16(b, uint16(bits))
+	}
+	b = append(b, make([]byte, size)...)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 内存估算按 TIFF 的位深：16 位 RGB 解码出来是 RGBA64（每像素 8 字节）、条带缓冲每像素 6 字节，是 8 位的两倍。
+func TestDecodeEstimateBitDepth(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct{ bits, perPixel int }{{8, 4 + 3}, {16, 8 + 6}} {
+		path := filepath.Join(dir, "rgb.tif")
+		writeTIFF(t, path, 100, 50, c.bits)
+		src, err := imgdecode.Open(path, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := src.Decode(context.Background()); err != nil {
+			t.Fatalf("%d 位的样本解不了：%v", c.bits, err)
+		}
+		if decoded, raw := decodeBytes(src); decoded+raw != int64(100*50*c.perPixel) {
+			t.Errorf("%d 位 RGB 估算 %d + %d 字节，应为每像素 %d 字节", c.bits, decoded, raw, c.perPixel)
+		}
+	}
+}

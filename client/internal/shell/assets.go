@@ -24,7 +24,6 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -118,19 +117,6 @@ func spaHandler(dist fs.FS) http.Handler {
 		}
 		files.ServeHTTP(w, r)
 	})
-}
-
-// removeOldWebCache 删掉 M7-6 第一版（界面跟 web 服务走，没有发布，开发机上可能跑过）留下的网页缓存 <数据目录>/web-cache。
-func removeOldWebCache(dataDir string, log *slog.Logger) {
-	dir := filepath.Join(dataDir, "web-cache")
-	if _, err := os.Stat(dir); err != nil {
-		return
-	}
-	if err := os.RemoveAll(dir); err != nil {
-		log.Warn("删不掉旧版留下的网页缓存", "dir", dir, "err", err)
-		return
-	}
-	log.Info("删掉了旧版留下的网页缓存", "dir", dir)
 }
 
 // assetGuard 是资产服务器最外层的中间件（包括 Wails 的 /wails/ 地址）：

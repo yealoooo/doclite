@@ -45,6 +45,9 @@ type HotFolder struct {
 	e   *Engine
 	log *slog.Logger
 
+	// op 让开始、暂停、设置、停下、服务器换了一个一个来（托盘、页面、壳启动时的恢复可能同时调用）。
+	op sync.Mutex
+
 	mu       sync.Mutex
 	cfg      *HotConfig
 	running  bool
@@ -121,6 +124,8 @@ func (h *HotFolder) Set(watchDir, targetFolderID string) (HotStatus, error) {
 	if err := checkWatchDir(watchDir); err != nil {
 		return HotStatus{}, err
 	}
+	h.op.Lock()
+	defer h.op.Unlock()
 	h.mu.Lock()
 	running := h.running
 	cfg := HotConfig{WatchDir: filepath.Clean(watchDir), TargetFolderID: targetFolderID, ServerURL: server,
@@ -162,6 +167,8 @@ func checkWatchDir(dir string) error {
 
 // Start 开始监控（hotfolder_start、托盘的"继续热文件夹"）。
 func (h *HotFolder) Start() (HotStatus, error) {
+	h.op.Lock()
+	defer h.op.Unlock()
 	h.mu.Lock()
 	if h.cfg == nil {
 		h.mu.Unlock()
@@ -196,6 +203,8 @@ func (h *HotFolder) Start() (HotStatus, error) {
 
 // Pause 暂停（停监控，队列不再开始热文件夹的项，正在传的传完）。壳重启后保持暂停。
 func (h *HotFolder) Pause() (HotStatus, error) {
+	h.op.Lock()
+	defer h.op.Unlock()
 	h.stopRun()
 	h.mu.Lock()
 	if h.cfg != nil && h.cfg.AutoStart {
@@ -214,7 +223,11 @@ func (h *HotFolder) Pause() (HotStatus, error) {
 }
 
 // Shutdown：壳退出时停下（不改配置里的 AutoStart，下次启动照样恢复）。
-func (h *HotFolder) Shutdown() { h.stopRun() }
+func (h *HotFolder) Shutdown() {
+	h.op.Lock()
+	defer h.op.Unlock()
+	h.stopRun()
+}
 
 func (h *HotFolder) setError(msg string) {
 	h.mu.Lock()
@@ -234,7 +247,7 @@ func (h *HotFolder) startRun(cfg HotConfig) {
 	h.e.SetSourceActive(SourceHotfolder, true)
 	go func() {
 		defer close(done)
-		h.run(ctx, cfg)
+		h.run(ctx, cfg, done)
 	}()
 }
 
@@ -252,8 +265,8 @@ func (h *HotFolder) stopRun() {
 	}
 }
 
-// run 是监控的主循环。
-func (h *HotFolder) run(ctx context.Context, cfg HotConfig) {
+// run 是监控的主循环（done 是这一次运行的标识，见 serverChanged）。
+func (h *HotFolder) run(ctx context.Context, cfg HotConfig, done chan struct{}) {
 	server := cfg.ServerURL
 	sc := &hotScan{h: h, cfg: cfg, watched: map[string]bool{}}
 	settle := map[int64]*Settle{}
@@ -327,7 +340,7 @@ func (h *HotFolder) run(ctx context.Context, cfg HotConfig) {
 		case <-serverTick.C:
 			if cur := h.e.api.Server(); cur != server {
 				h.log.Warn("服务器地址换了，热文件夹停下", "from", server, "to", cur)
-				go h.serverChanged()
+				go h.serverChanged(done)
 				return
 			}
 		case <-scanTick.C:
@@ -339,8 +352,17 @@ func (h *HotFolder) run(ctx context.Context, cfg HotConfig) {
 }
 
 // serverChanged：服务器地址换了（目标文件夹属于原来的服务器），停下并提示。配置里的 AutoStart 不改：换回原来的
-// 服务器后壳重启时照样恢复。
-func (h *HotFolder) serverChanged() {
+// 服务器后壳重启时照样恢复。done 是发现服务器换了的那一次运行：轮到这里之前已经暂停、或者按新配置重新开始了
+// （h.done 不是它了），就什么也不做。
+func (h *HotFolder) serverChanged(done chan struct{}) {
+	h.op.Lock()
+	defer h.op.Unlock()
+	h.mu.Lock()
+	current := h.done == done
+	h.mu.Unlock()
+	if !current {
+		return
+	}
 	h.stopRun()
 	h.setError("服务器地址换了，热文件夹已停止：目标文件夹属于原来的服务器，请重新选择目标文件夹")
 }
@@ -472,20 +494,29 @@ func (sc *hotScan) enter(ctx context.Context, start string) func(dir string) boo
 	}
 }
 
-// enqueue 把扫描发现的一批文件加入队列（一个事务），记进 known。返回加入的个数。
+// enqueue 把扫描发现的一批文件加入队列（一个事务），记进 known。返回加入的个数。正在上传、没加入的不记：
+// 上传中被覆盖的文件，传完以后下次扫描还要再看一次（大小和修改时间变了就重新入队）。
 func (sc *hotScan) enqueue(ctx context.Context, files []LocalFile) int {
 	if len(files) == 0 || ctx.Err() != nil {
 		return 0
 	}
-	added, _, err := sc.h.e.enqueue(ctx, sc.cfg.ServerURL, SourceHotfolder, files, sc.cfg.TargetFolderID)
+	added, skipped, err := sc.h.e.enqueue(ctx, sc.cfg.ServerURL, SourceHotfolder, files, sc.cfg.TargetFolderID)
 	if err != nil {
 		if ctx.Err() == nil {
 			sc.h.log.Error("热文件夹：加入队列失败", "err", err)
 		}
 		return 0
 	}
+	uploading := map[string]bool{}
+	for _, s := range skipped {
+		if s.Reason == reasonUploading {
+			uploading[s.Path] = true
+		}
+	}
 	for _, f := range files {
-		sc.known.set(PathKey(f.Path), fileSig{size: f.Size, mtime: f.MtimeNS})
+		if !uploading[f.Path] {
+			sc.known.set(PathKey(f.Path), fileSig{size: f.Size, mtime: f.MtimeNS})
+		}
 	}
 	return len(added)
 }

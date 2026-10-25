@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -26,10 +27,13 @@ import (
 //	    ├── <snapshot_id>.original.<ext> 原图（jpg、png、tif，认不出的 bin）
 //	    └── <snapshot_id>.tiles/        原图分块：<级>/<x>_<y>.<jpg|png>，索引里算一项
 //
-// 按 snapshot_id 存（快照不会变，不需要失效）。索引是 JSON 加内存：改动后 2 秒写盘，只改了访问时间的 30 秒写盘，
-// 退出时写盘。不做索引损坏重建（requirements 的简化）：索引读不出来时改名为 index.json.bad、从空的开始。
+// 按 snapshot_id 存（快照不会变，不需要失效）。索引是 JSON 加内存：每次写盘是整份重写，所以合并着写——存入、
+// 淘汰后 20 秒写盘，只改了访问时间的 5 分钟写盘，清空、改上限马上写，退出时写盘。崩溃时丢掉的只是最近这一会儿
+// 存的项（文件成了索引外的，下次启动时删掉）和访问时间。不做索引损坏重建（requirements 的简化）：索引读不出来时
+// 改名为 index.json.bad、从空的开始。
 // 索引外的文件（崩溃前没来得及记进索引的、Windows 上淘汰时正被读着删不掉的）不计入占用：删不掉的记下来，之后每次
-// 写索引时再删；启动时在后台删掉启动之前就有、又不在索引里的（sweep），"全部清空"也会删掉它们。
+// 写索引时再删（那时又存进了同一个位置的不删）；启动时在后台删掉启动之前就有、又不在索引里的（sweep），"全部清空"
+// 也会删掉它们。
 //
 // 锁：mu 只管内存里的索引（存入、淘汰、清空只改 map，删文件在 mu 外）；写索引时在 mu 里取一份快照，编码和写盘
 // 在 mu 外，writeMu 让写盘一个一个来。
@@ -49,8 +53,8 @@ const (
 )
 
 const (
-	flushDelay      = 2 * time.Second
-	touchFlushDelay = 30 * time.Second
+	flushDelay      = 20 * time.Second
+	touchFlushDelay = 5 * time.Minute
 	indexName       = "index.json"
 	indexVersion    = 1
 )
@@ -273,6 +277,8 @@ func (s *store) put(e *entry, src string, tok token) (bool, error) {
 		delete(s.entries, key)
 		s.dirty = true
 	}
+	// 之前删不掉的同一个位置：下面改名前先删一次，之后写索引时不再删（那时已经是新存的了）。
+	s.pending = slices.DeleteFunc(s.pending, func(p string) bool { return p == dst })
 	s.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return false, err
@@ -506,7 +512,7 @@ func (s *store) usage() (total int64, count int, limit int64, projects []Project
 	return s.total, len(s.entries), s.limit, projects
 }
 
-// scheduleLocked：有改动 2 秒后写盘，只改了访问时间 30 秒后写盘。
+// scheduleLocked：有改动 flushDelay 后写盘，只改了访问时间 touchFlushDelay 后写盘。
 func (s *store) scheduleLocked() {
 	if s.closed {
 		return
@@ -538,7 +544,8 @@ func (s *store) flush() error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	s.mu.Lock()
-	pending := s.pending
+	// 删不掉的文件之后又存进了同一个位置（又在索引里了）的不删。
+	pending := slices.DeleteFunc(s.pending, s.indexedLocked)
 	s.pending = nil
 	if !s.dirty && !s.touched {
 		s.mu.Unlock()
@@ -563,6 +570,16 @@ func (s *store) flush() error {
 		s.mu.Unlock()
 	}
 	return err
+}
+
+// indexedLocked：path 是索引里某一项的文件。
+func (s *store) indexedLocked(path string) bool {
+	key, ok := keyOfName(filepath.Base(path))
+	if !ok {
+		return false
+	}
+	e := s.entries[key]
+	return e != nil && s.path(e) == path
 }
 
 // close 退出时写盘。

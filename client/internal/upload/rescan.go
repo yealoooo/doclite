@@ -108,7 +108,7 @@ func (c *Client) Rescan(ctx context.Context, server, fileID, path string, progre
 	out.SHA256 = &sha
 
 	progress(PhaseCover, 0, size)
-	cv := MakeCover(path)
+	cv := MakeCover(ctx, path)
 	ms := cv.MS
 	out.Cover = &RescanCover{Status: CoverIncluded, MS: &ms}
 	if cv.Data == nil {

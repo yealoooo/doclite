@@ -8,7 +8,7 @@
 //   - walk.go      列目录的规则（热文件夹和上传按钮选的文件夹共用）；
 //   - rescan.go    重扫件：不进队列，一次一个；
 //   - cover.go     封面：Go 解码 JPEG、PNG、TIFF，先按 2ⁿ 取平均缩小、转正（tiles.Shrink），再缩到长边 400 的 JPEG；
-//   - api.go       发给 server 的请求（和页面共用会话：同一个 Cookie 罐和请求头，见 [Session]）。
+//   - api.go       发给 server 的请求（和页面共用会话：同一个 Cookie 罐和请求头，见 [Client]）。
 //
 // 纯逻辑（自然顺序、忽略规则、写完判定、重试间隔、multipart 字段顺序、封面尺寸）有单元测试；
 // integration_test.go 连真 server 跑一遍上传（设置 DOCLITE_IT_SERVER 才跑）。

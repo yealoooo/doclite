@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"runtime/debug"
 	"time"
 
 	"golang.org/x/image/draw"
@@ -22,8 +23,6 @@ const (
 	CoverLongEdge = 400
 	CoverQuality  = 75
 	MaxCoverBytes = 256 << 10
-	// CoverMemoryBudget：解码原图最多用这么多内存（按每像素 4 字节估），超过就不生成封面（超大图不撑爆壳）。
-	CoverMemoryBudget = 512 << 20
 )
 
 // 封面的情况（队列项的 cover_status、重扫结果的 cover.status）。
@@ -43,13 +42,14 @@ type Cover struct {
 // coverSlot：同时只生成一张封面（解码大图的内存峰值只有一份）。
 var coverSlot = make(chan struct{}, 1)
 
-// MakeCover 给本机图片生成封面。生成不了（格式解不了、超过内存上限、文件读不了）时 Data 为 nil，不报错：
-// 封面可以缺，不能因封面丢页。
-func MakeCover(path string) Cover {
-	coverSlot <- struct{}{}
-	defer func() { <-coverSlot }()
+var errCoverCanceled = errors.New("已取消，没有生成封面")
+
+// MakeCover 给本机图片生成封面。生成不了（格式解不了、超过内存上限、文件读不了、ctx 取消了）时 Data 为 nil，
+// 不报错：封面可以缺，不能因封面丢页。整张解码的内存按 tiles.DecodeEstimate 估，和切块共用 tiles.MemoryBudget：
+// 单张超过预算的不生成，预算不够时等别的解码做完。
+func MakeCover(ctx context.Context, path string) Cover {
 	started := time.Now()
-	data, err := makeCover(path)
+	data, err := makeCover(ctx, path)
 	ms := time.Since(started).Milliseconds()
 	if err != nil {
 		return Cover{Reason: err.Error(), MS: ms}
@@ -57,7 +57,7 @@ func MakeCover(path string) Cover {
 	return Cover{Data: data, MS: ms}
 }
 
-func makeCover(path string) (data []byte, err error) {
+func makeCover(ctx context.Context, path string) (data []byte, err error) {
 	defer func() {
 		// 编码器碰到意外时不应该把壳带崩（解码的 panic 由 imgdecode 兜住）。
 		if r := recover(); r != nil {
@@ -68,15 +68,32 @@ func makeCover(path string) (data []byte, err error) {
 	if err != nil {
 		return nil, err
 	}
-	sw, sh := src.Info.StoredSize()
-	if int64(sw)*int64(sh)*4 > CoverMemoryBudget {
-		return nil, fmt.Errorf("图片太大（%d×%d），超过生成封面的内存上限", sw, sh)
+	need := tiles.DecodeEstimate(src)
+	if need > tiles.MemoryBudget {
+		sw, sh := src.Info.StoredSize()
+		return nil, fmt.Errorf("图片太大（%d×%d），整张解码约要 %d MB，超过生成封面的内存上限 %d MB", sw, sh, need>>20,
+			tiles.MemoryBudget>>20)
 	}
-	img, err := src.Decode(context.Background())
+	select {
+	case coverSlot <- struct{}{}:
+	case <-ctx.Done():
+		return nil, errCoverCanceled
+	}
+	defer func() { <-coverSlot }()
+	if tiles.AcquireMemory(ctx, need) != nil {
+		return nil, errCoverCanceled
+	}
+	defer tiles.ReleaseMemory(need)
+	img, err := src.Decode(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return EncodeCover(img, src.Info.Orientation)
+	data, err = EncodeCover(img, src.Info.Orientation)
+	if need > 64<<20 {
+		// 整张解码占的内存尽快还给系统（壳是常驻的；img 之后不再用）。
+		debug.FreeOSMemory()
+	}
+	return data, err
 }
 
 // CoverSize 是转正后 w×h 的原图对应的封面尺寸：长边 min(400, 原图长边)，短边按比例四舍五入（至少 1）。

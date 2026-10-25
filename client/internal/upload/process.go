@@ -240,7 +240,7 @@ func (e *Engine) checkAndUpload(ctx context.Context, it *Item, folderID string, 
 	}
 
 	if *cover == nil {
-		c := MakeCover(it.LocalPath)
+		c := MakeCover(ctx, it.LocalPath)
 		*cover = &c
 		if c.Data != nil {
 			it.CoverStatus, it.CoverReason = strPtr(CoverIncluded), nil

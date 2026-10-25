@@ -17,10 +17,12 @@ import (
 
 // 原图分块（requirements 第 6 节"大图切块"）：切块本身在 internal/tiles；这里管什么时候切、切好放哪：
 //   - 只对来源记录里的快照切（和封面、原图一样）；原图先从缓存取，没有就用记录里的 URL 下载（和取原图共用一次）；
-//   - 同一个快照同时只切一次（并发请求等同一个结果）；不同的图同时最多切 2 张，另有内存预算：两张加起来的估算
-//     （tiles.Plan.Estimate，进程峰值的估算）不超过 tileMemoryBudget（1.5 GiB），单张超过它的不切（too_large）。
-//     A3 600 DPI 的无压缩彩色 TIFF（200 MB，7016×9921）估算约 1 GB、实测峰值约 950 MB，能切；
-//     更大的彩色图（例如 A2 600 DPI）超出预算，页面只显示封面；
+//   - 同一个快照同时只切一次（并发请求等同一个结果）；不同的图同时最多切 2 张，另有内存预算：同时在解码的图的估算
+//     （tiles.Plan.Estimate，进程峰值的估算；上传生成封面也算在里面）加起来不超过 tiles.MemoryBudget（1.5 GiB），
+//     单张超过它的不切（too_large）。A3 600 DPI 的无压缩彩色 TIFF（200 MB，7016×9921）估算约 1 GB、实测峰值约
+//     950 MB，能切；更大的彩色图（例如 A2 600 DPI）、16 位的彩色 TIFF 超出预算，页面只显示封面；
+//   - 等结果的请求都走了（看图的人翻到别的页），还没开始切（在下载原图、排队等名额）的就放弃，不记失败；已经开始
+//     切的切完（存进缓存）。提前切块（prepare_tiles）一直在等，不会放弃；
 //   - 一张图切了 tileTimeout 还没切完就中止（timeout）；写出的块合计超过 min(缓存上限的一半, 1 GiB) 也中止；
 //   - 切好的整套块改名进缓存（<file_id>/<snapshot_id>.tiles/），索引里算一项，参与淘汰；缓存不可用时不切（503）；
 //   - 切不了的（422：too_large、timeout、unsupported_format、unsupported、corrupt）本次运行记住，不再反复尝试；
@@ -29,19 +31,17 @@ import (
 //   - 提前切块（prepare_tiles）：同时只有一个在跑，排队的只留最新的一张。
 
 const (
-	tileSlots        = 2
-	tileMemoryBudget = 3 << 29 // 1.5 GiB
-	tileTimeout      = 120 * time.Second
-	tileOutputCap    = 1 << 30
+	tileSlots     = 2
+	tileTimeout   = 120 * time.Second
+	tileOutputCap = 1 << 30
 )
 
 type tiler struct {
 	s *Service
+	// slots：不同的图同时最多切 tileSlots 张。
+	slots chan struct{}
 
 	mu      sync.Mutex
-	cond    *sync.Cond
-	running int
-	memory  int64
 	flights map[string]*tileFlight
 	failed  map[string]*tiles.Error
 
@@ -54,12 +54,21 @@ type tileFlight struct {
 	meta *tiles.Result
 	dir  string
 	err  *httpError
+
+	// ctx 在放弃时取消（停下等原图下载、等名额）。
+	ctx    context.Context
+	cancel context.CancelFunc
+	// 以下受 tiler.mu 保护：waiters 是在等结果的请求；都走了、还没 started（开始切）时 abandoned。
+	waiters            int
+	started, abandoned bool
 }
 
+// errTileAbandoned：等结果的请求都走了，没开始切就放弃了（没人看这个结果）。
+var errTileAbandoned = &httpError{status: http.StatusServiceUnavailable, code: "abandoned", message: "没有请求在等，放弃切块"}
+
 func newTiler(s *Service) *tiler {
-	t := &tiler{s: s, flights: map[string]*tileFlight{}, failed: map[string]*tiles.Error{}}
-	t.cond = sync.NewCond(&t.mu)
-	return t
+	return &tiler{s: s, slots: make(chan struct{}, tileSlots), flights: map[string]*tileFlight{},
+		failed: map[string]*tiles.Error{}}
 }
 
 func unavailable(msg string) *httpError {
@@ -88,16 +97,25 @@ func (t *tiler) ensure(ctx context.Context, src Source) (*tiles.Result, string, 
 	}
 	t.mu.Lock()
 	f := t.flights[src.SnapshotID]
-	if f == nil {
-		f = &tileFlight{done: make(chan struct{})}
+	if f == nil || f.abandoned {
+		fctx, cancel := context.WithCancel(context.Background())
+		f = &tileFlight{done: make(chan struct{}), ctx: fctx, cancel: cancel}
 		t.flights[src.SnapshotID] = f
 		go t.run(src, f)
 	}
+	f.waiters++
 	t.mu.Unlock()
 	select {
 	case <-f.done:
 		return f.meta, f.dir, false, f.err
 	case <-ctx.Done():
+		t.mu.Lock()
+		f.waiters--
+		if f.waiters == 0 && !f.started {
+			f.abandoned = true
+			f.cancel()
+		}
+		t.mu.Unlock()
 		return nil, "", false, nil
 	}
 }
@@ -112,7 +130,7 @@ func (t *tiler) state(sid string) (status string, failed *tiles.Error) {
 	if t.s.store != nil && t.s.store.has(entryKey(sid, KindTiles)) {
 		return "ready", nil
 	}
-	if t.flights[sid] != nil {
+	if f := t.flights[sid]; f != nil && !f.abandoned {
 		return "generating", nil
 	}
 	return "", nil
@@ -173,13 +191,18 @@ func (t *tiler) run(src Source, f *tileFlight) {
 			t.s.log.Error("切块时出错", "snapshot_id", src.SnapshotID, "panic", r)
 			f.meta, f.err = nil, &httpError{status: http.StatusInternalServerError, code: "internal", message: "切块时出错"}
 		}
+		f.cancel()
 		t.mu.Lock()
-		delete(t.flights, src.SnapshotID)
+		if t.flights[src.SnapshotID] == f {
+			delete(t.flights, src.SnapshotID)
+		}
 		t.mu.Unlock()
 		close(f.done)
 	}()
-	f.meta, f.dir, f.err = t.generate(src)
-	if f.err != nil {
+	f.meta, f.dir, f.err = t.generate(src, f)
+	if f.err == errTileAbandoned {
+		t.s.log.Debug("没有请求在等，放弃切块", "snapshot_id", src.SnapshotID)
+	} else if f.err != nil {
 		t.s.log.Warn("切块失败", "file_id", src.FileID, "snapshot_id", src.SnapshotID, "err", f.err)
 	}
 }
@@ -192,15 +215,18 @@ func (t *tiler) remember(sid string, e *tiles.Error) *httpError {
 	return unprocessable(e)
 }
 
-func (t *tiler) generate(src Source) (*tiles.Result, string, *httpError) {
+func (t *tiler) generate(src Source, f *tileFlight) (*tiles.Result, string, *httpError) {
 	st := t.s.store
 	tok := st.token(src.ProjectID)
-	path, release, _, herr := t.s.original(context.Background(), src)
+	path, release, _, herr := t.s.original(f.ctx, src)
 	if herr != nil {
 		if herr.status == http.StatusUnprocessableEntity {
 			return nil, "", t.remember(src.SnapshotID, &tiles.Error{Code: imgdecode.Kind(herr.code), Message: herr.message})
 		}
 		return nil, "", herr
+	}
+	if release == nil {
+		return nil, "", errTileAbandoned // 等下载的时候放弃了（下载照常做完，原图存进缓存）
 	}
 	defer release()
 
@@ -208,12 +234,21 @@ func (t *tiler) generate(src Source) (*tiles.Result, string, *httpError) {
 	if err != nil {
 		return nil, "", t.tileError(src.SnapshotID, err)
 	}
-	if plan.Estimate > tileMemoryBudget {
+	if plan.Estimate > tiles.MemoryBudget {
 		return nil, "", t.remember(src.SnapshotID, &tiles.Error{Code: imgdecode.KindTooLarge,
-			Message: "原图太大，整张解码约要 " + mb(plan.Estimate) + "，超过客户端切块的内存上限 " + mb(tileMemoryBudget)})
+			Message: "原图太大，整张解码约要 " + mb(plan.Estimate) + "，超过客户端切块的内存上限 " + mb(tiles.MemoryBudget)})
 	}
-	t.acquire(plan.Estimate)
+	if !t.acquire(f.ctx, plan.Estimate) {
+		return nil, "", errTileAbandoned
+	}
 	defer t.releaseSlot(plan.Estimate)
+	t.mu.Lock()
+	gone := f.abandoned
+	f.started = !gone
+	t.mu.Unlock()
+	if gone {
+		return nil, "", errTileAbandoned
+	}
 
 	out, err := os.MkdirTemp(t.s.tmpDir, src.SnapshotID+".tiles.*.part")
 	if err != nil {
@@ -257,23 +292,23 @@ func (t *tiler) tileError(sid string, err error) *httpError {
 	return ioError(err)
 }
 
-// acquire 等一个切块名额和内存预算。
-func (t *tiler) acquire(bytes int64) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for t.running >= tileSlots || t.memory+bytes > tileMemoryBudget {
-		t.cond.Wait()
+// acquire 等一个切块名额和内存预算（和封面共用的 tiles.MemoryBudget）；ctx 先取消时返回 false，什么也不占。
+func (t *tiler) acquire(ctx context.Context, bytes int64) bool {
+	select {
+	case t.slots <- struct{}{}:
+	case <-ctx.Done():
+		return false
 	}
-	t.running++
-	t.memory += bytes
+	if tiles.AcquireMemory(ctx, bytes) != nil {
+		<-t.slots
+		return false
+	}
+	return true
 }
 
 func (t *tiler) releaseSlot(bytes int64) {
-	t.mu.Lock()
-	t.running--
-	t.memory -= bytes
-	t.mu.Unlock()
-	t.cond.Broadcast()
+	tiles.ReleaseMemory(bytes)
+	<-t.slots
 }
 
 // tileFile 是一块的文件（分块目录里的相对路径）。

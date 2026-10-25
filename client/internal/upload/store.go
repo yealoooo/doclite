@@ -71,6 +71,8 @@ CREATE TABLE IF NOT EXISTS upload_items (
 CREATE INDEX IF NOT EXISTS upload_items_active ON upload_items (server_url, target_folder_id, rel_key, sort_key, id)
 	WHERE status IN ('waiting', 'queued', 'uploading');
 CREATE INDEX IF NOT EXISTS upload_items_status ON upload_items (server_url, status);
+CREATE INDEX IF NOT EXISTS upload_items_retrying ON upload_items (server_url)
+	WHERE status = 'queued' AND attempts > 0 AND next_attempt_at IS NOT NULL;
 CREATE TABLE IF NOT EXISTS folder_map (
 	server_url       TEXT NOT NULL,
 	target_folder_id TEXT NOT NULL,
@@ -86,12 +88,6 @@ CREATE TABLE IF NOT EXISTS hotfolder (
 	scan_interval_secs INTEGER NOT NULL,
 	running            INTEGER NOT NULL
 );
-`
-
-// indexes 是后来加的索引（每次打开都建一遍，不升库的版本号：旧版客户端照样能打开）：等重试的项（统计用）。
-const indexes = `
-CREATE INDEX IF NOT EXISTS upload_items_retrying ON upload_items (server_url)
-	WHERE status = 'queued' AND attempts > 0 AND next_attempt_at IS NOT NULL;
 `
 
 // dbtx 是库或者一个事务（[Store.InTx]）。
@@ -147,16 +143,16 @@ func (s *Store) migrate() error {
 	if v > schemaVersion {
 		return fmt.Errorf("上传队列库是更新版本的客户端建的（版本 %d）", v)
 	}
+	// 表和索引都是 IF NOT EXISTS，每次打开都执行一遍：后来加的索引在旧库上也建上，不用升库的版本号。
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
 	if v < schemaVersion {
-		if _, err := s.db.Exec(schema); err != nil {
-			return err
-		}
 		if _, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
 			return err
 		}
 	}
-	_, err := s.db.Exec(indexes)
-	return err
+	return nil
 }
 
 // InTx 在一个事务里做 fn（tx 的方法都在这个事务里；库只有一个连接，fn 里不能再用 s）。fn 出错时回滚。
@@ -235,15 +231,6 @@ func queryItems(ctx context.Context, db dbtx, query string, args ...any) ([]*Ite
 		out = append(out, it)
 	}
 	return out, rows.Err()
-}
-
-// Get 取一项；不存在时返回 nil, nil。
-func (s *Store) Get(ctx context.Context, id int64) (*Item, error) {
-	it, err := scanItem(s.q.QueryRowContext(ctx, `SELECT `+itemCols+` FROM upload_items WHERE id = ?`, id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	return it, err
 }
 
 // FindByPath 按服务器和本地路径找一项；没有时返回 nil, nil。
@@ -423,7 +410,7 @@ func (s *Store) Failed(ctx context.Context, server string, ids []int64) ([]*Item
 		AND id IN (`+ph+`) ORDER BY id`, args...)
 }
 
-// Expedite 把等"连不上服务器"类错误重试的项提前到现在（server 恢复后不用等满退避时间）。返回改了的项。
+// Expedite 把等"连不上服务器"类错误重试的项提前到现在（server 恢复后不用等满退避时间），一个事务。返回改了的项。
 func (s *Store) Expedite(ctx context.Context, server string, codes []string) ([]*Item, error) {
 	ph := strings.TrimSuffix(strings.Repeat("?, ", len(codes)), ", ")
 	now := nowMS()
@@ -431,16 +418,24 @@ func (s *Store) Expedite(ctx context.Context, server string, codes []string) ([]
 	for _, c := range codes {
 		args = append(args, c)
 	}
-	items, err := queryItems(ctx, s.q, `SELECT `+itemCols+` FROM upload_items WHERE server_url = ? AND status = 'queued'
-		AND next_attempt_at > ? AND error_code IN (`+ph+`)`, args...)
-	if err != nil || len(items) == 0 {
-		return nil, err
-	}
-	for _, it := range items {
-		it.NextAttemptAt = int64Ptr(now)
-		if err := s.Update(ctx, it); err != nil {
-			return nil, err
+	var items []*Item
+	err := s.InTx(ctx, func(tx *Store) error {
+		var err error
+		items, err = queryItems(ctx, tx.q, `SELECT `+itemCols+` FROM upload_items WHERE server_url = ? AND status = 'queued'
+			AND next_attempt_at > ? AND error_code IN (`+ph+`)`, args...)
+		if err != nil {
+			return err
 		}
+		for _, it := range items {
+			it.NextAttemptAt = int64Ptr(now)
+			if err := tx.Update(ctx, it); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return items, nil
 }
@@ -513,10 +508,16 @@ func (s *Store) PurgeFinished(ctx context.Context, finishedBefore int64) ([]Purg
 	if len(ids) == 0 {
 		return nil, nil
 	}
+	// 读完到删之间这一行可能被重新加入了队列（文件又出现了）：只删仍然是结束状态的。
+	var deleted []Purged
 	err = s.InTx(ctx, func(tx *Store) error {
-		for _, id := range ids {
-			if err := tx.Delete(ctx, id); err != nil {
+		for i, id := range ids {
+			res, err := tx.q.ExecContext(ctx, `DELETE FROM upload_items WHERE id = ? AND status IN ('done', 'duplicate')`, id)
+			if err != nil {
 				return err
+			}
+			if n, _ := res.RowsAffected(); n > 0 {
+				deleted = append(deleted, out[i])
 			}
 		}
 		return nil
@@ -524,7 +525,7 @@ func (s *Store) PurgeFinished(ctx context.Context, finishedBefore int64) ([]Purg
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	return deleted, nil
 }
 
 // FolderOf 查子路径映射到的 folder_id；没有时返回空串。

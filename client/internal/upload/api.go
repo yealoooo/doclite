@@ -16,19 +16,6 @@ import (
 	"doclite/client/internal/proxy"
 )
 
-// Session 是和页面共用的会话（proxy.Proxy 实现）：同一个服务器、同一个 Cookie 罐、同一套请求头
-// （X-Client-Type、X-Client-Version）。requirements 第 6 节：热文件夹、缓存、页面共用会话。
-type Session interface {
-	// Server 是已配置的服务器（origin）；没配置时为空。
-	Server() string
-	// HasSession：罐里有没有（没过期的）会话 Cookie。
-	HasSession() bool
-	// Attach 给请求加上壳的请求头和会话 Cookie，返回罐所属的服务器。还没配置服务器时报错。
-	Attach(req *http.Request) (string, error)
-	// Absorb 记下响应里的 Set-Cookie（server 是 Attach 返回的服务器）。
-	Absorb(server string, resp *http.Response)
-}
-
 // APIError 是 server 返回的错误（错误体 `{code, message, details?}`）。
 type APIError struct {
 	Status  int
@@ -54,15 +41,16 @@ var errServerChanged = errors.New("服务器地址换了")
 // errNoServer：还没配置服务器。
 var errNoServer = errors.New("还没有配置服务器地址")
 
-// Client 发上传队列、热文件夹、重扫要用的请求。
+// Client 发上传队列、热文件夹、重扫要用的请求。sess 是和页面共用的会话（requirements 第 6 节：热文件夹、缓存、
+// 页面共用会话）：同一个服务器、同一个 Cookie 罐、同一套请求头（X-Client-Type、X-Client-Version）。
 type Client struct {
-	sess Session
+	sess *proxy.Proxy
 	http *http.Client
 }
 
 // NewClient 建客户端。上传原图可能要很久，不设总时限：等响应头最多 10 分钟（server 收完还要传 S3），发送时
 // 60 秒没有进展算中断（见 [Client.Upload]）。
-func NewClient(sess Session) *Client {
+func NewClient(sess *proxy.Proxy) *Client {
 	tr := &http.Transport{
 		Proxy:                 nil, // 内网直连 server，不走系统代理（和会话代理一样）
 		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,

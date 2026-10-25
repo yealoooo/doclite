@@ -5,6 +5,8 @@ package upload
 import (
 	"errors"
 	"io/fs"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"golang.org/x/sys/windows"
@@ -21,7 +23,7 @@ func hiddenOrSystem(info fs.FileInfo) bool {
 // canOpenExclusive：能不能以独占方式打开（不和任何人共享读写删）。扫描软件还在写的文件打不开（共享冲突）。
 // 只有共享冲突、锁冲突算"不能"；别的错误（文件不见了、没权限）交给后面的步骤处理，这里算能。
 func canOpenExclusive(path string) bool {
-	p, err := windows.UTF16PtrFromString(path)
+	p, err := windows.UTF16PtrFromString(longPath(path))
 	if err != nil {
 		return true
 	}
@@ -31,4 +33,18 @@ func canOpenExclusive(path string) bool {
 	}
 	windows.CloseHandle(h)
 	return true
+}
+
+// longPath：长路径（和 os 包一样从 248 个字符起）加上扩展长度前缀 \\?\（网络路径 \\server\share 换成
+// \\?\UNC\server\share），直接调 CreateFile 才打得开（os 包自己会加，这里直接调系统接口要自己加）。
+// 短路径、相对路径、已经带前缀的原样返回。
+func longPath(path string) string {
+	if len(path) < 248 || !filepath.IsAbs(path) || strings.HasPrefix(path, `\\?\`) {
+		return path
+	}
+	p := filepath.Clean(path)
+	if strings.HasPrefix(p, `\\`) {
+		return `\\?\UNC\` + p[2:]
+	}
+	return `\\?\` + p
 }

@@ -2,9 +2,13 @@ package upload
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -249,5 +253,67 @@ func TestCheckEncoding(t *testing.T) {
 		case c.want != "" && (r == nil || r.kind != resFailed || r.code != ErrCodeInvalidImage || r.message != c.want):
 			t.Errorf("%s 应该拒绝：%+v", c.path, r)
 		}
+	}
+}
+
+type nopEvents struct{}
+
+func (nopEvents) ItemChanged(*Item)               {}
+func (nopEvents) ItemRemoved(int64)               {}
+func (nopEvents) Progress(int64, int64, int64)    {}
+func (nopEvents) StateChanged(QueueStatus)        {}
+func (nopEvents) AuthRequired()                   {}
+func (nopEvents) UpgradeRequired(json.RawMessage) {}
+func (nopEvents) HotfolderChanged(HotStatus)      {}
+
+// 热文件夹：正在上传的文件又被覆盖了，扫描时不记成已入队（不然传完以后再也不会重传）；其余的照常记下。
+func TestHotScanSkipsUploading(t *testing.T) {
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	e := NewEngine(store, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), nopEvents{})
+	e.cancel() // 不调度、不发统计（统计要问会话代理）
+	ctx := context.Background()
+	const server, target = "http://127.0.0.1:1", "0190a5b2-0000-7000-8000-000000000001"
+	dir := t.TempDir()
+	busy := LocalFile{Path: filepath.Join(dir, "a.jpg"), Size: 10, MtimeNS: 1}
+	idle := LocalFile{Path: filepath.Join(dir, "b.jpg"), Size: 10, MtimeNS: 1}
+	if _, _, err := e.enqueue(ctx, server, SourceHotfolder, []LocalFile{busy}, target); err != nil {
+		t.Fatal(err)
+	}
+	it, err := store.FindByPath(ctx, server, busy.Path)
+	if err != nil || it == nil {
+		t.Fatal(it, err)
+	}
+	it.Status = StatusUploading
+	if err := store.Update(ctx, it); err != nil {
+		t.Fatal(err)
+	}
+
+	sc := &hotScan{h: &HotFolder{e: e, log: e.log}, cfg: HotConfig{ServerURL: server, TargetFolderID: target},
+		known: &knownPaths{m: map[string]fileSig{}}}
+	busy.Size = 20 // 上传中被覆盖了
+	if n := sc.enqueue(ctx, []LocalFile{busy, idle}); n != 1 {
+		t.Fatalf("加入了 %d 个，应为 1 个（b.jpg）", n)
+	}
+	if sc.known.same(PathKey(busy.Path), fileSig{size: 20, mtime: 1}) {
+		t.Error("正在上传的文件不应记成已入队")
+	}
+	if !sc.known.same(PathKey(idle.Path), fileSig{size: 10, mtime: 1}) {
+		t.Error("新加入的文件应记成已入队")
+	}
+
+	// 传完以后下次扫描：大小变了，重新入队。
+	it.Status = StatusDone
+	if err := store.Update(ctx, it); err != nil {
+		t.Fatal(err)
+	}
+	if n := sc.enqueue(ctx, []LocalFile{busy}); n != 1 {
+		t.Fatalf("传完以后加入了 %d 个，应为 1 个", n)
+	}
+	if !sc.known.same(PathKey(busy.Path), fileSig{size: 20, mtime: 1}) {
+		t.Error("重新入队后应记成已入队")
 	}
 }

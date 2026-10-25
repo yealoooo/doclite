@@ -2,6 +2,7 @@ package upload
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/jpeg"
 	"path/filepath"
@@ -75,7 +76,7 @@ func TestCoverSamples(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.file, func(t *testing.T) {
-			cv := MakeCover(filepath.Join(samplesDir, c.file))
+			cv := MakeCover(context.Background(), filepath.Join(samplesDir, c.file))
 			if !c.ok {
 				if cv.Data != nil || cv.Reason == "" {
 					t.Fatalf("应该生成不了并给出原因：%d 字节，%q", len(cv.Data), cv.Reason)

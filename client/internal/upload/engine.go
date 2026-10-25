@@ -86,16 +86,34 @@ func (e *Engine) Start() {
 	e.mu.Unlock()
 	e.wg.Add(2)
 	go e.loop()
-	go e.purge()
+	go e.purgeLoop()
 	e.markDirty()
 }
 
 // purgeAfter：已入库、内容重复的项结束这么久以后，本地文件也不在了，就从库里删掉（库只增不减）。
-const purgeAfter = 30 * 24 * time.Hour
+// purgeEvery：多久清理一次（壳常驻托盘，可能几周不退出）。
+const (
+	purgeAfter = 30 * 24 * time.Hour
+	purgeEvery = 24 * time.Hour
+)
 
-// purge 在启动时删掉早就结束、本地文件已经不在了的项。
-func (e *Engine) purge() {
+// purgeLoop 启动时清理一次，之后每 purgeEvery 一次。
+func (e *Engine) purgeLoop() {
 	defer e.wg.Done()
+	t := time.NewTicker(purgeEvery)
+	defer t.Stop()
+	for {
+		e.purge()
+		select {
+		case <-e.ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// purge 删掉早就结束、本地文件已经不在了的项。
+func (e *Engine) purge() {
 	purged, err := e.store.PurgeFinished(e.ctx, nowMS()-purgeAfter.Milliseconds())
 	if err != nil {
 		if e.ctx.Err() == nil {
@@ -402,19 +420,32 @@ func (e *Engine) RetryFailed(ctx context.Context, ids []int64) (int, error) {
 	if server == "" {
 		return 0, nil
 	}
-	items, err := e.store.Failed(ctx, server, ids)
+	var items []*Item
+	err := e.store.InTx(ctx, func(tx *Store) error {
+		var err error
+		if items, err = tx.Failed(ctx, server, ids); err != nil {
+			return err
+		}
+		for _, it := range items {
+			status := StatusQueued
+			if it.Source == SourceHotfolder {
+				status = StatusWaiting
+			}
+			resetResult(it, status)
+			if err := tx.Update(ctx, it); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return 0, err
 	}
 	for _, it := range items {
-		status := StatusQueued
-		if it.Source == SourceHotfolder {
-			status = StatusWaiting
-		}
-		resetResult(it, status)
-		e.save(it)
+		e.ev.ItemChanged(it)
 	}
 	if len(items) > 0 {
+		e.markDirty()
 		e.Wake()
 	}
 	return len(items), nil
@@ -453,6 +484,9 @@ type Skipped struct {
 	Reason string `json:"reason"`
 }
 
+// reasonUploading 是 upsert 因为正在上传没加入的原因（热文件夹不把这时的大小和修改时间记成已入队，见 hotScan.enqueue）。
+const reasonUploading = "正在上传"
+
 // upsert 把一个本机文件放进队列（在 tx 里）：同一个服务器下一个本地路径只有一行。没有就新加；大小和修改时间没变
 // 不重传；变了当新内容（重置这一行，server 上按同名自动改名）。返回加入（或重新开始）的项；没加入时 reason 是原因。
 func upsert(ctx context.Context, tx *Store, server, source string, f LocalFile, target string) (*Item, string, error) {
@@ -473,7 +507,7 @@ func upsert(ctx context.Context, tx *Store, server, source string, f LocalFile, 
 	switch {
 	case old.Status == StatusUploading:
 		// 正在传：传的时候会核对大小和修改时间，变了自己回到等待。
-		return nil, "正在上传", nil
+		return nil, reasonUploading, nil
 	case unchanged && source == SourceHotfolder:
 		return nil, "没有变化", nil
 	case unchanged && (old.Status == StatusWaiting || old.Status == StatusQueued):

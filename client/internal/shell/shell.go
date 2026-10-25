@@ -104,7 +104,6 @@ func Run(cfg Config) (int, error) {
 	case os.Getenv("FRONTEND_DEVSERVER_URL") != "":
 		s.log.Warn("正式构建不认 FRONTEND_DEVSERVER_URL，只用嵌入的界面")
 	}
-	removeOldWebCache(cfg.DataDir, s.log)
 	s.confirmServer, s.openDir, s.openURL = s.confirmServerDialog, s.openDirInFileManager, s.openURLInBrowser
 	s.pickUpload, s.pickHotDir, s.pickRescan = s.pickForUpload, s.pickHotDirDialog, s.pickRescanDialog
 	if cfg.Smoke != nil {
