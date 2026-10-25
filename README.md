@@ -122,7 +122,7 @@ API 测试连远程的数据库和 S3，一个请求要几次网络往返，全�
 ```sh
 cd server && gofmt -l . && go vet ./... && go test ./internal/...   # 格式、vet、单元测试（不连远程，几秒）
 cd server && go test -run 'Review|Rescan' ./apitest/               # 改到的模块的 API 测试（写法见下面）
-cd server && go test -timeout 60m ./...                            # 定版本前：全部（API 测试 81 个 + 单元测试）
+cd server && go test -timeout 60m ./...                            # 定版本前：全部（API 测试 84 个 + 单元测试）
 cd client && gofmt -l . && go vet ./... && GOOS=windows go vet ./... && go test ./...   # 客户端的纯逻辑（Mac 上要 cgo，Wails 需要）
 cd web && npm run build                                            # vue-tsc 类型检查 + 构建
 ```

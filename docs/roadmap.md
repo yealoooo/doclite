@@ -423,3 +423,50 @@
 - **M10-9：** 清单 STOR-07 改成"空存储没有迁移到…"（界面本来就不显示，和 STOR-04 一致；默认存储的禁用原因在 STOR-01）。
 - **M10-10：** `lib/title-tips.ts` 在 document 上接管所有 `title`，换成和 Tooltip 组件一样的气泡（300 ms，原生提示慢、样式不统一、
   在 WebView 里有时不出现，ASSIGN-02、CAT-02/11/20、DASH-02、RT-01 因此没验到）。各处照常写 `title`。
+
+## M11 第二轮 review 后的优化（用户 2026-10-25）
+
+四路只读 review（server、web、client、设计稿对照）：没有会弄坏数据的 bug，主要是远程库往返、事件引起的重取、重复代码。
+
+### [x] M11-1 server（commit 8faea0c）
+- **结果：**
+  - 往返次数：批量移动 500 个文件从约 1000 次降到 2 次（撞名的 500 改成 409）；批量锁定只给第一条查原因；鉴权在 findSession 一起带出菜单码，每个请求少一次；上传入库约 21 次降到 13 次，`files:check` 3 次降到 2 次；重新归档去掉重复读，删掉 applyPages；审核、导出、条目详情、到期清理合并查询。
+  - 加缓存：存储配置行、项目编码放进进程内缓存。
+  - 去重复：授权条件去重；新包 `platform/pathcode`；删死代码；重复的 API 测试合并（现在 84 个）。
+  - 迁移 0007：修改中条目的部分索引；`audit_logs.created_at` 的 BRIN 索引（审计按时间筛选去掉二分查找）。
+  - 全套测试 7 分 12 秒通过。
+- **新的公用函数：** `auth.ProjectAccessSQL`、`auth.IsAdminSQL`；`platform/pathcode`；file 的 `FolderPathSQL`、`FolderInfos`、`GetLiveFolder`、`LockProjectFiles`、`QueueLogs`、`HumanBytes`；`folder.QueueReviewStatus`；`storage.ForgetCache`。第一次用 `pgx.Batch`（同一事务里按顺序一次发出，锁的顺序不变）。
+- **须知：** 存储配置只在本进程写操作提交后作废缓存，直接改库后要重启 server。
+- **遗留：**
+  - `UpdateItem` 仍在事务外读一次条目；单文件移动仍是两次查询；上传事务里的存储行锁、内容锁、复查还能合成一个 batch。
+  - 批量移动挑名字时，Go 的 ToLower 和 PG 的 lower() 在少数字符上可能不一致，撞上了由唯一索引兜底返回 409。
+
+### [x] M11-2 web（commit 8124694）
+- **结果：**
+  - 请求放大：待重扫只给看得见的行取封面，事件合批；文件夹树改成 refreshShown（收起的节点留着、记为过期）；归类页的 placements 只在涉及来源文件夹时才查；`useEventBatch` 的 burstMaxWaitMs 现在真正生效。
+  - title-tips 修好"移开后写回旧提示"。
+  - 统一：业务页改用 PageHeader（归类用 `dense`）；新组件 ErrorState、ViewModeToggle；新常量 USER_STATUS、PROJECT_STATUS；新 token `shadow-float`、`shadow-overlay`；`errorText` 助手。
+  - 清理：删掉浏览器专用的下载分支、无用 CSS、过时注释。
+- **遗留：** 归类页"n 待审"在文件从修改中的来源文件夹移走后，要等下一次刷新才更新。截图脚本没跑（没有测试库）。
+
+### [x] M11-3 client（commit edcf6fe）
+- **结果：**
+  - 热文件夹：上传中被覆盖的文件不再漏传（新测试）；Start/Pause/Set 加操作锁。
+  - 内存：TIFF 按位深估算内存，封面和切块共用 1.5 GiB 预算（`tiles/memory.go`）。
+  - 缓存：Windows 上不再误删同路径的新缓存；索引写盘间隔改成 20 秒和 5 分钟。
+  - 其他：没人等的切块放弃；封面响应退出；批量重试、提前上传各用一个事务；Windows 长路径加 `\\?\`；每天清理一次旧队列项。
+- **遗留：**
+  - 16 位彩色、A2 600dpi 这类超大图超出预算，不生成封面和切块，以后要做需要流式解码。
+  - Windows 上逐个子目录监控可能导致改不了上层目录的名字，要在 Windows 上实测。
+  - 批量入队逐项发事件，要 web 配合。
+  - 桥字段命名只记录：三种 running，`file_count` 实际是条目数。
+
+### 记录（用户 2026-10-25 定）
+- **接口字段名不统一，先不改**（以后接口大调整时一起改）：
+  - `files:check` 的 `sha256`/`size` 和其他地方的 `content_sha256`/`file_size`；
+  - `LastReject.reasons` 和 `reject_reasons`；
+  - `ProjectReviewer.id` 和 `reviewer_id`；
+  - `subfolder_count`/`folder_count`/`child_count`；
+  - license 的 `imported_by` 实际是显示名；
+  - `not_ready_count` 和 `ready_item_count`。
+- **要做（M11-4）：** 文件夹内调页序、文件名搜索和排序、扫描参数建议、存储卡片的用量。
