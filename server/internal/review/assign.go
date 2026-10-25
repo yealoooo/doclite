@@ -45,12 +45,12 @@ func (s *Service) Assign(ctx context.Context, userID, projectID uuid.UUID, in As
 	if !byFolder && (len(in.FileIDs) == 0 || len(in.FileIDs) > httpx.MaxBatchIDs) {
 		return nil, httpx.Invalid("按选中的文件分配一次 1–%d 个", httpx.MaxBatchIDs)
 	}
-	reviewer, err := s.eligibility(ctx, projectID, *in.ReviewerID)
-	if err != nil {
-		return nil, err
-	}
 	out := &AssignResult{FileIDs: []uuid.UUID{}}
-	err = s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
+	err := s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
+		reviewer, err := eligibility(ctx, tx, projectID, *in.ReviewerID)
+		if err != nil {
+			return err
+		}
 		if err := project.LockFileTree(ctx, tx, projectID, false); err != nil {
 			return err
 		}
@@ -58,7 +58,6 @@ func (s *Service) Assign(ctx context.Context, userID, projectID uuid.UUID, in As
 		var candidates []uuid.UUID
 		var notUnassigned int
 		if byFolder {
-			var err error
 			if scope, err = getScopeFolder(ctx, tx, projectID, in.FolderID); err != nil {
 				return err
 			}
@@ -110,13 +109,14 @@ func (s *Service) Assign(ctx context.Context, userID, projectID uuid.UUID, in As
 			logs[i] = file.Log{ProjectID: projectID, FileID: f.FileID, Action: file.ActionAssignReview, OperatorID: userID,
 				Detail: withFile(f, map[string]any{"reviewer": reviewer.DisplayName, "reviewer_id": reviewer.ID})}
 		}
-		if err := insertOpen(ctx, tx, projectID, rows); err != nil {
+		// 分配行、文件的审核状态、日志一次往返写。
+		b := &pgx.Batch{}
+		b.Queue(insertOpenSQL, insertOpenArgs(projectID, rows)...)
+		s.folders.QueueReviewStatus(b, fileIDs, folder.ReviewPending)
+		if err := file.QueueLogs(b, logs...); err != nil {
 			return err
 		}
-		if err := s.folders.SetReviewStatus(ctx, tx, fileIDs, folder.ReviewPending); err != nil {
-			return err
-		}
-		if err := file.WriteLogs(ctx, tx, logs...); err != nil {
+		if err := tx.SendBatch(ctx, b).Close(); err != nil {
 			return err
 		}
 		out.Assigned, out.FileIDs = len(picked), fileIDs
@@ -168,19 +168,19 @@ func (s *Service) ReassignOne(ctx context.Context, userID, projectID, assignment
 	if reviewerID == nil {
 		return nil, httpx.Invalid("缺少 reviewer_id")
 	}
-	to, err := s.eligibility(ctx, projectID, *reviewerID)
-	if err != nil {
-		return nil, err
-	}
-	fileID, _, ok, err := assignmentFile(ctx, s.pool, assignmentID)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, errAssignmentNotFound
-	}
 	var out *ReassignOneResult
-	err = s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
+	err := s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
+		to, err := eligibility(ctx, tx, projectID, *reviewerID)
+		if err != nil {
+			return err
+		}
+		fileID, _, ok, err := assignmentFile(ctx, tx, assignmentID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errAssignmentNotFound
+		}
 		locked, err := s.lockFiles(ctx, tx, projectID, []uuid.UUID{fileID})
 		if err != nil {
 			return err
@@ -231,13 +231,14 @@ func (s *Service) reassign(ctx context.Context, tx pgx.Tx, projectID, userID uui
 			Detail: withFile(f, map[string]any{"from": f.Open.ReviewerName, "from_id": f.Open.ReviewerID,
 				"to": to.DisplayName, "to_id": to.ID})}
 	}
-	if err := cancelOpen(ctx, tx, old); err != nil {
+	// 先取消旧行再插新行（部分唯一索引），和日志一次往返写（批量里按顺序执行）。
+	b := &pgx.Batch{}
+	b.Queue(cancelOpenSQL, old)
+	b.Queue(insertOpenSQL, insertOpenArgs(projectID, rows)...)
+	if err := file.QueueLogs(b, logs...); err != nil {
 		return err
 	}
-	if err := insertOpen(ctx, tx, projectID, rows); err != nil {
-		return err
-	}
-	return file.WriteLogs(ctx, tx, logs...)
+	return tx.SendBatch(ctx, b).Close()
 }
 
 // ReassignManyInput 是批量改派的请求：file_ids（1–500 个），或 from_reviewer_id + folder_id（某人在某子树下的全部待审，
@@ -273,19 +274,18 @@ func (s *Service) ReassignMany(ctx context.Context, userID, projectID uuid.UUID,
 	case bySubtree && *in.FromReviewerID == *in.ToReviewerID:
 		return nil, httpx.Invalid("原审核人和新审核人是同一个人")
 	}
-	to, err := s.eligibility(ctx, projectID, *in.ToReviewerID)
-	if err != nil {
-		return nil, err
-	}
 	out := &ReassignResult{FileIDs: []uuid.UUID{}}
-	err = s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
+	err := s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
+		to, err := eligibility(ctx, tx, projectID, *in.ToReviewerID)
+		if err != nil {
+			return err
+		}
 		if err := project.LockFileTree(ctx, tx, projectID, false); err != nil {
 			return err
 		}
 		var scope *scopeFolder
 		var candidates []uuid.UUID
 		if bySubtree {
-			var err error
 			if scope, err = getScopeFolder(ctx, tx, projectID, in.FolderID); err != nil {
 				return err
 			}

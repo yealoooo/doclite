@@ -24,16 +24,12 @@ import (
 func (s *Service) Cancel(ctx context.Context, userID, id uuid.UUID) (*Task, error) {
 	var interrupt *uuid.UUID
 	err := s.events.InTx(ctx, s.pool, func(tx pgx.Tx, out *events.Pending) error {
-		pid, err := taskProject(ctx, tx, id)
+		pid, taskStatus, jobStatus, jobID, err := lockTaskForCancel(ctx, tx, id)
 		if err != nil {
 			return err
 		}
 		if pid == uuid.Nil {
 			return errTaskNotFound
-		}
-		taskStatus, jobStatus, jobID, err := lockTaskForCancel(ctx, tx, id)
-		if err != nil {
-			return err
 		}
 		switch {
 		case taskStatus == StatusDone || taskStatus == StatusFailed || taskStatus == StatusCanceled:

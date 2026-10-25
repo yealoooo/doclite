@@ -61,19 +61,29 @@ func coverError(format string, args ...any) *httpx.Error {
 
 func tooLarge(max int64) *httpx.Error {
 	return httpx.NewError(http.StatusRequestEntityTooLarge, httpx.CodePayloadTooLarge,
-		fmt.Sprintf("文件太大：上限 %s", humanBytes(max)))
+		fmt.Sprintf("文件太大：上限 %s", HumanBytes(max)))
 }
 
-func humanBytes(n int64) string {
-	switch {
-	case n >= 1<<30 && n%(1<<30) == 0:
-		return fmt.Sprintf("%d GiB", n>>30)
-	case n >= 1<<20 && n%(1<<20) == 0:
-		return fmt.Sprintf("%d MiB", n>>20)
-	case n >= 1<<10 && n%(1<<10) == 0:
-		return fmt.Sprintf("%d KiB", n>>10)
+// HumanBytes 是给人看的大小（上传上限、导出的临时盘提示）：1024 进位，单位 KiB、MiB、GiB、TiB；整倍数不带小数
+// （"2 GiB"），否则不到 10 两位小数、其余一位（"1.53 GiB"）；不到 1 KiB 是"n 字节"。
+func HumanBytes(n int64) string {
+	units := []string{"KiB", "MiB", "GiB", "TiB"}
+	if n < 1024 {
+		return fmt.Sprintf("%d 字节", n)
 	}
-	return fmt.Sprintf("%d 字节", n)
+	u := 0
+	for u < len(units)-1 && n >= 1<<(10*(u+2)) {
+		u++
+	}
+	unit := int64(1) << (10 * (u + 1))
+	if n%unit == 0 {
+		return fmt.Sprintf("%d %s", n/unit, units[u])
+	}
+	v := float64(n) / float64(unit)
+	if v < 10 {
+		return fmt.Sprintf("%.2f %s", v, units[u])
+	}
+	return fmt.Sprintf("%.1f %s", v, units[u])
 }
 
 // Upload 是收完、检查过文件头和封面的一次上传：原图在临时文件里，用完调 Close 删掉。
@@ -186,7 +196,7 @@ func (s *Service) Receive(r *http.Request) (*Upload, error) {
 				return nil, bodyError(err)
 			}
 			if len(data) > MaxCoverBytes {
-				return nil, coverError("超过 %s", humanBytes(MaxCoverBytes))
+				return nil, coverError("超过 %s", HumanBytes(MaxCoverBytes))
 			}
 			u.Cover = data
 		case "file":

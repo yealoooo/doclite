@@ -129,17 +129,7 @@ func (s *Service) List(ctx context.Context, f Filter) (*LogList, error) {
 	if f.From != nil && f.To != nil && !f.From.Before(*f.To) {
 		return out, nil
 	}
-	var b idRange
-	if f.From != nil || f.To != nil {
-		var err error
-		if b, err = timeToIDs(ctx, s.pool, f.From, f.To); err != nil {
-			return nil, err
-		}
-		if b.empty {
-			return out, nil
-		}
-	}
-	rows, err := listLogs(ctx, s.pool, f, b)
+	rows, err := listLogs(ctx, s.pool, f)
 	if err != nil {
 		return nil, err
 	}

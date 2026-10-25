@@ -91,8 +91,8 @@ type Folders interface {
 	ClaimSlot(ctx context.Context, tx pgx.Tx, projectID, folderID uuid.UUID, name string) (Slot, error)
 	// CheckUpload 是传 S3 之前（不加锁）的检查：文件夹已封存 409 folder_archived（ClaimSlot 锁住文件夹行后还会查）。
 	CheckUpload(ctx context.Context, folderID uuid.UUID) error
-	// AddFile 按 slot 插入 folder_files（待分配），返回 folder_files 的 id。
-	AddFile(ctx context.Context, tx pgx.Tx, slot Slot, fileID, createdBy uuid.UUID) (uuid.UUID, error)
+	// AddFile 按 slot 插入 folder_files（待分配），和文件日志 logs 一次往返写入，返回 folder_files 的 id。
+	AddFile(ctx context.Context, tx pgx.Tx, slot Slot, fileID, createdBy uuid.UUID, logs ...Log) (uuid.UUID, error)
 	// PreviewName 是现在上传到这个文件夹会得到的名字（不加锁，预检用）。
 	PreviewName(ctx context.Context, folderID uuid.UUID, name string) (string, error)
 }
@@ -112,6 +112,3 @@ func NewService(pool *pgxpool.Pool, bus *events.Bus, authSvc *auth.Service, stor
 	folders Folders, opts Options) *Service {
 	return &Service{pool: pool, events: bus, auth: authSvc, storage: storageSvc, folders: folders, opts: opts.withDefaults()}
 }
-
-// Options 是生效的配置（补了默认值）。
-func (s *Service) Options() Options { return s.opts }

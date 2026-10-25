@@ -57,16 +57,12 @@ type Item struct {
 
 // readItem 读未删除条目的详情；没有 404。
 func readItem(ctx context.Context, q db.Querier, st *settings, id uuid.UUID) (*Item, error) {
-	r, err := getItem(ctx, q, id)
+	r, sum, err := itemDetail(ctx, q, id)
 	if err != nil {
 		return nil, err
 	}
 	if r == nil {
 		return nil, errItemNotFound
-	}
-	sum, err := itemSummary(ctx, q, id)
-	if err != nil {
-		return nil, err
 	}
 	ch, err := categoryChain(ctx, q, r.ProjectID, r.CategoryPath)
 	if err != nil {
@@ -401,21 +397,13 @@ func (s *Service) UpdateItem(ctx context.Context, operatorID, id uuid.UUID, in I
 }
 
 // DeleteItem 撤销归档：软删除条目，页一并移出（每页一条 unlink，带 item_deleted），来源文件夹回到未归档。
-// 只有未锁定的可以（封存、修改中都行）。rowVersion 为 nil 时不核对版本。
-func (s *Service) DeleteItem(ctx context.Context, operatorID, id uuid.UUID, rowVersion *int) error {
+// 只有未锁定的可以（封存、修改中都行）。rowVersion 为 nil 时不核对版本。projectID 是条目所在的项目（中间件已经查过）。
+func (s *Service) DeleteItem(ctx context.Context, operatorID, projectID, id uuid.UUID, rowVersion *int) error {
 	if rowVersion != nil {
 		if err := checkRowVersion(*rowVersion); err != nil {
 			return err
 		}
 	}
-	cur, err := getItem(ctx, s.pool, id)
-	if err != nil {
-		return err
-	}
-	if cur == nil {
-		return errItemNotFound
-	}
-	projectID := cur.ProjectID
 	return s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
 		if err := project.LockCatalogTree(ctx, tx, projectID, false); err != nil {
 			return err
@@ -434,7 +422,7 @@ func (s *Service) DeleteItem(ctx context.Context, operatorID, id uuid.UUID, rowV
 			return staleVersion(r.RowVersion)
 		}
 		// 一并移出（不变量：已删除的条目没有挂接行）；没有页时不拿文件树锁。
-		pages, err := applyPages(ctx, tx, projectID, operatorID, r, nil, pageOpts{itemDeleted: true, lockFiles: true})
+		pages, err := removeAllPages(ctx, tx, projectID, operatorID, r)
 		if err != nil {
 			return err
 		}

@@ -3,13 +3,13 @@ package file
 import (
 	"context"
 	"encoding/json"
-	"slices"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"doclite/server/internal/platform/db"
+	"doclite/server/internal/platform/xslices"
 )
 
 // 给其他模块在自己的事务里调用的函数（文件夹的整理、以后的审核、归类、导出）。
@@ -68,6 +68,33 @@ func writeLogs(ctx context.Context, q db.Querier, logs []Log) error {
 	if len(logs) == 0 {
 		return nil
 	}
+	args, err := logArgs(logs)
+	if err != nil {
+		return err
+	}
+	_, err = q.Exec(ctx, insertLogsSQL, args...)
+	return err
+}
+
+// QueueLogs 把写文件日志排进调用方的批量（和别的写入一次往返发出去；条数少，不分批）。
+func QueueLogs(b *pgx.Batch, logs ...Log) error {
+	if len(logs) == 0 {
+		return nil
+	}
+	args, err := logArgs(logs)
+	if err != nil {
+		return err
+	}
+	b.Queue(insertLogsSQL, args...)
+	return nil
+}
+
+const insertLogsSQL = `INSERT INTO file_logs (project_id, file_id, action, operator_id, detail)
+SELECT t.pid, t.fid, t.action, t.op, t.detail::jsonb
+FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::uuid[], $5::text[]) WITH ORDINALITY AS t(pid, fid, action, op, detail, i)
+ORDER BY t.i`
+
+func logArgs(logs []Log) ([]any, error) {
 	pids := make([]uuid.UUID, len(logs))
 	fids := make([]uuid.UUID, len(logs))
 	actions := make([]string, len(logs))
@@ -81,15 +108,11 @@ func writeLogs(ctx context.Context, q db.Querier, logs []Log) error {
 		}
 		b, err := json.Marshal(d)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		details[i] = string(b)
 	}
-	_, err := q.Exec(ctx, `INSERT INTO file_logs (project_id, file_id, action, operator_id, detail)
-SELECT t.pid, t.fid, t.action, t.op, t.detail::jsonb
-FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::uuid[], $5::text[]) WITH ORDINALITY AS t(pid, fid, action, op, detail, i)
-ORDER BY t.i`, pids, fids, actions, ops, details)
-	return err
+	return []any{pids, fids, actions, ops, details}, nil
 }
 
 // LockFiles 在调用方的事务里按 id 升序锁住这些文件的 files 行（FOR NO KEY UPDATE，不挡外键检查）。
@@ -100,15 +123,23 @@ func LockFiles(ctx context.Context, q db.Querier, ids []uuid.UUID) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	sorted := slices.Clone(ids)
-	slices.SortFunc(sorted, func(a, b uuid.UUID) int { return slices.Compare(a[:], b[:]) })
-	sorted = slices.Compact(sorted)
-	rows, err := q.Query(ctx, `SELECT id FROM files WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, sorted)
+	rows, err := q.Query(ctx, `SELECT id FROM files WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, xslices.SortedIDs(ids))
 	if err != nil {
 		return err
 	}
 	rows.Close()
 	return rows.Err()
+}
+
+// LockProjectFiles 同 [LockFiles]，只锁在项目 projectID 里的文件（folder_files.project_id，含已删除的），一条语句；
+// 返回锁住的 id（升序）。
+func LockProjectFiles(ctx context.Context, q db.Querier, projectID uuid.UUID, ids []uuid.UUID) ([]uuid.UUID, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	return db.CollectIDs(ctx, q, `SELECT x.id FROM files x WHERE x.id = ANY($1)
+  AND EXISTS (SELECT 1 FROM folder_files ff WHERE ff.file_id = x.id AND ff.project_id = $2)
+ORDER BY x.id FOR NO KEY UPDATE OF x`, ids, projectID)
 }
 
 // Snapshot 是 file_snapshots 的一行。
@@ -199,29 +230,82 @@ func InsertCopy(ctx context.Context, q db.Querier, newFileID uuid.UUID, src *Sna
 // FolderPaths 是一批文件夹从根文件夹起用 / 连接的路径（按 id；日志 detail 的 folder_path、界面显示的路径）。
 // 跨模块的只读查询（folders 属于 internal/folder），文件夹、审核、归类都用。
 func FolderPaths(ctx context.Context, q db.Querier, ids []uuid.UUID) (map[uuid.UUID]string, error) {
-	out := map[uuid.UUID]string{}
+	infos, err := FolderInfos(ctx, q, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID]string, len(infos))
+	for id, f := range infos {
+		out[id] = f.Path
+	}
+	return out, nil
+}
+
+// FolderInfo 是文件夹现在的名字和路径（见 [FolderPaths]）。
+type FolderInfo struct {
+	Name string
+	Path string
+}
+
+// FolderInfos 是一批文件夹的名字和路径（按 id；跨模块的只读查询，同 [FolderPaths]）。
+func FolderInfos(ctx context.Context, q db.Querier, ids []uuid.UUID) (map[uuid.UUID]FolderInfo, error) {
+	out := map[uuid.UUID]FolderInfo{}
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := q.Query(ctx, `SELECT f.id, string_agg(a.folder_name, '/' ORDER BY g.n)
-FROM folders f
-CROSS JOIN LATERAL generate_series(6, length(f.path_code), 6) AS g(n)
-JOIN folders a ON a.project_id = f.project_id AND a.path_code = left(f.path_code, g.n)
-WHERE f.id = ANY($1)
-GROUP BY f.id`, ids)
+	rows, err := q.Query(ctx, `SELECT f.id, f.folder_name, `+FolderPathSQL("f.id")+` FROM folders f WHERE f.id = ANY($1)`, ids)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var id uuid.UUID
-		var p string
-		if err := rows.Scan(&id, &p); err != nil {
+		var f FolderInfo
+		if err := rows.Scan(&id, &f.Name, &f.Path); err != nil {
 			return nil, err
 		}
-		out[id] = p
+		out[id] = f
 	}
 	return out, rows.Err()
+}
+
+// LiveFolder 是项目里一个未删除的文件夹（看板、审核的范围文件夹）。
+type LiveFolder struct {
+	ID         uuid.UUID
+	ParentID   *uuid.UUID
+	FolderName string
+	PathCode   string
+}
+
+// GetLiveFolder 读项目里未删除的文件夹（folderID 为 nil 时是项目的根文件夹）；不在这个项目里或已删除为 nil。
+// 跨模块的只读查询（同 FolderPaths）。
+func GetLiveFolder(ctx context.Context, q db.Querier, projectID uuid.UUID, folderID *uuid.UUID) (*LiveFolder, error) {
+	var f LiveFolder
+	var row pgx.Row
+	if folderID == nil {
+		row = q.QueryRow(ctx, `SELECT id, parent_id, folder_name, path_code FROM folders
+WHERE project_id = $1 AND parent_id IS NULL AND deleted_at IS NULL`, projectID)
+	} else {
+		row = q.QueryRow(ctx, `SELECT id, parent_id, folder_name, path_code FROM folders
+WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL`, *folderID, projectID)
+	}
+	err := row.Scan(&f.ID, &f.ParentID, &f.FolderName, &f.PathCode)
+	if db.IsNoRows(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+// FolderPathSQL 是文件夹 idExpr 的路径（见 [FolderPaths]）的标量子查询，给别的模块拼进自己的查询、一次往返带上路径。
+// 跨模块的只读查询（同 FolderPaths）。
+func FolderPathSQL(idExpr string) string {
+	return `(SELECT coalesce(string_agg(a.folder_name, '/' ORDER BY g.n), '') FROM folders fp
+  CROSS JOIN LATERAL generate_series(6, length(fp.path_code), 6) AS g(n)
+  JOIN folders a ON a.project_id = fp.project_id AND a.path_code = left(fp.path_code, g.n)
+  WHERE fp.id = ` + idExpr + `)`
 }
 
 // FolderPath 是一个文件夹的路径（见 [FolderPaths]）。

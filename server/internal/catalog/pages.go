@@ -3,7 +3,6 @@ package catalog
 import (
 	"context"
 	"fmt"
-	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -18,11 +17,12 @@ import (
 
 // 条目的页的写（requirements 5.9；2026-10-19 起页只来自来源文件夹，归类这边不能单独挂页、移页、排页序）：
 //   - 归档（archive.go）一次建很多件，批量写挂接；
-//   - 重新归档（seal.go）把页换成来源文件夹现在的文件，撤销归档（DeleteItem）一并移出全部页，都走 [applyPages]；
+//   - 重新归档（seal.go）把页换成来源文件夹现在的文件（planReseal 算好、writePages 写），撤销归档（DeleteItem）一并
+//     移出全部页（removeAllPages）；
 //   - 一个文件只在一个条目里：要新挂上的文件已经在别的条目里 409 `file_cataloged`，details {ids, items}（在哪：
 //     条目、档号、件号、题名、节点名称链、第几页、状态）。
 //
-// 加锁（requirements 3.6）：调用方先拿归类树锁（共享）和条目行。撤销归档（lockFiles）在归类的锁和行之后再拿文件树锁
+// 加锁（requirements 3.6）：调用方先拿归类树锁（共享）和条目行。撤销归档在归类的锁和行之后再拿文件树锁
 // （共享）和移出的文件的 files 行（id 升序），锁后重读 folder_files。重新归档已经按"文件树锁 → 来源文件夹行"锁住了
 // 来源文件夹（封存检查和读文件清单互斥，见 seal.go），不再锁 files 行：files 行在 folders 行之前，锁了文件夹再锁
 // files 行会和"先锁 files 行再锁文件夹"的删除、移动成环；往这个文件夹里放、拿文件都要先锁文件夹行。
@@ -32,7 +32,7 @@ import (
 // 写一条 archive_item / reorder 审计 {page_count, linked, unlinked, moved: [{file_id, file_name, from_page, to_page}]}，
 // 只记挪动过的页（最长递增子序列之外），插入、移出引起的顺延不算。
 
-// pageChange 是 applyPages 做了的事。
+// pageChange 是 writePages 做了的事。
 type pageChange struct {
 	Plan pagePlan
 	// FolderIDs、FileIDs 是新挂上和移出的文件、它们所在的文件夹（files.changed 用）。
@@ -47,68 +47,40 @@ func (c *pageChange) filesEvent(projectID uuid.UUID) []events.Event {
 	return []events.Event{events.FilesChanged(projectID, c.FolderIDs, c.FileIDs)}
 }
 
-// pageOpts 是 applyPages 的选项。
-type pageOpts struct {
-	// itemDeleted：撤销归档时一并移出（日志带 item_deleted）。
-	itemDeleted bool
-	// lockFiles：有挂上、移出时拿文件树锁和这些文件的 files 行（撤销归档）；重新归档已经锁住来源文件夹，不锁。
-	lockFiles bool
-}
-
-// applyPages 在调用方的事务里把条目 it 的页换成 wanted（按页序，不重复）。调用前要拿着归类树锁（共享）、锁住条目行。
-// 不改条目行本身（row_version 由调用方处理）。
-func applyPages(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.UUID, it *itemRow, wanted []uuid.UUID, opt pageOpts) (*pageChange, error) {
+// removeAllPages 撤销归档时把条目 it 的页全部移出（日志带 item_deleted）。调用前要拿着归类树锁（共享）、锁住条目行；
+// 有页时在这之后拿文件树锁（共享）和这些文件的 files 行（requirements 3.6）。
+func removeAllPages(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.UUID, it *itemRow) (*pageChange, error) {
 	current, err := itemPageList(ctx, tx, it.ID)
 	if err != nil {
 		return nil, err
 	}
-	out := &pageChange{Plan: planPages(current, wanted)}
-	p := &out.Plan
+	p := planPages(current, nil)
 	if !p.changed() {
-		return out, nil
+		return &pageChange{Plan: p}, nil
 	}
-	touched := p.touched()
-	locked := map[uuid.UUID]bool{}
-	if len(touched) > 0 && opt.lockFiles {
-		// 文件树锁在归类的锁和行之后（requirements 3.6）。
-		if err := project.LockFileTree(ctx, tx, projectID, false); err != nil {
-			return nil, err
-		}
-		ids, err := projectFileIDs(ctx, tx, projectID, touched)
-		if err != nil {
-			return nil, err
-		}
-		if err := file.LockFiles(ctx, tx, ids); err != nil {
-			return nil, err
-		}
-		for _, id := range ids {
-			locked[id] = true
-		}
+	if err := project.LockFileTree(ctx, tx, projectID, false); err != nil {
+		return nil, err
 	}
-	read := append(touched[:len(touched):len(touched)], fileIDsOf(p.Moved)...)
-	files, err := pageFiles(ctx, tx, projectID, read)
+	unlinked := fileIDsOf(p.Unlinked)
+	if _, err := file.LockProjectFiles(ctx, tx, projectID, unlinked); err != nil {
+		return nil, err
+	}
+	files, err := pageFiles(ctx, tx, projectID, unlinked)
 	if err != nil {
 		return nil, err
 	}
+	return writePages(ctx, tx, projectID, operatorID, it, p, 0, files, true)
+}
 
-	// 要新挂上的：不存在、已删除、不在这个项目里 404（重新归档的页来自锁住的来源文件夹，走不到）；已经在别的条目里
-	// 409 file_cataloged。拿 files 行锁时只挂锁住了的文件。
-	var missing []uuid.UUID
-	linkedIDs := fileIDsOf(p.Linked)
-	for _, id := range linkedIDs {
-		if f := files[id]; f == nil || !f.Live || (opt.lockFiles && !locked[id]) {
-			missing = append(missing, id)
-		}
+// writePages 在调用方的事务里按 p 写条目 it 的挂接（页数 pageCount），记日志和 reorder 审计。p、files（p 里新挂上、
+// 移出、挪动的文件）由调用方在锁内算好、读好，新挂上的已经查过不在别的条目里。不改条目行本身（row_version 由调用方
+// 处理）。itemDeleted：撤销归档时一并移出（日志带 item_deleted）。
+func writePages(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.UUID, it *itemRow, p pagePlan, pageCount int,
+	files map[uuid.UUID]*pageFile, itemDeleted bool) (*pageChange, error) {
+	out := &pageChange{Plan: p}
+	if !p.changed() {
+		return out, nil
 	}
-	if len(missing) > 0 {
-		return nil, httpx.NewError(http.StatusNotFound, httpx.CodeNotFound,
-			fmt.Sprintf("有 %d 个文件不存在、已删除或不在这个项目里，没有挂接", len(missing))).
-			WithDetails(map[string]any{"ids": missing})
-	}
-	if err := checkNotElsewhere(ctx, tx, it.ID, linkedIDs, files); err != nil {
-		return nil, err
-	}
-
 	// 写挂接（只写 archive_item_files）。
 	if err := deletePages(ctx, tx, it.ID, fileIDsOf(p.Unlinked)); err != nil {
 		return nil, err
@@ -125,7 +97,7 @@ func applyPages(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.UUID,
 	}
 
 	// 日志：先 unlink（按原页号）再 link（按新页号）。
-	logs := make([]file.Log, 0, len(touched))
+	logs := make([]file.Log, 0, len(p.Linked)+len(p.Unlinked))
 	folderSet := map[uuid.UUID]bool{}
 	logOf := func(action string, m pageMove, page int) file.Log {
 		d := map[string]any{"item_id": it.ID, "item_no": it.ItemNo, "archive_no": it.ArchiveNo, "title": it.Title,
@@ -137,7 +109,7 @@ func applyPages(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.UUID,
 				out.FolderIDs = append(out.FolderIDs, f.FolderID)
 			}
 		}
-		if opt.itemDeleted {
+		if itemDeleted {
 			d["item_deleted"] = true
 		}
 		out.FileIDs = append(out.FileIDs, m.FileID)
@@ -165,7 +137,7 @@ func applyPages(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.UUID,
 		}
 		if err := audit.Write(ctx, tx, audit.Entry{ProjectID: &projectID, OperatorID: audit.Operator(operatorID),
 			TargetType: audit.TargetArchiveItem, TargetID: it.ID, Action: "reorder",
-			Detail: map[string]any{"page_count": len(wanted), "linked": len(p.Linked), "unlinked": len(p.Unlinked),
+			Detail: map[string]any{"page_count": pageCount, "linked": len(p.Linked), "unlinked": len(p.Unlinked),
 				"moved": moved}}); err != nil {
 			return nil, err
 		}

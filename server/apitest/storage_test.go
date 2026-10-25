@@ -413,6 +413,7 @@ func TestPresign(t *testing.T) {
 
 	// 密钥解不开：url_error secret_unreadable；客户端 500 secret_unreadable。
 	env.Exec("UPDATE storage_profiles SET secret_key_enc = '\\x01' WHERE id = $1", defID)
+	env.App.Storage.ForgetCache() // 绕过存储模块直接改了库
 	urls, _ = env.App.Storage.ImageURLs(ctx, []storage.ObjectRef{{StorageProfileID: defID, StorageKey: key}})
 	if urls[0].URLError == nil || urls[0].URLError.Code != "secret_unreadable" {
 		t.Fatalf("密钥解不开：%+v", urls[0])

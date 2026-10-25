@@ -7,8 +7,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"doclite/server/internal/file"
 	"doclite/server/internal/platform/db"
 	"doclite/server/internal/platform/httpx"
+	"doclite/server/internal/platform/pathcode"
 )
 
 // 项目看板（requirements 5.10；2026-10-19 用户决定简化：去掉矩阵，只要简单统计，审核按页，归档、锁定、导出按件）：
@@ -51,8 +53,8 @@ func (c *ReviewCounts) add(reviewStatus string, n int) {
 	c.Total += n
 }
 
-// ColumnCounts 是按归档状态的文件数；cataloged = unlocked + locked。
-type ColumnCounts struct {
+// CatalogCounts 是按归档状态的文件数；cataloged = unlocked + locked。
+type CatalogCounts struct {
 	Uncataloged int `json:"uncataloged"`
 	Unlocked    int `json:"unlocked"`
 	Locked      int `json:"locked"`
@@ -82,10 +84,10 @@ func (c *ItemCounts) addBucket(b *summaryItemBucket) {
 // SummaryCounts 是一组计数（一个文件夹整棵子树、直接放的文件或一个子文件夹的子树）。
 type SummaryCounts struct {
 	// Total 是文件数（页数）。
-	Total   int          `json:"total"`
-	Review  ReviewCounts `json:"review"`
-	Catalog ColumnCounts `json:"catalog"`
-	Items   ItemCounts   `json:"items"`
+	Total   int           `json:"total"`
+	Review  ReviewCounts  `json:"review"`
+	Catalog CatalogCounts `json:"catalog"`
+	Items   ItemCounts    `json:"items"`
 }
 
 // add 记 n 个文件：审核状态 reviewStatus，所在条目的状态 itemStatus（未归档为 nil）。
@@ -229,24 +231,13 @@ type summaryFolderRow struct {
 	FolderCount int
 }
 
-// summaryFolder 读项目里未删除的文件夹（id 为 nil 时是根文件夹）；没有为 nil。跨模块的读（folders）。
+// summaryFolder 读项目里未删除的文件夹（id 为 nil 时是根文件夹）；没有为 nil。
 func summaryFolder(ctx context.Context, q db.Querier, projectID uuid.UUID, id *uuid.UUID) (*summaryFolderRow, error) {
-	var f summaryFolderRow
-	var err error
-	if id == nil {
-		err = q.QueryRow(ctx, `SELECT id, parent_id, folder_name, path_code FROM folders
-WHERE project_id = $1 AND parent_id IS NULL AND deleted_at IS NULL`, projectID).Scan(&f.ID, &f.ParentID, &f.Name, &f.PathCode)
-	} else {
-		err = q.QueryRow(ctx, `SELECT id, parent_id, folder_name, path_code FROM folders
-WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL`, *id, projectID).Scan(&f.ID, &f.ParentID, &f.Name, &f.PathCode)
-	}
-	if db.IsNoRows(err) {
-		return nil, nil
-	}
-	if err != nil {
+	f, err := file.GetLiveFolder(ctx, q, projectID, id)
+	if f == nil || err != nil {
 		return nil, err
 	}
-	return &f, nil
+	return &summaryFolderRow{ID: f.ID, ParentID: f.ParentID, Name: f.FolderName, PathCode: f.PathCode}, nil
 }
 
 // summaryChildren 是未删除的直接子文件夹和它们各自未删除的直接子文件夹数，按 sort_no、名称排（和 children 接口
@@ -289,7 +280,7 @@ JOIN folder_files ff ON ff.folder_id = f.id AND ff.project_id = $1 AND ff.delete
 LEFT JOIN archive_item_files af ON af.file_id = ff.file_id AND af.project_id = $1
 LEFT JOIN archive_items a ON a.id = af.archive_item_id
 WHERE f.project_id = $1 AND f.path_code >= $2 AND f.path_code < $3 AND f.deleted_at IS NULL
-GROUP BY 1, 2, 3`, projectID, path, subtreeUpper(path))
+GROUP BY 1, 2, 3`, projectID, path, pathcode.Upper(path))
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +336,7 @@ func summaryItemBuckets(ctx context.Context, q db.Querier, projectID uuid.UUID, 
 )
 SELECT bucket, count(*), count(*) FILTER (WHERE status = 'locked'), count(*) FILTER (WHERE source_status = 'modifying'),
   count(*) FILTER (WHERE ready), COALESCE(sum(pages) FILTER (WHERE ready), 0)
-FROM r GROUP BY bucket`, projectID, path, subtreeUpper(path), requireLocked)
+FROM r GROUP BY bucket`, projectID, path, pathcode.Upper(path), requireLocked)
 	if err != nil {
 		return nil, err
 	}

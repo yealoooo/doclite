@@ -40,7 +40,6 @@ import (
 	"doclite/server/internal/platform/memo"
 	"doclite/server/internal/platform/xslices"
 	"doclite/server/internal/project"
-	"doclite/server/internal/storage"
 )
 
 // 上限（review-settings 里给前端）。
@@ -85,7 +84,6 @@ type Service struct {
 	pool    *pgxpool.Pool
 	events  *events.Bus
 	auth    *auth.Service
-	storage *storage.Service
 	folders *folder.Service
 	files   *file.Service
 	// rescans：同一个文件的重扫串行（进程内，硬性规则 16）。
@@ -95,9 +93,9 @@ type Service struct {
 }
 
 // NewService 建 Service。
-func NewService(pool *pgxpool.Pool, bus *events.Bus, authSvc *auth.Service, storageSvc *storage.Service,
-	folderSvc *folder.Service, fileSvc *file.Service) *Service {
-	return &Service{pool: pool, events: bus, auth: authSvc, storage: storageSvc, folders: folderSvc, files: fileSvc,
+func NewService(pool *pgxpool.Pool, bus *events.Bus, authSvc *auth.Service, folderSvc *folder.Service,
+	fileSvc *file.Service) *Service {
+	return &Service{pool: pool, events: bus, auth: authSvc, folders: folderSvc, files: fileSvc,
 		summaries: memo.New[summaryKey, *Summary](summaryTTL)}
 }
 
@@ -112,11 +110,8 @@ func (s *Service) lockFiles(ctx context.Context, tx pgx.Tx, projectID uuid.UUID,
 
 // lockFilesHeld 同 lockFiles，调用方已经拿了文件树共享锁（按文件夹、按子树时先挑候选）。
 func (s *Service) lockFilesHeld(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, fileIDs []uuid.UUID) (*lockedFiles, error) {
-	in, err := filesInProject(ctx, tx, projectID, fileIDs)
+	in, err := file.LockProjectFiles(ctx, tx, projectID, fileIDs)
 	if err != nil {
-		return nil, err
-	}
-	if err := file.LockFiles(ctx, tx, in); err != nil {
 		return nil, err
 	}
 	list, err := rereadFiles(ctx, tx, projectID, in)
@@ -153,12 +148,12 @@ func (s *Service) withPaths(ctx context.Context, q db.Querier, files []*fileStat
 	for _, f := range files {
 		ids = append(ids, f.FolderID)
 	}
-	paths, err := file.FolderPaths(ctx, q, xslices.Unique(ids))
+	infos, err := file.FolderInfos(ctx, q, xslices.Unique(ids))
 	if err != nil {
 		return err
 	}
 	for _, f := range files {
-		f.FolderPath = paths[f.FolderID]
+		f.FolderName, f.FolderPath = infos[f.FolderID].Name, infos[f.FolderID].Path
 	}
 	return nil
 }
@@ -179,9 +174,9 @@ func notFoundFiles(ids []uuid.UUID) error {
 	return httpx.NotFoundIDs("有 "+strconv.Itoa(len(ids))+" 个文件不存在、已删除或不在这个项目里（可能刚被别人删除），请刷新后重试", ids)
 }
 
-// eligibility 检查审核人能不能分给（分配、改派的目标）：不存在、停用、没有 review 菜单、进不了项目都是 400。
-func (s *Service) eligibility(ctx context.Context, projectID, reviewerID uuid.UUID) (*reviewerFacts, error) {
-	facts, err := reviewerFactsOf(ctx, s.pool, projectID, []uuid.UUID{reviewerID})
+// eligibility 在写事务里检查审核人能不能分给（分配、改派的目标）：不存在、停用、没有 review 菜单、进不了项目都是 400。
+func eligibility(ctx context.Context, tx pgx.Tx, projectID, reviewerID uuid.UUID) (*reviewerFacts, error) {
+	facts, err := reviewerFactsOf(ctx, tx, projectID, []uuid.UUID{reviewerID})
 	if err != nil {
 		return nil, err
 	}

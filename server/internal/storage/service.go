@@ -62,6 +62,8 @@ type Service struct {
 	mu sync.Mutex
 	// now 是当前时间（预签名按天取整用）。
 	now func() time.Time
+	// cache 是存储配置行的进程内缓存（见 cachedRows）。
+	cache profileCache
 }
 
 // NewService 建 Service。
@@ -267,6 +269,7 @@ func (s *Service) Create(ctx context.Context, operatorID uuid.UUID, in CreateInp
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.forgetRows()
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if err := insertRow(ctx, tx, r); err != nil {
 			return err
@@ -454,6 +457,7 @@ func (s *Service) Update(ctx context.Context, operatorID, id uuid.UUID, in Updat
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.forgetRows()
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		before, err := lockRow(ctx, tx, id, c.status == StatusDisabled)
 		if err != nil {
@@ -525,6 +529,7 @@ func (s *Service) checkStatusChange(ctx context.Context, tx pgx.Tx, before *row,
 func (s *Service) Delete(ctx context.Context, operatorID, id uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.forgetRows()
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		r, err := lockRow(ctx, tx, id, true)
 		if err != nil {
@@ -560,6 +565,7 @@ func (s *Service) Delete(ctx context.Context, operatorID, id uuid.UUID) error {
 func (s *Service) SetDefault(ctx context.Context, operatorID, id uuid.UUID) (*Profile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.forgetRows()
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		r, err := lockRow(ctx, tx, id, false)
 		if err != nil {
@@ -668,6 +674,7 @@ func unreadableMessage(r *row, err error) string {
 func (s *Service) EnsureInitial(ctx context.Context, init *config.InitialStorage, log *slog.Logger) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.forgetRows()
 	n, err := countRows(ctx, s.pool)
 	if err != nil {
 		return err

@@ -116,12 +116,8 @@ ORDER BY 1, 3, 13, 10`, unnamed, userID, projectID, lo, hi, state, lowDPI, LowDP
 	return out, rows.Err()
 }
 
-// accessPredicate 是"用户 $1 能进项目 p"（admin、个人授权、角色授权；和 auth 的项目授权一致）。
-const accessPredicate = `(EXISTS (SELECT 1 FROM user_roles ur JOIN roles ro ON ro.id = ur.role_id
-             WHERE ur.user_id = $1 AND ro.role_code = '` + auth.AdminRoleCode + `')
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = $1)
-  OR EXISTS (SELECT 1 FROM project_roles pr JOIN user_roles ur ON ur.role_id = pr.role_id
-             WHERE pr.project_id = p.id AND ur.user_id = $1))`
+// accessPredicate 是"用户 $1 能进项目 p"（auth 的项目授权条件）。
+var accessPredicate = auth.ProjectAccessSQL("$1", "p.id")
 
 // otherProjectsOpen 是我能进的其他未删除项目（含已归档的）里 open 的分配个数（未删除的文件），按项目编码排，只有 > 0 的。
 func otherProjectsOpen(ctx context.Context, q db.Querier, userID, projectID uuid.UUID) ([]OtherProjectOpen, error) {
@@ -147,28 +143,6 @@ GROUP BY r.project_id, p.project_code, p.status ORDER BY p.project_code`, userID
 	return out, rows.Err()
 }
 
-// folderNames 是这些文件夹现在的名字。
-func folderNames(ctx context.Context, q db.Querier, ids []uuid.UUID) (map[uuid.UUID]string, error) {
-	out := map[uuid.UUID]string{}
-	if len(ids) == 0 {
-		return out, nil
-	}
-	rows, err := q.Query(ctx, `SELECT id, folder_name FROM folders WHERE id = ANY($1)`, ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id uuid.UUID
-		var name string
-		if err := rows.Scan(&id, &name); err != nil {
-			return nil, err
-		}
-		out[id] = name
-	}
-	return out, rows.Err()
-}
-
 // projectReviewers 是能分给的人（启用、有 review 菜单、能进这个项目）和每人在这个项目里未删除文件上的 open 个数，
 // 按显示名、登录名排。
 func projectReviewers(ctx context.Context, q db.Querier, projectID uuid.UUID) ([]ProjectReviewer, error) {
@@ -182,11 +156,7 @@ FROM users u LEFT JOIN open o ON o.reviewer_id = u.id
 WHERE u.status = 'active'
   AND EXISTS (SELECT 1 FROM user_roles ur JOIN role_menus rm ON rm.role_id = ur.role_id
               WHERE ur.user_id = u.id AND rm.menu_code = '`+auth.MenuReview+`')
-  AND (EXISTS (SELECT 1 FROM user_roles ur JOIN roles ro ON ro.id = ur.role_id
-               WHERE ur.user_id = u.id AND ro.role_code = '`+auth.AdminRoleCode+`')
-    OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = $1 AND m.user_id = u.id)
-    OR EXISTS (SELECT 1 FROM project_roles pr JOIN user_roles ur ON ur.role_id = pr.role_id
-               WHERE pr.project_id = $1 AND ur.user_id = u.id))
+  AND `+auth.ProjectAccessSQL("u.id", "$1")+`
 ORDER BY u.display_name, lower(u.username), u.id`, projectID)
 	if err != nil {
 		return nil, err

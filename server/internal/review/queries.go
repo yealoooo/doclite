@@ -186,23 +186,19 @@ func (s *Service) MyReviews(ctx context.Context, userID uuid.UUID, q MyReviewsQu
 				out.Items = append(out.Items, r.Item)
 			}
 		}
-		paths, err := file.FolderPaths(ctx, tx, folderIDs)
-		if err != nil {
-			return err
-		}
-		names, err := folderNames(ctx, tx, folderIDs)
+		infos, err := file.FolderInfos(ctx, tx, folderIDs)
 		if err != nil {
 			return err
 		}
 		for i := range out.Folders {
 			f := &out.Folders[i]
-			f.FolderName, f.FolderPath = names[f.FolderID], paths[f.FolderID]
+			f.FolderName, f.FolderPath = infos[f.FolderID].Name, infos[f.FolderID].Path
 		}
 		out.Items, out.NextCursor = nextCursor(out.Items, q.Limit, func(it MyReviewItem) keyset {
 			return keyset{PathCode: it.pathCode, SortNo: it.SortNo, FileID: it.FileID}
 		})
 		for i := range out.Items {
-			out.Items[i].FolderPath = paths[out.Items[i].FolderID]
+			out.Items[i].FolderPath = infos[out.Items[i].FolderID].Path
 		}
 		if out.OtherProjects, err = otherProjectsOpen(ctx, tx, userID, q.ProjectID); err != nil {
 			return err

@@ -21,7 +21,7 @@ const CoverLongEdge = 400
 // 不合规返回 400 invalid_cover（message 写明是哪一条）；这时还什么都没写，客户端去掉封面重传。
 func ValidateCover(data []byte, original imagehdr.Info) error {
 	if len(data) > MaxCoverBytes {
-		return coverError("超过 %s", humanBytes(MaxCoverBytes))
+		return coverError("超过 %s", HumanBytes(MaxCoverBytes))
 	}
 	info, err := imagehdr.Parse(bytes.NewReader(data), int64(len(data)), 0)
 	if err != nil {

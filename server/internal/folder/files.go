@@ -254,27 +254,22 @@ func (s *Service) CopyFolderFile(ctx context.Context, userID, projectID, id uuid
 			}
 		}
 		src = moved
-		srcFolder, err := getFolder(ctx, tx, e.FolderID)
+		srcInfo, err := file.FolderInfos(ctx, tx, []uuid.UUID{e.FolderID})
 		if err != nil {
 			return err
 		}
-		srcPath, err := file.FolderPath(ctx, tx, e.FolderID)
-		if err != nil {
-			return err
-		}
+		srcFolder := srcInfo[e.FolderID]
 		newFileID := db.NewID()
 		snapID, err := file.InsertCopy(ctx, tx, newFileID, src, userID)
 		if err != nil {
 			return err
 		}
-		ffID, err := s.AddFile(ctx, tx, slot, newFileID, userID)
+		ffID, err := s.AddFile(ctx, tx, slot, newFileID, userID, file.Log{ProjectID: projectID, FileID: newFileID,
+			Action: file.ActionCopy, OperatorID: userID, Detail: map[string]any{"source_file_id": e.FileID,
+				"source_snapshot_id": src.ID, "source_file_name": e.FileName, "source_folder": srcFolder.Name,
+				"source_folder_path": srcFolder.Path, "file_name": slot.FileName, "folder": slot.FolderName,
+				"folder_path": slot.FolderPath}})
 		if err != nil {
-			return err
-		}
-		if err := file.WriteLogs(ctx, tx, file.Log{ProjectID: projectID, FileID: newFileID, Action: file.ActionCopy,
-			OperatorID: userID, Detail: map[string]any{"source_file_id": e.FileID, "source_snapshot_id": src.ID,
-				"source_file_name": e.FileName, "source_folder": srcFolder.FolderName, "source_folder_path": srcPath,
-				"file_name": slot.FileName, "folder": slot.FolderName, "folder_path": slot.FolderPath}}); err != nil {
 			return err
 		}
 		out = &FolderFileCopied{FolderFileID: ffID, FileID: newFileID, SnapshotID: snapID, FolderID: dest.ID, FileName: slot.FileName,
@@ -489,12 +484,13 @@ func (s *Service) MoveFolderFiles(ctx context.Context, userID uuid.UUID, scope *
 		if err != nil {
 			return err
 		}
-		sortNo, err := nextSortNo(ctx, tx, dest.ID)
+		used, sortNo, err := folderNames(ctx, tx, dest.ID)
 		if err != nil {
 			return err
 		}
 		var logs []file.Log
 		var movedFiles []uuid.UUID
+		var moves []fileMove
 		changedFolders := []uuid.UUID{dest.ID}
 		for _, e := range entries {
 			if e.FolderID == dest.ID {
@@ -502,20 +498,21 @@ func (s *Service) MoveFolderFiles(ctx context.Context, userID uuid.UUID, scope *
 					FileName: e.FileName, SortNo: e.SortNo})
 				continue
 			}
-			name, err := freeName(ctx, tx, dest.ID, e.FileName)
-			if err != nil {
-				return err
-			}
+			name := pickFreeName(used, e.FileName)
 			renamed := name != e.FileName
-			if err := updateFolderFile(ctx, tx, e.ID, dest.ID, name, sortNo); err != nil {
-				return err
-			}
+			moves = append(moves, fileMove{ID: e.ID, Name: name, SortNo: sortNo})
 			logs = append(logs, moveLog(projectID, userID, e, locked[e.FolderID], dest, paths, name, renamed))
 			out.Items = append(out.Items, FolderFileMoved{FolderFileID: e.ID, FileID: e.FileID, FolderID: dest.ID, FileName: name,
 				SortNo: sortNo, Moved: true, Renamed: renamed})
 			movedFiles = append(movedFiles, e.FileID)
 			changedFolders = append(changedFolders, e.FolderID)
 			sortNo++
+		}
+		if err := moveFolderFiles(ctx, tx, dest.ID, moves); err != nil {
+			if db.UniqueViolation(err, "ux_folder_files_name") {
+				return httpx.Conflict("", "目标文件夹里有重名的文件（不区分大小写），请刷新后重试")
+			}
+			return err
 		}
 		if err := file.WriteLogs(ctx, tx, logs...); err != nil {
 			return err

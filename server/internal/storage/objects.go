@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,7 +60,7 @@ func (s *Service) ImageURLs(ctx context.Context, refs []ObjectRef) ([]ImageURLs,
 			ids = append(ids, r.StorageProfileID)
 		}
 	}
-	rows, err := getRows(ctx, s.pool, ids)
+	rows, err := s.cachedRows(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -112,10 +113,75 @@ func (s *Service) ImageURLs(ctx context.Context, refs []ObjectRef) ([]ImageURLs,
 	return out, nil
 }
 
+// profileCache 缓存全部存储配置行（只有几行）：上传、看图、导出、下载每次都要读，省一次往返。只有本进程改这张表
+// （硬性规则 16），写操作（新建、修改、删除、设默认、首次登记）提交之后作废（forgetRows）；事务里的检查
+// （LockForSnapshot、LockForReuse）照样查库。
+type profileCache struct {
+	mu sync.Mutex
+	// gen 每作废一次加一：读库期间作废过的，读到的结果不放进缓存。
+	gen  uint64
+	rows map[uuid.UUID]*row // nil 表示没有缓存；里面的行只读
+}
+
+// cachedRows 是全部存储配置行（按 id，只读）。
+func (s *Service) cachedRows(ctx context.Context) (map[uuid.UUID]*row, error) {
+	c := &s.cache
+	c.mu.Lock()
+	rows, gen := c.rows, c.gen
+	c.mu.Unlock()
+	if rows != nil {
+		return rows, nil
+	}
+	rows, err := allRows(ctx, s.pool)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	if c.gen == gen {
+		c.rows = rows
+	}
+	c.mu.Unlock()
+	return rows, nil
+}
+
+// cachedRow 是一行（不存在为 nil）。
+func (s *Service) cachedRow(ctx context.Context, id uuid.UUID) (*row, error) {
+	rows, err := s.cachedRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return rows[id], nil
+}
+
+// cachedDefault 是默认存储的行（没有为 nil）。
+func (s *Service) cachedDefault(ctx context.Context) (*row, error) {
+	rows, err := s.cachedRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		if r.IsDefault {
+			return r, nil
+		}
+	}
+	return nil, nil
+}
+
+// forgetRows 作废缓存。
+func (s *Service) forgetRows() {
+	s.cache.mu.Lock()
+	s.cache.gen++
+	s.cache.rows = nil
+	s.cache.mu.Unlock()
+}
+
+// ForgetCache 作废存储配置的缓存：绕过本模块直接改了 storage_profiles（测试）之后调用。
+func (s *Service) ForgetCache() { s.forgetRows() }
+
 // Client 按存储配置建 S3 客户端（读对象：导出、复制时确认源存储）。存储已停用或不存在 409 `storage_unavailable`；
 // 密钥解不开 500 `secret_unreadable`。
 func (s *Service) Client(ctx context.Context, profileID uuid.UUID) (*s3.Client, error) {
-	r, err := getRow(ctx, s.pool, profileID)
+	r, err := s.cachedRow(ctx, profileID)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +211,7 @@ type Target struct {
 // DefaultTarget 是当前的默认存储（上传、重扫、导出写对象用）。没有默认存储 409 `storage_unavailable`；
 // 密钥解不开 500 `secret_unreadable`。之后写快照的事务里还要用 [Service.LockForSnapshot] 确认它仍是默认。
 func (s *Service) DefaultTarget(ctx context.Context) (*Target, error) {
-	r, err := getDefaultRow(ctx, s.pool)
+	r, err := s.cachedDefault(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +257,7 @@ func (s *Service) LockForReuse(ctx context.Context, tx pgx.Tx, profileID uuid.UU
 // （UTC+8），有效期按这个存储的 url_expire_hours，带 response-content-disposition（disposition 为空时不带）。
 // 存储已停用或不存在 409 `storage_unavailable`；密钥解不开 500 `secret_unreadable`。
 func (s *Service) PresignDownload(ctx context.Context, profileID uuid.UUID, key, disposition string) (s3.Presigned, error) {
-	r, err := getRow(ctx, s.pool, profileID)
+	r, err := s.cachedRow(ctx, profileID)
 	if err != nil {
 		return s3.Presigned{}, err
 	}

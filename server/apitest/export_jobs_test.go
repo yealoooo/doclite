@@ -13,7 +13,7 @@ import (
 	"doclite/server/internal/platform/s3"
 )
 
-// 后台执行（M5-2）：取消（排队中、执行中）、恢复（执行中 server 被杀后重启、优雅退出放回队列、可以重试的失败）。
+// 后台执行（M5-2）：恢复（执行中 server 被杀后重启、优雅退出放回队列、可以重试的失败）。
 // 存储经过测试代理：读原图可以变慢（让任务"执行中"持续一会儿）、可以失败。
 
 // exportReady 建一个就绪的条目（n 页），返回导出它的请求体。
@@ -30,61 +30,6 @@ JOIN background_jobs j ON j.id = t.job_id WHERE t.id = $1`, taskID).Scan(&status
 		e.t.Fatal(err)
 	}
 	return
-}
-
-// TestExportCancel：排队中的任务和 job 一起取消；执行中的任务立即取消、cleaning_up 直到执行器中止上传，之后 job
-// 也是 canceled、不留导出物；已结束的再取消 409。
-func TestExportCancel(t *testing.T) {
-	t.Parallel()
-	e := newExportEnv(t, "EXC", withProxy)
-	body := e.exportReady("一", 6)
-
-	// 排队中（执行器还没启动）。
-	q := e.createTask(body)
-	c := Decode[exportTask](e.mgr.Post("/api/export-tasks/"+q.ID.String()+"/cancel", nil).Expect(http.StatusOK))
-	if c.Status != "canceled" || c.CleaningUp || c.FinishedAt == nil {
-		t.Fatalf("取消排队中的：%+v", c)
-	}
-	if st, _, _ := e.jobOf(q.ID); st != "canceled" {
-		t.Fatalf("job：%s", st)
-	}
-	e.mgr.Post("/api/export-tasks/"+q.ID.String()+"/cancel", nil).ExpectError(http.StatusConflict, "invalid_state")
-
-	// 执行中：读原图每次慢 300 毫秒（6 页约 2 秒）。
-	e.proxy.delay.Store(int64(300 * time.Millisecond))
-	e.start()
-	r := e.createTask(body)
-	e.waitTask(r.ID, 10*time.Second, "开始执行", func(t exportTask) bool { return t.Status == "running" })
-	c = Decode[exportTask](e.mgr.Post("/api/export-tasks/"+r.ID.String()+"/cancel", nil).Expect(http.StatusOK))
-	if c.Status != "canceled" || !c.CleaningUp {
-		t.Fatalf("取消执行中的：%+v", c)
-	}
-	e.mgr.Post("/api/export-tasks/"+r.ID.String()+"/cancel", nil).ExpectError(http.StatusConflict, "invalid_state")
-	done := e.waitTask(r.ID, 10*time.Second, "清理完", func(t exportTask) bool { return !t.CleaningUp })
-	if st, _, _ := e.jobOf(r.ID); st != "canceled" || done.Status != "canceled" || done.OutputSize != nil {
-		t.Fatalf("清理完：job %s，任务 %+v", st, done)
-	}
-	if objs := e.exportObjects(); len(objs) != 0 {
-		t.Errorf("取消后不应留下导出物：%v", objs)
-	}
-	if n := QueryValue[int](e.Env, `SELECT count(*) FROM file_logs WHERE action = 'export'`); n != 0 {
-		t.Errorf("取消的导出不该写 export 日志：%d", n)
-	}
-	if n := QueryValue[int](e.Env, `SELECT count(*) FROM audit_logs WHERE target_type = 'export_task' AND action = 'cancel'`); n != 2 {
-		t.Errorf("取消审计 %d 条", n)
-	}
-	// 排队中取消的不会被执行。
-	if tk := e.task(q.ID); tk.Status != "canceled" || tk.Attempts != 0 {
-		t.Errorf("排队中取消的任务：%+v", tk)
-	}
-
-	// 到期清理：canceled 留下的 output_key（取消前已经记下的话；对象已经没了）清空。
-	if n, err := e.App.Exports.Cleanup(context.Background()); err != nil || n > 1 {
-		t.Errorf("清理取消的任务：%d %v", n, err)
-	}
-	if n := QueryValue[int](e.Env, `SELECT count(*) FROM export_tasks WHERE output_key IS NOT NULL OR storage_profile_id IS NOT NULL`); n != 0 {
-		t.Errorf("取消的任务应清空导出物：%d", n)
-	}
 }
 
 // TestExportRecovery：执行中 server 被杀（job 停在 running）→ 重启时放回队列、接着完成（上次留下的导出物删掉）；

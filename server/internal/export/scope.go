@@ -3,7 +3,6 @@ package export
 import (
 	"context"
 	"fmt"
-	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -104,8 +103,7 @@ func errScopeMissing(scopeType string, ids []uuid.UUID) error {
 	if scopeType == scopeTypeItem {
 		what = "条目"
 	}
-	return httpx.NewError(http.StatusNotFound, httpx.CodeNotFound,
-		fmt.Sprintf("导出范围里有 %d 个%s不存在、已删除或不在这个项目里", len(ids), what)).WithDetails(map[string]any{"ids": ids})
+	return httpx.NotFoundIDs(fmt.Sprintf("导出范围里有 %d 个%s不存在、已删除或不在这个项目里", len(ids), what), ids)
 }
 
 // resolved 是解析好的范围：条目 id（未排序）、范围里节点的名称链（category 时）、补交时算出的条目。

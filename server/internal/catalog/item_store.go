@@ -214,14 +214,18 @@ type ItemSummary struct {
 
 // summarySelect 是列表、详情共用的部分；条件里用别名 i。页数按 folder_files 的审核状态分（含修改中删掉的文件：
 // 重新归档前页不变）；锁定时间读审计；来源文件夹、解除封存的人是跨模块的读（folders、users）。
-const summarySelect = `SELECT i.id, i.category_id, i.item_no, i.archive_no, i.title, i.status, i.row_version,
+var summarySelect = `SELECT ` + summaryColumns + `
+` + summaryFrom
+
+var summaryColumns = `i.id, i.category_id, i.item_no, i.archive_no, i.title, i.status, i.row_version,
   pc.total, pc.unassigned, pc.pending, pc.approved, pc.rejected, la.locked_at,
   (la.locked_at IS NOT NULL AND EXISTS (
      SELECT 1 FROM archive_item_files af JOIN file_snapshots s ON s.file_id = af.file_id
      WHERE af.archive_item_id = i.id AND s.created_at > la.locked_at)),
   i.updated_at, i.source_folder_id, sf.folder_name, sf.deleted_at IS NOT NULL, i.source_status,
-  i.unsealed_by, uu.display_name, i.unsealed_at, i.unseal_reason
-FROM archive_items i
+  i.unsealed_by, uu.display_name, i.unsealed_at, i.unseal_reason, ` + file.FolderPathSQL("i.source_folder_id")
+
+const summaryFrom = `FROM archive_items i
 JOIN folders sf ON sf.id = i.source_folder_id
 LEFT JOIN users uu ON uu.id = i.unsealed_by
 CROSS JOIN LATERAL (
@@ -236,32 +240,13 @@ CROSS JOIN LATERAL (
   SELECT max(a.created_at) AS locked_at FROM audit_logs a
   WHERE i.status = 'locked' AND a.target_type = 'archive_item' AND a.target_id = i.id AND a.action = 'lock') la`
 
-func scanSummary(sc pgx.Row) (ItemSummary, error) {
+func scanSummary(sc pgx.Row, extra ...any) (ItemSummary, error) {
 	var s ItemSummary
-	err := sc.Scan(&s.ID, &s.CategoryID, &s.ItemNo, &s.ArchiveNo, &s.Title, &s.Status, &s.RowVersion,
+	err := sc.Scan(append([]any{&s.ID, &s.CategoryID, &s.ItemNo, &s.ArchiveNo, &s.Title, &s.Status, &s.RowVersion,
 		&s.PageCount, &s.PageCounts.Unassigned, &s.PageCounts.Pending, &s.PageCounts.Approved, &s.PageCounts.Rejected,
 		&s.LockedAt, &s.NewVersionAfterLock, &s.UpdatedAt, &s.SourceFolderID, &s.SourceFolderName, &s.SourceFolderDeleted,
-		&s.SourceStatus, &s.UnsealedBy, &s.UnsealedByName, &s.UnsealedAt, &s.UnsealReason)
+		&s.SourceStatus, &s.UnsealedBy, &s.UnsealedByName, &s.UnsealedAt, &s.UnsealReason, &s.SourceFolderPath}, extra...)...)
 	return s, err
-}
-
-// fillSourcePaths 填上来源文件夹的路径（一条查询）。
-func fillSourcePaths(ctx context.Context, q db.Querier, items []ItemSummary) error {
-	if len(items) == 0 {
-		return nil
-	}
-	ids := make([]uuid.UUID, len(items))
-	for i, it := range items {
-		ids[i] = it.SourceFolderID
-	}
-	paths, err := file.FolderPaths(ctx, q, ids)
-	if err != nil {
-		return err
-	}
-	for i := range items {
-		items[i].SourceFolderPath = paths[items[i].SourceFolderID]
-	}
-	return nil
 }
 
 // listItemSummaries 是节点里直接放的未删除条目，按件号、id 排，从 (afterNo, afterID) 之后取 limit 个（after 为 nil 从头）。
@@ -284,7 +269,7 @@ ORDER BY i.item_no, i.id LIMIT $4`, categoryID, afterNo, afterID, limit)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return out, fillSourcePaths(ctx, q, out)
+	return out, nil
 }
 
 // StatusCounts 是节点里直接放的未删除条目按状态的个数：draft 未锁定（其中 modifying 个修改中）、locked 已锁定。
@@ -303,14 +288,29 @@ FROM archive_items WHERE category_id = $1 AND deleted_at IS NULL`, categoryID).S
 	return total, c, err
 }
 
-func itemSummary(ctx context.Context, q db.Querier, id uuid.UUID) (ItemSummary, error) {
-	s, err := scanSummary(q.QueryRow(ctx, summarySelect+` WHERE i.id = $1`, id))
-	if err != nil {
-		return s, err
+// itemDetail 一条语句读未删除条目的行和摘要；没有时 r 为 nil。
+func itemDetail(ctx context.Context, q db.Querier, id uuid.UUID) (*itemRow, ItemSummary, error) {
+	var r itemRow
+	sum, err := scanSummary(q.QueryRow(ctx, `SELECT `+summaryColumns+`,
+  i.project_id, i.extra_fields, i.created_by, i.created_at, i.updated_by, c.path_code
+`+summaryFrom+`
+JOIN archive_categories c ON c.id = i.category_id
+WHERE i.id = $1 AND i.deleted_at IS NULL`, id), &r.ProjectID, &r.ExtraFields, &r.CreatedBy, &r.CreatedAt, &r.UpdatedBy,
+		&r.CategoryPath)
+	if db.IsNoRows(err) {
+		return nil, sum, nil
 	}
-	one := []ItemSummary{s}
-	err = fillSourcePaths(ctx, q, one)
-	return one[0], err
+	if err != nil {
+		return nil, sum, err
+	}
+	r.ID, r.CategoryID, r.ItemNo, r.ArchiveNo, r.Title = sum.ID, sum.CategoryID, sum.ItemNo, sum.ArchiveNo, sum.Title
+	r.Status, r.RowVersion, r.UpdatedAt, r.SourceStatus = sum.Status, sum.RowVersion, sum.UpdatedAt, sum.SourceStatus
+	src := sum.SourceFolderID
+	r.SourceFolderID = &src
+	if r.ExtraFields == nil {
+		r.ExtraFields = map[string]any{}
+	}
+	return &r, sum, nil
 }
 
 // Page 是条目的一页（详情的 pages，按页号排）。

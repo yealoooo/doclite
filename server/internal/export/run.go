@@ -134,7 +134,7 @@ func (s *Service) run(ctx context.Context, job *jobs.Job, run *jobs.Run) error {
 		return err
 	}
 	taskID := pl.ExportTaskID
-	t, err := getTask(ctx, s.pool, taskID)
+	t, err := runTask(ctx, s.pool, taskID)
 	if err != nil {
 		return retryDB(ctx, "读导出任务", err)
 	}
@@ -302,39 +302,22 @@ func checkTmpSpace(dir string, j *bundle.Job, attempt int) error {
 			pages++
 			sum += p.Size
 			if j.Format == bundle.FormatImages && p.Size > largest {
-				largest, largestWhat = p.Size, fmt.Sprintf("最大的一页（档号 %s 第 %d 页，%s）", it.ArchiveNo, i+1, humanBytes(p.Size))
+				largest, largestWhat = p.Size, fmt.Sprintf("最大的一页（档号 %s 第 %d 页，%s）", it.ArchiveNo, i+1, file.HumanBytes(p.Size))
 			}
 		}
 		if j.Format == bundle.FormatPDF && sum > largest {
-			largest, largestWhat = sum, fmt.Sprintf("最大的一件（档号 %s，%d 页，原图共 %s）", it.ArchiveNo, len(it.Pages), humanBytes(sum))
+			largest, largestWhat = sum, fmt.Sprintf("最大的一件（档号 %s，%d 页，原图共 %s）", it.ArchiveNo, len(it.Pages), file.HumanBytes(sum))
 		}
 	}
 	need := largest*6/5 + tmpReserve + int64(pages)<<10
 	if free >= need {
 		return nil
 	}
-	msg := fmt.Sprintf("临时盘（%s）剩 %s，这次导出要 %s：%s", dir, humanBytes(free), humanBytes(need), largestWhat)
+	msg := fmt.Sprintf("临时盘（%s）剩 %s，这次导出要 %s：%s", dir, file.HumanBytes(free), file.HumanBytes(need), largestWhat)
 	if attempt == 1 {
 		return jobs.Retry(errors.New(msg + "（临时盘可能正被别的导出、上传占着，会自动重试一次）"))
 	}
 	return errors.New(msg + "。请腾出临时盘的空间后重新导出")
-}
-
-func humanBytes(n int64) string {
-	units := []string{"字节", "KB", "MB", "GB", "TB"}
-	if n < 1024 {
-		return fmt.Sprintf("%d 字节", n)
-	}
-	v := float64(n)
-	u := 0
-	for v >= 1024 && u < len(units)-1 {
-		v /= 1024
-		u++
-	}
-	if v < 10 {
-		return fmt.Sprintf("%.2f %s", v, units[u])
-	}
-	return fmt.Sprintf("%.1f %s", v, units[u])
 }
 
 // recordOutput 把这次的导出物记到任务上。任务上已经记着上次执行留下的另一个导出物时，先删掉它（不受取消信号影响），

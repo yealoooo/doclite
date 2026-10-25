@@ -3,6 +3,7 @@ package folder
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -40,28 +41,30 @@ func (s *Service) CheckUpload(ctx context.Context, folderID uuid.UUID) error {
 	return catalog.SealedCheck(ctx, s.pool, "上传文件", folderID)
 }
 
-// claimIn 在已经锁住的文件夹 f 里领位置。
+// claimIn 在已经锁住的文件夹 f 里领位置（名字、sort_no、文件夹路径一次查出；前 100 个候选名都被占时再接着找）。
 func (s *Service) claimIn(ctx context.Context, q db.Querier, f *folderRow, name string) (file.Slot, error) {
-	final, err := freeName(ctx, q, f.ID, name)
+	final, sortNo, path, err := slotOf(ctx, q, f.ID, candidates(name, 0))
 	if err != nil {
 		return file.Slot{}, err
 	}
-	sortNo, err := nextSortNo(ctx, q, f.ID)
-	if err != nil {
-		return file.Slot{}, err
-	}
-	path, err := file.FolderPath(ctx, q, f.ID)
-	if err != nil {
-		return file.Slot{}, err
+	if final == "" {
+		if final, err = freeName(ctx, q, f.ID, name); err != nil {
+			return file.Slot{}, err
+		}
 	}
 	return file.Slot{ProjectID: f.ProjectID, FolderID: f.ID, FolderName: f.FolderName, FolderPath: path, FileName: final,
 		Renamed: final != name, SortNo: sortNo}, nil
 }
 
-// AddFile 按 slot 插入 folder_files（待分配、第 1 轮），返回它的 id。
-func (s *Service) AddFile(ctx context.Context, tx pgx.Tx, slot file.Slot, fileID, createdBy uuid.UUID) (uuid.UUID, error) {
+// AddFile 按 slot 插入 folder_files（待分配、第 1 轮），和文件日志 logs 一次往返写入，返回 folder_files 的 id。
+func (s *Service) AddFile(ctx context.Context, tx pgx.Tx, slot file.Slot, fileID, createdBy uuid.UUID, logs ...file.Log) (uuid.UUID, error) {
 	id := db.NewID()
-	if err := insertFolderFile(ctx, tx, id, slot.ProjectID, slot.FolderID, fileID, slot.FileName, slot.SortNo, createdBy); err != nil {
+	b := &pgx.Batch{}
+	b.Queue(insertFolderFileSQL, id, slot.ProjectID, slot.FolderID, fileID, slot.FileName, slot.SortNo, createdBy)
+	if err := file.QueueLogs(b, logs...); err != nil {
+		return uuid.Nil, err
+	}
+	if err := tx.SendBatch(ctx, b).Close(); err != nil {
 		if db.UniqueViolation(err, "ux_folder_files_name") {
 			return uuid.Nil, fileNameConflict(slot.FileName)
 		}
@@ -78,22 +81,40 @@ func (s *Service) PreviewName(ctx context.Context, folderID uuid.UUID, name stri
 // freeName 是文件夹里不重名的名字：name 没被占用就是它，否则依次试"名字 (1).扩展名"、"名字 (2).扩展名"……
 // （不区分大小写，只看未删除的；每次查 100 个候选）。
 func freeName(ctx context.Context, q db.Querier, folderID uuid.UUID, name string) (string, error) {
-	const batch = 100
-	for start := 0; start < 1_000_000; start += batch {
-		cands := make([]string, 0, batch)
-		for n := start; n < start+batch; n++ {
-			if n == 0 {
-				cands = append(cands, name)
-			} else {
-				cands = append(cands, names.NumberedName(name, n))
-			}
-		}
-		got, err := firstFreeName(ctx, q, folderID, cands)
+	for start := 0; start < 1_000_000; start += nameBatch {
+		got, err := firstFreeName(ctx, q, folderID, candidates(name, start))
 		if err != nil || got != "" {
 			return got, err
 		}
 	}
 	return "", fmt.Errorf("文件夹 %s 里找不到不重名的名字：%s", folderID, name)
+}
+
+// nameBatch 是每次查的候选名个数。
+const nameBatch = 100
+
+// candidates 是第 start 个起的 nameBatch 个候选名（第 0 个是 name 本身）。
+func candidates(name string, start int) []string {
+	out := make([]string, 0, nameBatch)
+	for n := start; n < start+nameBatch; n++ {
+		if n == 0 {
+			out = append(out, name)
+		} else {
+			out = append(out, names.NumberedName(name, n))
+		}
+	}
+	return out
+}
+
+// pickFreeName 和 freeName 规则一样，但在内存里挑：used 是文件夹里已占用的名字（小写），挑中的名字也记进 used。批量移动
+// 用（一次读出目标的名字，不逐个查）。
+func pickFreeName(used map[string]bool, name string) string {
+	final := name
+	for n := 1; used[strings.ToLower(final)]; n++ {
+		final = names.NumberedName(name, n)
+	}
+	used[strings.ToLower(final)] = true
+	return final
 }
 
 func fileNameConflict(name string) error {

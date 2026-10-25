@@ -122,8 +122,8 @@ func lockedLiveItem(ctx context.Context, tx pgx.Tx, projectID, id uuid.UUID) (*i
 	return r, nil
 }
 
-// Unseal 解除封存。
-func (s *Service) Unseal(ctx context.Context, operatorID, id uuid.UUID, rowVersion int, reason *string) (*Item, error) {
+// Unseal 解除封存。projectID 是条目所在的项目（中间件已经查过）。
+func (s *Service) Unseal(ctx context.Context, operatorID, projectID, id uuid.UUID, rowVersion int, reason *string) (*Item, error) {
 	if err := checkRowVersion(rowVersion); err != nil {
 		return nil, err
 	}
@@ -131,7 +131,7 @@ func (s *Service) Unseal(ctx context.Context, operatorID, id uuid.UUID, rowVersi
 	if err != nil {
 		return nil, err
 	}
-	projectID, st, err := s.itemContext(ctx, id)
+	st, err := loadSettings(ctx, s.pool, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -175,22 +175,6 @@ func (s *Service) Unseal(ctx context.Context, operatorID, id uuid.UUID, rowVersi
 		return nil, err
 	}
 	return out, nil
-}
-
-// itemContext 是条目所在的项目和归类设置；条目不存在、已删除 404。
-func (s *Service) itemContext(ctx context.Context, id uuid.UUID) (uuid.UUID, *settings, error) {
-	cur, err := getItem(ctx, s.pool, id)
-	if err != nil {
-		return uuid.Nil, nil, err
-	}
-	if cur == nil {
-		return uuid.Nil, nil, errItemNotFound
-	}
-	st, err := loadSettings(ctx, s.pool, cur.ProjectID)
-	if err != nil {
-		return uuid.Nil, nil, err
-	}
-	return cur.ProjectID, st, nil
 }
 
 // ResealPage 是重新归档对比里的一页。
@@ -248,6 +232,8 @@ type resealPlan struct {
 	preview *ResealPreview
 	wanted  []uuid.UUID
 	plan    pagePlan
+	// files 是 plan 里新挂上、移出、挪动的文件。
+	files map[uuid.UUID]*pageFile
 	// stateErr 是 409 invalid_state（来源文件夹不是件文件夹）；elsewhere 是 409 file_cataloged。
 	stateErr  error
 	elsewhere error
@@ -314,6 +300,7 @@ func planReseal(ctx context.Context, q db.Querier, r *itemRow) (*resealPlan, err
 	if err != nil {
 		return nil, err
 	}
+	out.files = info
 	page := func(id uuid.UUID, no int) ResealPage {
 		rp := ResealPage{FileID: id, PageNo: no}
 		if f := info[id]; f != nil {
@@ -367,12 +354,13 @@ func (s *Service) ResealPreview(ctx context.Context, projectID, id uuid.UUID) (*
 }
 
 // Reseal 重新归档。检查顺序：404 → 状态 409（item_locked / invalid_state）→ row_version 409 conflict →
-// 来源文件夹不是件文件夹 409 invalid_state → 新增的文件在别的条目里 409 file_cataloged。
-func (s *Service) Reseal(ctx context.Context, operatorID, id uuid.UUID, rowVersion int) (*Item, error) {
+// 来源文件夹不是件文件夹 409 invalid_state → 新增的文件在别的条目里 409 file_cataloged。projectID 是条目所在的项目
+// （中间件已经查过）。
+func (s *Service) Reseal(ctx context.Context, operatorID, projectID, id uuid.UUID, rowVersion int) (*Item, error) {
 	if err := checkRowVersion(rowVersion); err != nil {
 		return nil, err
 	}
-	projectID, st, err := s.itemContext(ctx, id)
+	st, err := loadSettings(ctx, s.pool, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -408,7 +396,7 @@ func (s *Service) Reseal(ctx context.Context, operatorID, id uuid.UUID, rowVersi
 		if p.elsewhere != nil {
 			return p.elsewhere
 		}
-		ch, err := applyPages(ctx, tx, projectID, operatorID, r, p.wanted, pageOpts{})
+		ch, err := writePages(ctx, tx, projectID, operatorID, r, p.plan, len(p.wanted), p.files, false)
 		if err != nil {
 			return err
 		}

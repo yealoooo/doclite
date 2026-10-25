@@ -43,12 +43,8 @@ func listMyProjects(ctx context.Context, q db.Querier, userID uuid.UUID) ([]MyPr
 FROM projects p
 JOIN folders f ON f.project_id = p.id AND f.parent_id IS NULL
 WHERE p.deleted_at IS NULL
-  AND (EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
-               WHERE ur.user_id = $1 AND r.role_code = $2)
-    OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = $1)
-    OR EXISTS (SELECT 1 FROM project_roles pr JOIN user_roles ur ON ur.role_id = pr.role_id
-               WHERE pr.project_id = p.id AND ur.user_id = $1))
-ORDER BY p.project_code, p.id`, userID, auth.AdminRoleCode)
+  AND `+auth.ProjectAccessSQL("$1", "p.id")+`
+ORDER BY p.project_code, p.id`, userID)
 	if err != nil {
 		return nil, err
 	}

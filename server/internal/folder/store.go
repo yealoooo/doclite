@@ -8,7 +8,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"doclite/server/internal/catalog"
+	"doclite/server/internal/file"
 	"doclite/server/internal/platform/db"
+	"doclite/server/internal/platform/pathcode"
 )
 
 // folder 的 SQL：folders、folder_files。
@@ -90,7 +92,7 @@ type Ancestor struct {
 // ancestors 是 path 的祖先（从根到父）。
 func ancestors(ctx context.Context, q db.Querier, projectID uuid.UUID, path string) ([]Ancestor, error) {
 	out := []Ancestor{}
-	prefixes := ancestorPaths(path)
+	prefixes := pathcode.Ancestors(path)
 	if len(prefixes) == 0 {
 		return out, nil
 	}
@@ -222,7 +224,7 @@ WHERE id = $1`, f.ID, f.FolderName, f.Remark, f.ParentID, sortNo)
 
 // rebaseSubtree 用一条 UPDATE 给整棵子树（含已删除的）换编码前缀。
 func rebaseSubtree(ctx context.Context, q db.Querier, projectID uuid.UUID, oldPrefix, newPrefix string) error {
-	lo, hi := subtreeRange(oldPrefix)
+	lo, hi := oldPrefix, pathcode.Upper(oldPrefix)
 	_, err := q.Exec(ctx, `UPDATE folders SET path_code = $4 || substr(path_code, length($2) + 1), updated_at = now()
 WHERE project_id = $1 AND path_code >= $2 COLLATE "C" AND path_code < $3 COLLATE "C"`, projectID, lo, hi, newPrefix)
 	return err
@@ -230,7 +232,7 @@ WHERE project_id = $1 AND path_code >= $2 COLLATE "C" AND path_code < $3 COLLATE
 
 // subtreeLiveFileIDs 是子树里未删除的文件的 file_id。
 func subtreeLiveFileIDs(ctx context.Context, q db.Querier, projectID uuid.UUID, prefix string) ([]uuid.UUID, error) {
-	lo, hi := subtreeRange(prefix)
+	lo, hi := prefix, pathcode.Upper(prefix)
 	return db.CollectIDs(ctx, q, `SELECT ff.file_id FROM folder_files ff JOIN folders f ON f.id = ff.folder_id
 WHERE f.project_id = $1 AND f.path_code >= $2 COLLATE "C" AND f.path_code < $3 COLLATE "C" AND ff.deleted_at IS NULL`,
 		projectID, lo, hi)
@@ -238,7 +240,7 @@ WHERE f.project_id = $1 AND f.path_code >= $2 COLLATE "C" AND f.path_code < $3 C
 
 // subtreeLiveFileCount 是子树里未删除的文件数，最多数到 limit。
 func subtreeLiveFileCount(ctx context.Context, q db.Querier, projectID uuid.UUID, prefix string, limit int) (int, error) {
-	lo, hi := subtreeRange(prefix)
+	lo, hi := prefix, pathcode.Upper(prefix)
 	var n int
 	err := q.QueryRow(ctx, `SELECT count(*) FROM (SELECT 1 FROM folder_files ff JOIN folders f ON f.id = ff.folder_id
 WHERE f.project_id = $1 AND f.path_code >= $2 COLLATE "C" AND f.path_code < $3 COLLATE "C" AND ff.deleted_at IS NULL
@@ -248,7 +250,7 @@ LIMIT $4) x`, projectID, lo, hi, limit).Scan(&n)
 
 // subtreeLiveFolderIDs 是子树里未删除的文件夹。
 func subtreeLiveFolderIDs(ctx context.Context, q db.Querier, projectID uuid.UUID, prefix string) ([]uuid.UUID, error) {
-	lo, hi := subtreeRange(prefix)
+	lo, hi := prefix, pathcode.Upper(prefix)
 	return db.CollectIDs(ctx, q, `SELECT id FROM folders
 WHERE project_id = $1 AND path_code >= $2 COLLATE "C" AND path_code < $3 COLLATE "C" AND deleted_at IS NULL`, projectID, lo, hi)
 }
@@ -380,10 +382,61 @@ func nextSortNo(ctx context.Context, q db.Querier, folderID uuid.UUID) (int, err
 	return n, err
 }
 
-func insertFolderFile(ctx context.Context, q db.Querier, id, projectID, folderID, fileID uuid.UUID, name string, sortNo int,
-	createdBy uuid.UUID) error {
-	_, err := q.Exec(ctx, `INSERT INTO folder_files (id, project_id, folder_id, file_id, file_name, sort_no, created_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7)`, id, projectID, folderID, fileID, name, sortNo, createdBy)
+const insertFolderFileSQL = `INSERT INTO folder_files (id, project_id, folder_id, file_id, file_name, sort_no, created_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7)`
+
+// slotOf 一次查出放进文件夹要的三样：candidates 里第一个没被占用的名字（见 firstFreeName，都被占了为空串）、
+// max(sort_no) + 1（见 nextSortNo）、文件夹的路径（见 file.FolderPaths）。
+func slotOf(ctx context.Context, q db.Querier, folderID uuid.UUID, candidates []string) (name string, sortNo int, path string, err error) {
+	var free *string
+	err = q.QueryRow(ctx, `SELECT (SELECT c.name FROM unnest($2::text[]) WITH ORDINALITY AS c(name, i)
+    WHERE NOT EXISTS (SELECT 1 FROM folder_files ff
+                      WHERE ff.folder_id = $1 AND ff.deleted_at IS NULL AND lower(ff.file_name) = lower(c.name))
+    ORDER BY c.i LIMIT 1),
+  (SELECT COALESCE(max(sort_no), 0) + 1 FROM folder_files WHERE folder_id = $1 AND deleted_at IS NULL),
+  `+file.FolderPathSQL("$1::uuid"), folderID, candidates).Scan(&free, &sortNo, &path)
+	if free != nil {
+		name = *free
+	}
+	return name, sortNo, path, err
+}
+
+// folderNames 是文件夹里未删除文件的名字（小写）和 max(sort_no) + 1。
+func folderNames(ctx context.Context, q db.Querier, folderID uuid.UUID) (map[string]bool, int, error) {
+	var list []string
+	var next int
+	err := q.QueryRow(ctx, `SELECT coalesce(array_agg(lower(file_name)), '{}'), coalesce(max(sort_no), 0) + 1
+FROM folder_files WHERE folder_id = $1 AND deleted_at IS NULL`, folderID).Scan(&list, &next)
+	if err != nil {
+		return nil, 0, err
+	}
+	used := make(map[string]bool, len(list))
+	for _, n := range list {
+		used[n] = true
+	}
+	return used, next, nil
+}
+
+// fileMove 是批量移动的一个文件：folder_files 的 id、新名字、新 sort_no。
+type fileMove struct {
+	ID     uuid.UUID
+	Name   string
+	SortNo int
+}
+
+// moveFolderFiles 把这些文件一次写到文件夹 folderID（只改 folder_files，硬性规则 3）。
+func moveFolderFiles(ctx context.Context, q db.Querier, folderID uuid.UUID, moves []fileMove) error {
+	if len(moves) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(moves))
+	ns := make([]string, len(moves))
+	sorts := make([]int, len(moves))
+	for i, m := range moves {
+		ids[i], ns[i], sorts[i] = m.ID, m.Name, m.SortNo
+	}
+	_, err := q.Exec(ctx, `UPDATE folder_files ff SET folder_id = $1, file_name = u.name, sort_no = u.sort_no, updated_at = now()
+FROM unnest($2::uuid[], $3::text[], $4::int[]) AS u(id, name, sort_no) WHERE ff.id = u.id`, folderID, ids, ns, sorts)
 	return err
 }
 

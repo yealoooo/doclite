@@ -86,16 +86,20 @@ type scopeItem struct {
 	Unapproved    int
 	Examples      []PageRef // 前 5 个不是 approved 的页
 	CategoryNames []string
+	FileIDs       []uuid.UUID // 页（按页号）
 }
 
+// livePages 是"条目的页"：挂接行（af）里文件（ff）和所在文件夹（f）都未删除的。预检、冻结用它。
+const livePages = `archive_item_files af
+  JOIN folder_files ff ON ff.file_id = af.file_id AND ff.deleted_at IS NULL
+  JOIN folders f ON f.id = ff.folder_id AND f.deleted_at IS NULL`
+
 // scopeItems 读这些条目（未删除、这个项目的）和它们的页数、不是通过的页数和前 5 页，按导出顺序（所在节点的
-// path_code、件号、id）。页 = 挂接行里文件和所在文件夹都未删除的。
+// path_code、件号、id），带全部页的 file_id（冻结用）。页见 livePages。
 func scopeItems(ctx context.Context, q db.Querier, projectID uuid.UUID, ids []uuid.UUID) ([]*scopeItem, error) {
 	rows, err := q.Query(ctx, `WITH pages AS (
   SELECT af.archive_item_id AS item_id, af.page_no, af.file_id, ff.file_name, ff.review_status
-  FROM archive_item_files af
-  JOIN folder_files ff ON ff.file_id = af.file_id AND ff.deleted_at IS NULL
-  JOIN folders f ON f.id = ff.folder_id AND f.deleted_at IS NULL
+  FROM `+livePages+`
   WHERE af.archive_item_id = ANY($2)
 ), agg AS (
   SELECT item_id, count(*) AS page_count,
@@ -103,11 +107,12 @@ func scopeItems(ctx context.Context, q db.Querier, projectID uuid.UUID, ids []uu
     (array_agg(page_no ORDER BY page_no) FILTER (WHERE review_status <> 'approved'))[1:5] AS ex_page,
     (array_agg(file_id ORDER BY page_no) FILTER (WHERE review_status <> 'approved'))[1:5] AS ex_file,
     (array_agg(file_name ORDER BY page_no) FILTER (WHERE review_status <> 'approved'))[1:5] AS ex_name,
-    (array_agg(review_status ORDER BY page_no) FILTER (WHERE review_status <> 'approved'))[1:5] AS ex_status
+    (array_agg(review_status ORDER BY page_no) FILTER (WHERE review_status <> 'approved'))[1:5] AS ex_status,
+    array_agg(file_id ORDER BY page_no) AS file_ids
   FROM pages GROUP BY item_id
 )
 SELECT a.id, a.category_id, a.item_no, a.archive_no, a.title, a.extra_fields, a.status, a.source_status, a.row_version,
-  COALESCE(g.page_count, 0), COALESCE(g.unapproved, 0), g.ex_page, g.ex_file, g.ex_name, g.ex_status
+  COALESCE(g.page_count, 0), COALESCE(g.unapproved, 0), g.ex_page, g.ex_file, g.ex_name, g.ex_status, g.file_ids
 FROM archive_items a
 JOIN archive_categories c ON c.id = a.category_id
 LEFT JOIN agg g ON g.item_id = a.id
@@ -124,7 +129,8 @@ ORDER BY c.path_code, a.item_no, a.id`, projectID, ids)
 		var exFile []uuid.UUID
 		var exName, exStatus []string
 		if err := rows.Scan(&it.ID, &it.CategoryID, &it.ItemNo, &it.ArchiveNo, &it.Title, &it.ExtraFields, &it.Status,
-			&it.SourceStatus, &it.RowVersion, &it.PageCount, &it.Unapproved, &exPage, &exFile, &exName, &exStatus); err != nil {
+			&it.SourceStatus, &it.RowVersion, &it.PageCount, &it.Unapproved, &exPage, &exFile, &exName, &exStatus,
+			&it.FileIDs); err != nil {
 			return nil, err
 		}
 		for i := range exPage {
@@ -134,36 +140,6 @@ ORDER BY c.path_code, a.item_no, a.id`, projectID, ids)
 			it.ExtraFields = map[string]any{}
 		}
 		out = append(out, &it)
-	}
-	return out, rows.Err()
-}
-
-// pageRow 是条目的一页（冻结用）。
-type pageRow struct {
-	ItemID uuid.UUID
-	FileID uuid.UUID
-	PageNo int
-}
-
-// itemPageRows 是这些条目的页（文件和所在文件夹未删除的），按条目、页号。
-func itemPageRows(ctx context.Context, q db.Querier, itemIDs []uuid.UUID) ([]pageRow, error) {
-	rows, err := q.Query(ctx, `SELECT af.archive_item_id, af.file_id, af.page_no
-FROM archive_item_files af
-JOIN folder_files ff ON ff.file_id = af.file_id AND ff.deleted_at IS NULL
-JOIN folders f ON f.id = ff.folder_id AND f.deleted_at IS NULL
-WHERE af.archive_item_id = ANY($1)
-ORDER BY af.archive_item_id, af.page_no`, itemIDs)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []pageRow
-	for rows.Next() {
-		var p pageRow
-		if err := rows.Scan(&p.ItemID, &p.FileID, &p.PageNo); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
 	}
 	return out, rows.Err()
 }
@@ -383,6 +359,20 @@ func taskProject(ctx context.Context, q db.Querier, id uuid.UUID) (uuid.UUID, er
 	return pid, err
 }
 
+// runTask 是执行时要的任务字段（id、项目、创建人、导出格式；不读 job 和别的表）；没有为 nil。
+func runTask(ctx context.Context, q db.Querier, id uuid.UUID) (*taskRow, error) {
+	t := taskRow{ID: id}
+	err := q.QueryRow(ctx, `SELECT project_id, created_by, export_format FROM export_tasks WHERE id = $1`, id).
+		Scan(&t.ProjectID, &t.CreatedBy, &t.Format)
+	if db.IsNoRows(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
 // jobPayload 读任务的 job 的整个 payload。
 func jobPayload(ctx context.Context, q db.Querier, jobID uuid.UUID) (*payload, error) {
 	var raw []byte
@@ -495,9 +485,10 @@ type addedPage struct {
 
 func addedPages(ctx context.Context, q db.Querier, taskID uuid.UUID, itemIDs []uuid.UUID) ([]addedPage, error) {
 	rows, err := q.Query(ctx, `SELECT af.archive_item_id, af.file_id, af.page_no, ff.file_name,
-  CASE WHEN ff.deleted_at IS NULL THEN ff.review_status END
+  CASE WHEN ff.deleted_at IS NULL AND f.deleted_at IS NULL THEN ff.review_status END
 FROM archive_item_files af
 LEFT JOIN folder_files ff ON ff.file_id = af.file_id
+LEFT JOIN folders f ON f.id = ff.folder_id
 WHERE af.archive_item_id = ANY($2)
   AND NOT EXISTS (SELECT 1 FROM export_task_files x WHERE x.export_task_id = $1
                   AND x.file_id = af.file_id AND x.archive_item_id = af.archive_item_id)`, taskID, itemIDs)
@@ -549,8 +540,13 @@ FROM archive_items WHERE id = ANY($1)`, ids)
 // 取消
 
 // lockTaskForCancel 按 job 行 → 任务行的顺序锁住（和执行器一样），返回两边的状态（没有 job 时 jobStatus 为空）。
-func lockTaskForCancel(ctx context.Context, tx pgx.Tx, taskID uuid.UUID) (taskStatus, jobStatus string, jobID *uuid.UUID, err error) {
-	if err = tx.QueryRow(ctx, `SELECT job_id FROM export_tasks WHERE id = $1`, taskID).Scan(&jobID); err != nil {
+func lockTaskForCancel(ctx context.Context, tx pgx.Tx, taskID uuid.UUID) (projectID uuid.UUID, taskStatus, jobStatus string,
+	jobID *uuid.UUID, err error) {
+	err = tx.QueryRow(ctx, `SELECT project_id, job_id FROM export_tasks WHERE id = $1`, taskID).Scan(&projectID, &jobID)
+	if db.IsNoRows(err) {
+		return uuid.Nil, "", "", nil, nil
+	}
+	if err != nil {
 		return
 	}
 	if jobID != nil {
@@ -650,10 +646,14 @@ LIMIT $3`, afterAt, afterID, limit)
 	return out, rows.Err()
 }
 
-// clearOutput 清掉任务上记着的导出物（还是这个 key 时）。done 的保留存储（"当时存在哪"），其他的连存储一起清空。
-func clearOutput(ctx context.Context, q db.Querier, taskID uuid.UUID, key string) error {
-	_, err := q.Exec(ctx, `UPDATE export_tasks SET output_key = NULL,
-  storage_profile_id = CASE WHEN status = 'done' THEN storage_profile_id END
-WHERE id = $1 AND output_key = $2`, taskID, key)
+// clearOutputs 清掉这些任务上记着的导出物（taskIDs、keys 一一对应，还是这个 key 时）。done 的保留存储（"当时存在哪"），其他的连存储一起清空。
+func clearOutputs(ctx context.Context, q db.Querier, taskIDs []uuid.UUID, keys []string) error {
+	if len(taskIDs) == 0 {
+		return nil
+	}
+	_, err := q.Exec(ctx, `UPDATE export_tasks t SET output_key = NULL,
+  storage_profile_id = CASE WHEN t.status = 'done' THEN t.storage_profile_id END
+FROM unnest($1::uuid[], $2::text[]) AS x(id, key)
+WHERE t.id = x.id AND t.output_key = x.key`, taskIDs, keys)
 	return err
 }

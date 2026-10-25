@@ -13,6 +13,7 @@ import (
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
 	"doclite/server/internal/platform/names"
+	"doclite/server/internal/platform/pathcode"
 	"doclite/server/internal/project"
 )
 
@@ -89,7 +90,7 @@ func codeConflict(code string) error {
 	return httpx.Conflict("", fmt.Sprintf("同一层已有编码为“%s”的节点（区分大小写），请换一个编码", code))
 }
 
-var errTreeFull = httpx.Conflict(httpx.CodeTreeFull, fmt.Sprintf("这一层的节点已经到上限（%d 个，编码不回收），请换一个上级节点", maxChildNo))
+var errTreeFull = httpx.Conflict(httpx.CodeTreeFull, fmt.Sprintf("这一层的节点已经到上限（%d 个，编码不回收），请换一个上级节点", pathcode.MaxChildNo))
 
 // categoryState 是审计里节点的状态。
 func categoryState(c *catRow, path string) map[string]any {
@@ -437,13 +438,9 @@ func (s *Service) DeleteCategory(ctx context.Context, operatorID, projectID, id 
 			return err
 		}
 		if n > 0 {
-			title := ex.Title
-			if title == "" {
-				title = "未填题名"
-			}
 			return httpx.Conflict("category_not_empty", fmt.Sprintf(
 				"「%s」下面（含下级节点）还有 %d 个条目（例如「%s」第 %d 件「%s」），不能删除；先把这些条目删除或移走",
-				node.CategoryName, n, ex.CategoryName, ex.ItemNo, title))
+				node.CategoryName, n, ex.CategoryName, ex.ItemNo, titleOrPlaceholder(ex.Title)))
 		}
 		ch, err := categoryChain(ctx, tx, projectID, node.PathCode)
 		if err != nil {

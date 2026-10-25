@@ -163,7 +163,7 @@ func (s *Service) Update(ctx context.Context, operatorID, id uuid.UUID, in Updat
 		}
 	}
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		before, _, err := s.lockForManage(ctx, tx, operatorID, id)
+		before, _, _, err := s.lockForManage(ctx, tx, operatorID, id)
 		if err != nil {
 			return err
 		}
@@ -212,7 +212,7 @@ func (s *Service) Enable(ctx context.Context, operatorID, id uuid.UUID) (*User, 
 
 func (s *Service) setStatus(ctx context.Context, operatorID, id uuid.UUID, status string) (*User, error) {
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		before, grants, err := s.lockForManage(ctx, tx, operatorID, id)
+		before, _, grants, err := s.lockForManage(ctx, tx, operatorID, id)
 		if err != nil {
 			return err
 		}
@@ -262,7 +262,7 @@ func (s *Service) ResetPassword(ctx context.Context, operatorID, id uuid.UUID, p
 		return err
 	}
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if _, _, err := s.lockForManage(ctx, tx, operatorID, id); err != nil {
+		if _, _, _, err := s.lockForManage(ctx, tx, operatorID, id); err != nil {
 			return err
 		}
 		if err := updatePassword(ctx, tx, id, hash); err != nil {
@@ -283,25 +283,8 @@ func (s *Service) ResetPassword(ctx context.Context, operatorID, id uuid.UUID, p
 func (s *Service) SetRoles(ctx context.Context, operatorID, id uuid.UUID, roleIDs []uuid.UUID) (*User, error) {
 	roleIDs = xslices.Unique(roleIDs)
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if err := s.roles.LockPermissionChanges(ctx, tx); err != nil {
-			return err
-		}
-		u, err := lockUser(ctx, tx, id)
+		u, op, before, err := s.lockForManage(ctx, tx, operatorID, id)
 		if err != nil {
-			return err
-		}
-		if u == nil {
-			return errNotFound
-		}
-		op, err := s.roles.Operator(ctx, tx, operatorID)
-		if err != nil {
-			return err
-		}
-		before, err := s.roles.GrantsOfUser(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if err := role.CheckManageUser(op, before); err != nil {
 			return err
 		}
 		after, err := s.roles.GrantsByIDs(ctx, tx, roleIDs)
@@ -337,30 +320,30 @@ func (s *Service) SetRoles(ctx context.Context, operatorID, id uuid.UUID, roleID
 }
 
 // lockForManage 是"修改一个用户"的公共步骤：拿权限变更锁 → 锁住用户（不存在 404）→ 防提权规则 1、4。
-// 返回用户和他现在的角色。
-func (s *Service) lockForManage(ctx context.Context, tx pgx.Tx, operatorID, id uuid.UUID) (*userRow, []role.Grant, error) {
+// 返回用户、操作人和用户现在的角色。
+func (s *Service) lockForManage(ctx context.Context, tx pgx.Tx, operatorID, id uuid.UUID) (*userRow, *role.Operator, []role.Grant, error) {
 	if err := s.roles.LockPermissionChanges(ctx, tx); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	u, err := lockUser(ctx, tx, id)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if u == nil {
-		return nil, nil, errNotFound
+		return nil, nil, nil, errNotFound
 	}
 	op, err := s.roles.Operator(ctx, tx, operatorID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	grants, err := s.roles.GrantsOfUser(ctx, tx, id)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := role.CheckManageUser(op, grants); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return u, grants, nil
+	return u, op, grants, nil
 }
 
 // ensureActiveAdmin：改完后系统里一个"启用且有 admin 角色"的用户都不剩时 409 `last_admin`（事务回滚）。

@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"doclite/server/internal/platform/db"
+	"doclite/server/internal/platform/pathcode"
 )
 
 // catalog 的 SQL：archive_categories、archive_items、archive_item_files（pages_store.go）。
@@ -102,7 +103,7 @@ WHERE id = ANY($1) AND project_id = $2 ORDER BY id FOR NO KEY UPDATE`, ids, proj
 // categoryChain 是 path 节点的祖先链（含它自己），从根往下。
 func categoryChain(ctx context.Context, q db.Querier, projectID uuid.UUID, path string) (chain, error) {
 	rows, err := q.Query(ctx, `SELECT path_code, category_type, category_code, category_name FROM archive_categories
-WHERE project_id = $1 AND path_code = ANY($2) ORDER BY path_code`, projectID, pathPrefixes(path))
+WHERE project_id = $1 AND path_code = ANY($2) ORDER BY path_code`, projectID, pathcode.Prefixes(path))
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +123,7 @@ WHERE project_id = $1 AND path_code = ANY($2) ORDER BY path_code`, projectID, pa
 func chainNodesForSubtree(ctx context.Context, q db.Querier, projectID uuid.UUID, path string) (map[string]chainNode, error) {
 	rows, err := q.Query(ctx, `SELECT path_code, category_type, category_code, category_name FROM archive_categories
 WHERE project_id = $1 AND deleted_at IS NULL AND ((path_code >= $2 AND path_code < $3) OR path_code = ANY($4))`,
-		projectID, path, subtreeUpper(path), pathPrefixes(path))
+		projectID, path, pathcode.Upper(path), pathcode.Prefixes(path))
 	if err != nil {
 		return nil, err
 	}
@@ -203,21 +204,10 @@ func allocChildPath(ctx context.Context, q db.Querier, parentID uuid.UUID) (path
 RETURNING path_code, last_child_no`, parentID).Scan(&parentPath, &childNo); err != nil {
 		return "", 0, false, err
 	}
-	if childNo > maxChildNo {
+	if childNo > pathcode.MaxChildNo {
 		return "", childNo, false, nil
 	}
-	return parentPath + pad5(childNo) + ".", childNo, true, nil
-}
-
-const maxChildNo = 99999
-
-func pad5(n int) string {
-	b := []byte("00000")
-	for i := 4; i >= 0 && n > 0; i-- {
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(b)
+	return pathcode.Child(parentPath, childNo), childNo, true, nil
 }
 
 // siblingWithCode 是 parentID 下编码为 code 的未删除节点（除了 except）；没有为 uuid.Nil。区分大小写。
@@ -241,7 +231,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, c.ID, c.ProjectID, c.ParentID, c.PathC
 // moveSubtreePaths 给 oldPath 子树（含已删除的节点）换前缀。
 func moveSubtreePaths(ctx context.Context, q db.Querier, projectID uuid.UUID, oldPath, newPath string) error {
 	_, err := q.Exec(ctx, `UPDATE archive_categories SET path_code = $3 || substr(path_code, length($2) + 1)
-WHERE project_id = $1 AND path_code >= $2 AND path_code < $4`, projectID, oldPath, newPath, subtreeUpper(oldPath))
+WHERE project_id = $1 AND path_code >= $2 AND path_code < $4`, projectID, oldPath, newPath, pathcode.Upper(oldPath))
 	return err
 }
 
@@ -265,7 +255,7 @@ func subtreeItems(ctx context.Context, q db.Querier, projectID uuid.UUID, path, 
 	var n int
 	if err := q.QueryRow(ctx, `SELECT count(*) FROM archive_items i JOIN archive_categories c ON c.id = i.category_id
 WHERE c.project_id = $1 AND c.path_code >= $2 AND c.path_code < $3 AND i.deleted_at IS NULL
-  AND ($4 = '' OR i.status = $4)`, projectID, path, subtreeUpper(path), status).Scan(&n); err != nil {
+  AND ($4 = '' OR i.status = $4)`, projectID, path, pathcode.Upper(path), status).Scan(&n); err != nil {
 		return 0, nil, err
 	}
 	if n == 0 {
@@ -276,7 +266,7 @@ WHERE c.project_id = $1 AND c.path_code >= $2 AND c.path_code < $3 AND i.deleted
 JOIN archive_categories c ON c.id = i.category_id
 WHERE c.project_id = $1 AND c.path_code >= $2 AND c.path_code < $3 AND i.deleted_at IS NULL
   AND ($4 = '' OR i.status = $4)
-ORDER BY c.path_code, i.item_no, i.id LIMIT 1`, projectID, path, subtreeUpper(path), status).
+ORDER BY c.path_code, i.item_no, i.id LIMIT 1`, projectID, path, pathcode.Upper(path), status).
 		Scan(&ex.ItemNo, &ex.Title, &ex.CategoryName)
 	return n, &ex, err
 }
@@ -285,7 +275,7 @@ ORDER BY c.path_code, i.item_no, i.id LIMIT 1`, projectID, path, subtreeUpper(pa
 func softDeleteSubtree(ctx context.Context, q db.Querier, projectID uuid.UUID, path string) ([]uuid.UUID, error) {
 	rows, err := q.Query(ctx, `UPDATE archive_categories SET deleted_at = now()
 WHERE project_id = $1 AND path_code >= $2 AND path_code < $3 AND deleted_at IS NULL RETURNING id`,
-		projectID, path, subtreeUpper(path))
+		projectID, path, pathcode.Upper(path))
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +299,7 @@ func subtreeItemsForRenumber(ctx context.Context, q db.Querier, projectID uuid.U
 	rows, err := q.Query(ctx, `SELECT i.id, i.item_no, i.archive_no, c.path_code, i.status = 'locked'
 FROM archive_items i JOIN archive_categories c ON c.id = i.category_id
 WHERE c.project_id = $1 AND c.path_code >= $2 AND c.path_code < $3 AND i.deleted_at IS NULL
-ORDER BY i.id`, projectID, path, subtreeUpper(path))
+ORDER BY i.id`, projectID, path, pathcode.Upper(path))
 	if err != nil {
 		return nil, 0, err
 	}

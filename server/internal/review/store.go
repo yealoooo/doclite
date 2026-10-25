@@ -5,9 +5,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"doclite/server/internal/auth"
+	"doclite/server/internal/file"
 	"doclite/server/internal/platform/db"
+	"doclite/server/internal/platform/pathcode"
 )
 
 // review 的写操作用到的 SQL。表 file_reviews 属于本模块。
@@ -32,7 +35,8 @@ type fileState struct {
 	VersionNo  int
 	// Open 是 open 的那一行分配；没有为 nil。
 	Open *openRow
-	// FolderPath 由 Service.withPaths 填（日志用）。
+	// FolderName、FolderPath 由 Service.withPaths 填（日志用）。
+	FolderName string
 	FolderPath string
 }
 
@@ -42,14 +46,6 @@ type openRow struct {
 	ReviewerID   uuid.UUID
 	ReviewerName string
 	AssignedBy   uuid.UUID
-}
-
-// filesInProject 是 ids 里在这个项目里的 file_id（不看是否已删除；文件不会跨项目移动，不用加锁）。
-func filesInProject(ctx context.Context, q db.Querier, projectID uuid.UUID, ids []uuid.UUID) ([]uuid.UUID, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	return db.CollectIDs(ctx, q, `SELECT file_id FROM folder_files WHERE file_id = ANY($1) AND project_id = $2`, ids, projectID)
 }
 
 // rereadFiles 在锁住 files 行之后重读这些文件：未删除（所在文件夹、项目也未删除）、在这个项目里的，带当前快照和 open 的
@@ -124,15 +120,11 @@ func (f *reviewerFacts) problems() []string {
 
 func (f *reviewerFacts) canReview() bool { return f.Active && f.HasReviewMenu && f.HasAccess }
 
-// reviewerFactsColumns 是 users u 在项目 $1 上的三个条件（和 auth 的项目授权条件一致：admin、个人授权、角色授权）。
-const reviewerFactsColumns = `u.status = 'active',
+// reviewerFactsColumns 是 users u 在项目 $1 上的三个条件（项目授权用 auth 的条件）。
+var reviewerFactsColumns = `u.status = 'active',
   EXISTS (SELECT 1 FROM user_roles ur JOIN role_menus rm ON rm.role_id = ur.role_id
           WHERE ur.user_id = u.id AND rm.menu_code = '` + auth.MenuReview + `'),
-  (EXISTS (SELECT 1 FROM user_roles ur JOIN roles ro ON ro.id = ur.role_id
-           WHERE ur.user_id = u.id AND ro.role_code = '` + auth.AdminRoleCode + `')
-   OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = $1 AND m.user_id = u.id)
-   OR EXISTS (SELECT 1 FROM project_roles pr JOIN user_roles ur ON ur.role_id = pr.role_id
-              WHERE pr.project_id = $1 AND ur.user_id = u.id))`
+  ` + auth.ProjectAccessSQL("u.id", "$1")
 
 // reviewerFactsOf 是这些用户在项目上的三个条件（按 id；不存在的用户不在结果里）。
 func reviewerFactsOf(ctx context.Context, q db.Querier, projectID uuid.UUID, userIDs []uuid.UUID) (map[uuid.UUID]*reviewerFacts, error) {
@@ -166,6 +158,15 @@ func insertOpen(ctx context.Context, q db.Querier, projectID uuid.UUID, rows []n
 	if len(rows) == 0 {
 		return nil
 	}
+	_, err := q.Exec(ctx, insertOpenSQL, insertOpenArgs(projectID, rows)...)
+	return err
+}
+
+const insertOpenSQL = `INSERT INTO file_reviews (id, project_id, file_id, reviewer_id, assigned_by)
+SELECT t.id, $1, t.file_id, t.reviewer_id, t.assigned_by
+FROM unnest($2::uuid[], $3::uuid[], $4::uuid[], $5::uuid[]) AS t(id, file_id, reviewer_id, assigned_by)`
+
+func insertOpenArgs(projectID uuid.UUID, rows []newAssignment) []any {
 	ids := make([]uuid.UUID, len(rows))
 	files := make([]uuid.UUID, len(rows))
 	reviewers := make([]uuid.UUID, len(rows))
@@ -173,30 +174,20 @@ func insertOpen(ctx context.Context, q db.Querier, projectID uuid.UUID, rows []n
 	for i, r := range rows {
 		ids[i], files[i], reviewers[i], by[i] = r.ID, r.FileID, r.ReviewerID, r.AssignedBy
 	}
-	_, err := q.Exec(ctx, `INSERT INTO file_reviews (id, project_id, file_id, reviewer_id, assigned_by)
-SELECT t.id, $1, t.file_id, t.reviewer_id, t.assigned_by
-FROM unnest($2::uuid[], $3::uuid[], $4::uuid[], $5::uuid[]) AS t(id, file_id, reviewer_id, assigned_by)`,
-		projectID, ids, files, reviewers, by)
-	return err
+	return []any{projectID, ids, files, reviewers, by}
 }
 
-// cancelOpen 把这些 open 的分配改成 cancelled（改派：先取消旧行，再插新行，部分唯一索引）。
-func cancelOpen(ctx context.Context, q db.Querier, ids []uuid.UUID) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	_, err := q.Exec(ctx, `UPDATE file_reviews SET status = 'cancelled' WHERE id = ANY($1) AND status = 'open'`, ids)
-	return err
-}
+// cancelOpenSQL 把这些 open 的分配（$1）改成 cancelled（改派：先取消旧行，再插新行，部分唯一索引）。
+const cancelOpenSQL = `UPDATE file_reviews SET status = 'cancelled' WHERE id = ANY($1) AND status = 'open'`
 
 // finished 是写了结果的一行。
 type finished struct {
 	ID, SnapshotID uuid.UUID
 }
 
-// finishReviews 把这些 open 的分配写成 done：结果、所审快照、原因、说明、reviewed_at（这条语句开始的时刻：锁都拿到了，
-// 批量通过的各行相同）。返回 reviewed_at。
-func finishReviews(ctx context.Context, q db.Querier, rows []finished, result string, reasons []string, comment *string) (time.Time, error) {
+// queueFinishReviews 把"这些 open 的分配写成 done"排进批量：结果、所审快照、原因、说明、reviewed_at（这条语句开始的
+// 时刻：锁都拿到了，批量通过的各行相同），执行后 reviewed_at 写进 at。
+func queueFinishReviews(b *pgx.Batch, rows []finished, result string, reasons []string, comment *string, at *time.Time) {
 	ids := make([]uuid.UUID, len(rows))
 	snaps := make([]uuid.UUID, len(rows))
 	for i, r := range rows {
@@ -205,15 +196,13 @@ func finishReviews(ctx context.Context, q db.Querier, rows []finished, result st
 	if reasons == nil {
 		reasons = []string{}
 	}
-	var at time.Time
-	err := q.QueryRow(ctx, `WITH t AS (SELECT * FROM unnest($1::uuid[], $2::uuid[]) AS t(id, snapshot_id)),
+	b.Queue(`WITH t AS (SELECT * FROM unnest($1::uuid[], $2::uuid[]) AS t(id, snapshot_id)),
 u AS (
   UPDATE file_reviews r SET status = 'done', result = $3, snapshot_id = t.snapshot_id, reject_reasons = $4, comment = $5,
     reviewed_at = statement_timestamp()
   FROM t WHERE r.id = t.id AND r.status = 'open'
   RETURNING r.reviewed_at)
-SELECT max(reviewed_at) FROM u`, ids, snaps, result, reasons, comment).Scan(&at)
-	return at, err
+SELECT max(reviewed_at) FROM u`, ids, snaps, result, reasons, comment).QueryRow(func(row pgx.Row) error { return row.Scan(at) })
 }
 
 // resultRow 是最近一次通过或驳回的那一行（按 id 倒序）。
@@ -260,41 +249,23 @@ func assignmentRow(ctx context.Context, q db.Querier, id uuid.UUID) (reviewerID 
 }
 
 // scopeFolder 是范围文件夹（未删除、在这个项目里）。
-type scopeFolder struct {
-	ID         uuid.UUID
-	ParentID   *uuid.UUID
-	FolderName string
-	PathCode   string
-}
+type scopeFolder struct{ file.LiveFolder }
 
-// subtreeRange 是 path 这棵子树的编码区间 [lo, hi)：hi 是把末尾的点换成 /（'/' 紧跟在 '.' 后面）。
+// subtreeRange 是这棵子树的编码区间 [lo, hi)（见 pathcode.Upper）。
 func (f *scopeFolder) subtreeRange() (lo, hi string) {
-	return f.PathCode, f.PathCode[:len(f.PathCode)-1] + "/"
+	return f.PathCode, pathcode.Upper(f.PathCode)
 }
 
 // inSubtree：path 在这棵子树里（含自己）。
-func (f *scopeFolder) inSubtree(path string) bool {
-	return len(path) >= len(f.PathCode) && path[:len(f.PathCode)] == f.PathCode
-}
+func (f *scopeFolder) inSubtree(path string) bool { return pathcode.InSubtree(path, f.PathCode) }
 
 // getScopeFolder 读范围文件夹：folderID 为 nil 时是项目的根文件夹；不在这个项目里或已删除为 nil。
 func getScopeFolder(ctx context.Context, q db.Querier, projectID uuid.UUID, folderID *uuid.UUID) (*scopeFolder, error) {
-	var f scopeFolder
-	var err error
-	if folderID == nil {
-		err = q.QueryRow(ctx, `SELECT id, parent_id, folder_name, path_code FROM folders
-WHERE project_id = $1 AND parent_id IS NULL AND deleted_at IS NULL`, projectID).Scan(&f.ID, &f.ParentID, &f.FolderName, &f.PathCode)
-	} else {
-		err = q.QueryRow(ctx, `SELECT id, parent_id, folder_name, path_code FROM folders
-WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL`, *folderID, projectID).Scan(&f.ID, &f.ParentID, &f.FolderName, &f.PathCode)
-	}
-	if db.IsNoRows(err) {
-		return nil, nil
-	}
-	if err != nil {
+	f, err := file.GetLiveFolder(ctx, q, projectID, folderID)
+	if f == nil || err != nil {
 		return nil, err
 	}
-	return &f, nil
+	return &scopeFolder{*f}, nil
 }
 
 // subtreeUnassigned 是子树里未删除的待分配文件（不加锁，按文件夹分配的候选，最多取 limit 个），和不是待分配的文件数
@@ -340,18 +311,4 @@ JOIN folders f ON f.id = ff.folder_id AND f.deleted_at IS NULL
 WHERE r.project_id = $1 AND r.status = 'open' AND r.reviewer_id = $2
   AND f.path_code >= $3 AND f.path_code < $4
 LIMIT $5`, projectID, reviewerID, lo, hi, limit)
-}
-
-// folderNameOf 是文件夹现在的名字。
-func folderNameOf(ctx context.Context, q db.Querier, id uuid.UUID) (string, error) {
-	var name string
-	err := q.QueryRow(ctx, `SELECT folder_name FROM folders WHERE id = $1`, id).Scan(&name)
-	return name, err
-}
-
-// displayName 是用户现在的显示名。
-func displayName(ctx context.Context, q db.Querier, userID uuid.UUID) (string, error) {
-	var name string
-	err := q.QueryRow(ctx, `SELECT display_name FROM users WHERE id = $1`, userID).Scan(&name)
-	return name, err
 }

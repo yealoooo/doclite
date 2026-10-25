@@ -214,9 +214,12 @@ type Principal struct {
 	ClientType       string
 	// IsAdmin：有内置的 admin 角色（M7-1：不受许可证限制）。
 	IsAdmin bool
-	// menus 是菜单码（所有角色的并集），第一次用到时查库，同一个请求里只查一次。
+	// menus 是菜单码（所有角色的并集），和会话一起查出来。
 	menus map[string]bool
 }
+
+// HasMenu：当前用户有这个菜单。
+func (p *Principal) HasMenu(code string) bool { return p.menus[code] }
 
 // Authenticate 按 Cookie 里的令牌识别当前用户。令牌不存在、会话过期或已撤销、用户已停用都是 401 `unauthorized`。
 func (s *Service) Authenticate(ctx context.Context, token string) (*Principal, error) {
@@ -242,6 +245,10 @@ func (s *Service) Authenticate(ctx context.Context, token string) (*Principal, e
 			return nil, err
 		}
 	}
+	menus := make(map[string]bool, len(row.MenuCodes))
+	for _, c := range row.MenuCodes {
+		menus[c] = true
+	}
 	return &Principal{
 		UserID:           row.UserID,
 		Username:         row.Username,
@@ -250,19 +257,8 @@ func (s *Service) Authenticate(ctx context.Context, token string) (*Principal, e
 		SessionExpiresAt: row.ExpiresAt,
 		ClientType:       row.ClientType,
 		IsAdmin:          row.IsAdmin,
+		menus:            menus,
 	}, nil
-}
-
-// MenuCodes 是当前用户的菜单码（所有角色的并集）；同一个请求里只查一次库。
-func (s *Service) MenuCodes(ctx context.Context, p *Principal) (map[string]bool, error) {
-	if p.menus == nil {
-		m, err := menuCodesOfUser(ctx, s.pool, p.UserID)
-		if err != nil {
-			return nil, err
-		}
-		p.menus = m
-	}
-	return p.menus, nil
 }
 
 // MyMenus 是用户的菜单（所有角色的并集，不含分组），按 sort_no 排序。
@@ -296,27 +292,13 @@ type MeRole struct {
 
 // GetMe 读当前用户（含角色）。
 func (s *Service) GetMe(ctx context.Context, userID uuid.UUID) (*Me, error) {
-	me, err := findMe(ctx, s.pool, userID)
+	me, licenseMenu, err := findMe(ctx, s.pool, userID)
 	if err != nil {
 		return nil, err
 	}
-	roles, err := rolesOfUser(ctx, s.pool, userID)
-	if err != nil {
-		return nil, err
-	}
-	me.Roles = make([]MeRole, 0, len(roles))
-	for _, r := range roles {
-		me.Roles = append(me.Roles, MeRole{RoleCode: r.RoleCode, RoleName: r.RoleName})
-	}
-	if s.license != nil {
+	if s.license != nil && licenseMenu {
 		if notice := s.license.Notice(); notice != nil {
-			menus, err := menuCodesOfUser(ctx, s.pool, userID)
-			if err != nil {
-				return nil, err
-			}
-			if menus[MenuSystemLicense] {
-				me.LicenseNotice = notice
-			}
+			me.LicenseNotice = notice
 		}
 	}
 	return me, nil

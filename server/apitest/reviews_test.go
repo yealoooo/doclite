@@ -30,8 +30,8 @@ func TestPermsReviews(t *testing.T) {
 	`)
 }
 
-// TestReviewStateTable：requirements 5.8 状态流转表的每一格（4 种状态 × 7 个动作），加上重扫、撤回通过时原审核人不能
-// 再审（→ 待分配）的两格。每格一个新文件，审核人 rv1。
+// TestReviewStateTable：requirements 5.8 状态流转表的每一格（4 种状态 × 7 个动作；重扫、撤回通过时原审核人不能再审
+// （→ 待分配）在 reviews_rescan_test、reviews_submit_test 里测）。每格一个新文件，审核人 rv1。
 func TestReviewStateTable(t *testing.T) {
 	t.Parallel()
 	e := newReviewEnv(t, "ST")
@@ -61,61 +61,44 @@ func TestReviewStateTable(t *testing.T) {
 	cases := []struct {
 		state, action string
 		want          outcome
-		before        func()
-		after         func()
 	}{
-		{"unassigned", "assign", outcome{status: "pending", reviewer: "rv1", round: 1}, nil, nil},
-		{"unassigned", "reassign", outcome{status: "unassigned", round: 1}, nil, nil}, // 跳过
-		{"unassigned", "approve", outcome{status: "unassigned", code: "invalid_state", round: 1}, nil, nil},
-		{"unassigned", "reject", outcome{status: "unassigned", code: "invalid_state", round: 1}, nil, nil},
-		{"unassigned", "rescan", outcome{status: "unassigned", code: "invalid_state", round: 1}, nil, nil},
-		{"unassigned", "reopen", outcome{status: "unassigned", code: "invalid_state", round: 1}, nil, nil},
-		{"unassigned", "delete", outcome{status: "deleted", round: 1}, nil, nil},
+		{"unassigned", "assign", outcome{status: "pending", reviewer: "rv1", round: 1}},
+		{"unassigned", "reassign", outcome{status: "unassigned", round: 1}}, // 跳过
+		{"unassigned", "approve", outcome{status: "unassigned", code: "invalid_state", round: 1}},
+		{"unassigned", "reject", outcome{status: "unassigned", code: "invalid_state", round: 1}},
+		{"unassigned", "rescan", outcome{status: "unassigned", code: "invalid_state", round: 1}},
+		{"unassigned", "reopen", outcome{status: "unassigned", code: "invalid_state", round: 1}},
+		{"unassigned", "delete", outcome{status: "deleted", round: 1}},
 
-		{"pending", "assign", outcome{status: "pending", reviewer: "rv1", round: 1}, nil, nil}, // 跳过
-		{"pending", "reassign", outcome{status: "pending", reviewer: "rv2", round: 1}, nil, nil},
-		{"pending", "approve", outcome{status: "approved", round: 1}, nil, nil},
-		{"pending", "reject", outcome{status: "rejected", round: 1}, nil, nil},
-		{"pending", "rescan", outcome{status: "pending", code: "invalid_state", reviewer: "rv1", round: 1}, nil, nil},
-		{"pending", "reopen", outcome{status: "pending", code: "invalid_state", reviewer: "rv1", round: 1}, nil, nil},
-		{"pending", "delete", outcome{status: "deleted", round: 1}, nil, nil}, // open 的那一行取消
+		{"pending", "assign", outcome{status: "pending", reviewer: "rv1", round: 1}}, // 跳过
+		{"pending", "reassign", outcome{status: "pending", reviewer: "rv2", round: 1}},
+		{"pending", "approve", outcome{status: "approved", round: 1}},
+		{"pending", "reject", outcome{status: "rejected", round: 1}},
+		{"pending", "rescan", outcome{status: "pending", code: "invalid_state", reviewer: "rv1", round: 1}},
+		{"pending", "reopen", outcome{status: "pending", code: "invalid_state", reviewer: "rv1", round: 1}},
+		{"pending", "delete", outcome{status: "deleted", round: 1}}, // open 的那一行取消
 
-		{"approved", "assign", outcome{status: "approved", round: 1}, nil, nil},   // 跳过
-		{"approved", "reassign", outcome{status: "approved", round: 1}, nil, nil}, // 跳过
-		{"approved", "approve", outcome{status: "approved", code: "invalid_state", round: 1}, nil, nil},
-		{"approved", "reject", outcome{status: "approved", code: "invalid_state", round: 1}, nil, nil},
-		{"approved", "rescan", outcome{status: "approved", code: "invalid_state", round: 1}, nil, nil},
-		{"approved", "reopen", outcome{status: "pending", reviewer: "rv1", round: 1}, nil, nil},
-		{"approved", "delete", outcome{status: "deleted", round: 1}, nil, nil},
+		{"approved", "assign", outcome{status: "approved", round: 1}},   // 跳过
+		{"approved", "reassign", outcome{status: "approved", round: 1}}, // 跳过
+		{"approved", "approve", outcome{status: "approved", code: "invalid_state", round: 1}},
+		{"approved", "reject", outcome{status: "approved", code: "invalid_state", round: 1}},
+		{"approved", "rescan", outcome{status: "approved", code: "invalid_state", round: 1}},
+		{"approved", "reopen", outcome{status: "pending", reviewer: "rv1", round: 1}},
+		{"approved", "delete", outcome{status: "deleted", round: 1}},
 
-		{"rejected", "assign", outcome{status: "rejected", round: 1}, nil, nil},   // 跳过
-		{"rejected", "reassign", outcome{status: "rejected", round: 1}, nil, nil}, // 跳过
-		{"rejected", "approve", outcome{status: "rejected", code: "invalid_state", round: 1}, nil, nil},
-		{"rejected", "reject", outcome{status: "rejected", code: "invalid_state", round: 1}, nil, nil},
-		{"rejected", "rescan", outcome{status: "pending", reviewer: "rv1", round: 2}, nil, nil},
-		{"rejected", "reopen", outcome{status: "rejected", code: "invalid_state", round: 1}, nil, nil},
-		{"rejected", "delete", outcome{status: "deleted", round: 1}, nil, nil},
-
-		// 原审核人不能再审：重扫、撤回通过都改为待分配（rv1 失去项目授权；之后恢复）。
-		{"rejected", "rescan", outcome{status: "unassigned", round: 2},
-			func() { e.GrantProject(e.p.ID, e.mgrID, e.rv2ID, e.scanID) },
-			func() { e.GrantProject(e.p.ID, e.mgrID, e.rv1ID, e.rv2ID, e.scanID) }},
-		{"approved", "reopen-by-mgr", outcome{status: "unassigned", round: 1},
-			func() { e.Exec(`UPDATE users SET status = 'disabled' WHERE id = $1`, e.rv1ID) },
-			func() { e.Exec(`UPDATE users SET status = 'active' WHERE id = $1`, e.rv1ID) }},
+		{"rejected", "assign", outcome{status: "rejected", round: 1}},   // 跳过
+		{"rejected", "reassign", outcome{status: "rejected", round: 1}}, // 跳过
+		{"rejected", "approve", outcome{status: "rejected", code: "invalid_state", round: 1}},
+		{"rejected", "reject", outcome{status: "rejected", code: "invalid_state", round: 1}},
+		{"rejected", "rescan", outcome{status: "pending", reviewer: "rv1", round: 2}},
+		{"rejected", "reopen", outcome{status: "rejected", code: "invalid_state", round: 1}},
+		{"rejected", "delete", outcome{status: "deleted", round: 1}},
 	}
-	actions["reopen-by-mgr"] = func(f ingestResponse) *Response { return e.mgr.Post("/api/files/"+f.FileID.String()+"/reopen", nil) }
 
 	who := map[uuid.UUID]string{e.rv1ID: "rv1", e.rv2ID: "rv2", uuid.Nil: ""}
 	for i, c := range cases {
 		f := e.fileIn(c.state, c.state+"-"+c.action+".jpg")
-		if c.before != nil {
-			c.before()
-		}
 		res := actions[c.action](f)
-		if c.after != nil {
-			c.after()
-		}
 		if c.want.code != "" {
 			res.ExpectError(http.StatusConflict, c.want.code)
 		} else if res.Status >= 300 {

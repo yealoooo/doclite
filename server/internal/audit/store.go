@@ -7,71 +7,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"doclite/server/internal/platform/db"
 )
 
-// timeSlack：created_at 是写审计的事务开始的时间，id 是插入时取的，两者只是基本同序——一个事务开始得早、插入得晚，
-// 它的 created_at 会比前面几条 id 小的还早。把时间范围换成 id 范围时两头各放宽这么多（远大于任何写审计的事务的时长），
-// 再在范围里按 created_at 精确过滤。
-const timeSlack = time.Hour
-
-// idRange 是时间范围换成的 id 范围 [lo, hi)；0 表示那一头不限。empty：范围里一条都没有。
-type idRange struct {
-	lo, hi int64
-	empty  bool
-}
-
-// timeToIDs 把 [from, to) 换成 id 的范围（两头各放宽 timeSlack）。
-func timeToIDs(ctx context.Context, q db.Querier, from, to *time.Time) (idRange, error) {
-	var lo, hi int64
-	if err := q.QueryRow(ctx, `SELECT coalesce(min(id), 0), coalesce(max(id), 0) FROM audit_logs`).Scan(&lo, &hi); err != nil {
-		return idRange{}, err
-	}
-	if hi == 0 {
-		return idRange{empty: true}, nil
-	}
-	var r idRange
-	var err error
-	if from != nil {
-		if r.lo, err = idBound(ctx, q, lo, hi+1, from.Add(-timeSlack)); err != nil {
-			return idRange{}, err
-		}
-	}
-	if to != nil {
-		if r.hi, err = idBound(ctx, q, lo, hi+1, to.Add(timeSlack)); err != nil {
-			return idRange{}, err
-		}
-	}
-	r.empty = r.lo > hi || (to != nil && r.hi <= lo) || (r.hi != 0 && r.lo >= r.hi)
-	return r, nil
-}
-
-// idBound 在 [lo, hi) 里二分查找第一条 created_at >= t 的记录的 id（按 id 和 created_at 同序找；id 有空洞时可能返回
-// 空洞里的一个值，当边界用效果一样）；都早于 t 时返回 hi。每一步是主键上的一次点查。
-func idBound(ctx context.Context, q db.Querier, lo, hi int64, t time.Time) (int64, error) {
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		var id int64
-		var at time.Time
-		err := q.QueryRow(ctx, `SELECT id, created_at FROM audit_logs WHERE id >= $1 ORDER BY id LIMIT 1`, mid).Scan(&id, &at)
-		switch {
-		case db.IsNoRows(err) || (err == nil && id >= hi):
-			hi = mid // [mid, hi) 里没有记录
-		case err != nil:
-			return 0, err
-		case !at.Before(t):
-			hi = id
-		default:
-			lo = id + 1
-		}
-	}
-	return lo, nil
-}
-
-// listLogs 是一页记录（多取一条，判断还有没有下一页），新的在前。
-func listLogs(ctx context.Context, q db.Querier, f Filter, b idRange) ([]Log, error) {
+// listLogs 是一页记录（多取一条，判断还有没有下一页），新的在前。按时间筛选走 created_at 的 BRIN 索引（0007）。
+func listLogs(ctx context.Context, q db.Querier, f Filter) ([]Log, error) {
 	var where []string
 	var args []any
 	add := func(cond string, v any) {
@@ -80,12 +21,6 @@ func listLogs(ctx context.Context, q db.Querier, f Filter, b idRange) ([]Log, er
 	}
 	if f.Cursor > 0 {
 		add("id < $%d", f.Cursor)
-	}
-	if b.lo > 0 {
-		add("id >= $%d", b.lo)
-	}
-	if b.hi > 0 {
-		add("id < $%d", b.hi)
 	}
 	if f.From != nil {
 		add("created_at >= $%d", *f.From)

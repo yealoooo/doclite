@@ -90,7 +90,6 @@ WHERE revoked_at IS NULL AND expires_at > now() AND last_seen_at > now() - make_
 // userIsAdmin：用户有没有内置的 admin 角色（跨模块的只读查询）。
 func userIsAdmin(ctx context.Context, q db.Querier, userID uuid.UUID) (bool, error) {
 	var ok bool
-	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
-WHERE ur.user_id = $1 AND r.role_code = '`+AdminRoleCode+`')`, userID).Scan(&ok)
+	err := q.QueryRow(ctx, `SELECT `+IsAdminSQL("$1"), userID).Scan(&ok)
 	return ok, err
 }

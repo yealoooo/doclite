@@ -135,7 +135,7 @@ func (h *Handler) testSaved(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in UpdateInput
-	if _, err := httpx.ReadOptionalJSON(r, &in); err != nil {
+	if err := httpx.ReadOptionalJSON(r, &in); err != nil {
 		return err
 	}
 	rep, err := h.svc.TestSaved(r.Context(), id, in)

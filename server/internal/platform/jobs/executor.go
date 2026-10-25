@@ -16,12 +16,8 @@ import (
 	"doclite/server/internal/platform/db"
 )
 
-// 一次执行被停下的原因（context.Cause）。
-var (
-	errShutdown = errors.New("server 正在退出")
-	errCancel   = errors.New("任务已取消")
-	errLost     = errors.New("后台任务已经不归这次执行了")
-)
+// errShutdown 是退出时停下执行的原因（context.Cause；取消、不归这次执行了用 ErrCanceled、ErrLost）。
+var errShutdown = errors.New("server 正在退出")
 
 // whyRestart 是启动时放回队列写进 error_message 的原因。
 const whyRestart = "执行中断（server 被停止或重启）"
@@ -116,7 +112,7 @@ func (e *Executor) Start(ctx context.Context) error {
 	for _, fn := range hooks {
 		fn()
 	}
-	if n, err := e.reap(ctx, whyRestart); err != nil {
+	if n, err := e.reap(ctx); err != nil {
 		e.log.Error("后台任务：启动时放回队列失败", "error", err)
 	} else if n > 0 {
 		e.log.Info("后台任务：上次执行中的已放回队列", "count", n)
@@ -164,7 +160,7 @@ func (e *Executor) Interrupt(jobID uuid.UUID) {
 	cancel := e.running[jobID]
 	e.mu.Unlock()
 	if cancel != nil {
-		cancel(errCancel)
+		cancel(ErrCanceled)
 	}
 }
 
@@ -176,12 +172,15 @@ func (e *Executor) loop(ss *session) {
 		case <-ss.base.Done():
 			return
 		}
-		job, h, err := e.claim(ss.base)
+		job, h, settled, err := e.claim(ss.base)
 		if err != nil && ss.base.Err() == nil {
 			e.log.Error("后台任务：领取失败", "error", err)
 		}
 		if job == nil {
 			<-ss.slots
+			if settled {
+				continue // 领到的不用执行（已经改好状态）：马上接着领
+			}
 			select {
 			case <-e.wake:
 			case <-time.After(e.opts.PollInterval):
@@ -208,14 +207,12 @@ func (e *Executor) busy(id uuid.UUID) bool {
 }
 
 // claim 领一个：一个短事务，FOR UPDATE SKIP LOCKED 挑一个到时间的 queued，改成 running、attempts + 1，再让 Handler
-// 把业务对象改成执行中。没有可领的返回 nil。业务对象已取消、没法执行的在这里就改好状态，也返回 nil（循环接着领）。
-func (e *Executor) claim(base context.Context) (*Job, Handler, error) {
+// 把业务对象改成执行中。没有可领的返回 nil。业务对象已取消、没法执行的在这里就改好状态，也返回 nil，settled 为 true
+// （循环马上接着领）。
+func (e *Executor) claim(base context.Context) (job *Job, h Handler, settled bool, err error) {
 	ctx, cancel := context.WithTimeout(base, dbTimeout)
 	defer cancel()
-	var job *Job
-	var h Handler
-	var settled bool
-	err := db.InTx(ctx, e.pool, func(tx pgx.Tx) error {
+	err = db.InTx(ctx, e.pool, func(tx pgx.Tx) error {
 		var id uuid.UUID
 		err := tx.QueryRow(ctx, `SELECT id FROM background_jobs
 WHERE status = 'queued' AND run_after <= now() AND job_type = ANY($1)
@@ -256,17 +253,17 @@ WHERE id = $1`, j.ID, f.Message)
 		return err
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	if job == nil {
-		return nil, nil, nil
+		return nil, nil, false, nil
 	}
 	h.Notify(job)
 	if settled {
 		e.log.Info("后台任务：领到的任务不用执行", "job_id", job.ID, "type", job.Type)
-		return nil, nil, nil
+		return nil, nil, true, nil
 	}
-	return job, h, nil
+	return job, h, false, nil
 }
 
 // execute 执行一次：Handler.Run 在自己的 goroutine 里跑，这里管心跳、进度、取消和最后的状态。
@@ -285,7 +282,7 @@ func (e *Executor) execute(ss *session, ctx context.Context, cancel context.Canc
 	e.log.Info("后台任务：开始执行", "job_id", job.ID, "type", job.Type, "attempt", job.Attempt)
 	// 领取之后、登记之前取消的（Interrupt 时还找不到它）：马上再看一次。
 	if canceled, err := h.CancelRequested(ctx, e.pool, job); err == nil && canceled {
-		cancel(errCancel)
+		cancel(ErrCanceled)
 	}
 
 	run := &Run{}
@@ -338,7 +335,7 @@ WHERE id = $1 AND status = 'running' AND attempts = $2`, job.ID, job.Attempt, pr
 			return
 		}
 		e.log.Error("后台任务：job 已经不归这次执行了，停下", "job_id", job.ID)
-		cancel(errLost)
+		cancel(ErrLost)
 		return
 	}
 	if progress != nil {
@@ -350,7 +347,7 @@ WHERE id = $1 AND status = 'running' AND attempts = $2`, job.ID, job.Attempt, pr
 		return
 	}
 	if canceled {
-		cancel(errCancel)
+		cancel(ErrCanceled)
 	}
 }
 
@@ -381,9 +378,9 @@ func (e *Executor) finish(job *Job, h Handler, cause, err error) {
 		return
 	}
 	switch {
-	case errors.Is(cause, errLost) || errors.Is(err, ErrLost):
+	case errors.Is(cause, ErrLost) || errors.Is(err, ErrLost):
 		e.log.Error("后台任务：job 已经不归这次执行了", "job_id", job.ID, "error", err)
-	case errors.Is(cause, errCancel) || errors.Is(err, ErrCanceled):
+	case errors.Is(cause, ErrCanceled) || errors.Is(err, ErrCanceled):
 		e.log.Info("后台任务：已取消，清理完", "job_id", job.ID)
 		e.settle(ctx, job, h, outCanceled, "")
 	case errors.Is(cause, errShutdown):
@@ -450,7 +447,7 @@ WHERE id = $1`, job.ID, message)
 // reap 在启动时按"执行中断"处理库里的 running（上次进程被杀、或者改状态写库失败留下的）：业务对象已取消的改成
 // canceled；次数用完的改成 failed；其余放回队列（算一次尝试，run_after 是现在）。每个 job 一个短事务。
 // 这个进程里还在执行的跳过（上次 Stop 没等到它收尾就又 Start 了）。
-func (e *Executor) reap(ctx context.Context, why string) (int, error) {
+func (e *Executor) reap(ctx context.Context) (int, error) {
 	rows, err := e.pool.Query(ctx, `SELECT id FROM background_jobs WHERE status = 'running' AND job_type = ANY($1) ORDER BY id`, e.types())
 	if err != nil {
 		return 0, err
@@ -489,12 +486,12 @@ FOR NO KEY UPDATE`, id))
 			case j.Attempt >= j.MaxAttempts:
 				to = Failed
 				_, err = tx.Exec(ctx, `UPDATE background_jobs SET status = 'failed', finished_at = now(), runner_id = NULL, error_message = $2
-WHERE id = $1`, id, FailureMessage(j.Attempt, why, 0))
+WHERE id = $1`, id, FailureMessage(j.Attempt, whyRestart, 0))
 			default:
 				to = Queued
 				_, err = tx.Exec(ctx, `UPDATE background_jobs SET status = 'queued', run_after = now(), runner_id = NULL,
   heartbeat_at = NULL, progress_done = 0, error_message = $2
-WHERE id = $1`, id, fmt.Sprintf("第 %d 次%s，已放回队列", j.Attempt, why))
+WHERE id = $1`, id, fmt.Sprintf("第 %d 次%s，已放回队列", j.Attempt, whyRestart))
 			}
 			if err != nil {
 				return err

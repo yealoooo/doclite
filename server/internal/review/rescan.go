@@ -100,11 +100,7 @@ func (s *Service) Rescan(ctx context.Context, userID, projectID, fileID uuid.UUI
 		if err := s.withPaths(ctx, tx, []*fileState{f}); err != nil {
 			return err
 		}
-		folderName, err := folderNameOf(ctx, tx, f.FolderID)
-		if err != nil {
-			return err
-		}
-		d := map[string]any{"folder": folderName, "folder_path": f.FolderPath, "file_name": f.FileName,
+		d := map[string]any{"folder": f.FolderName, "folder_path": f.FolderPath, "file_name": f.FileName,
 			"upload_name": u.FileName, "version_no": version, "review_round": round, "review_status": next.status}
 		next.describe(d)
 		if err := file.WriteLogs(ctx, tx, file.Log{ProjectID: projectID, FileID: fileID, Action: file.ActionRescan,

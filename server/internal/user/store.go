@@ -176,9 +176,8 @@ func replaceRoles(ctx context.Context, q db.Querier, userID uuid.UUID, roleIDs [
 // activeAdminRemains：系统里还有没有"启用且有 admin 角色"的用户。
 func activeAdminRemains(ctx context.Context, q db.Querier) (bool, error) {
 	var ok bool
-	err := q.QueryRow(ctx, `SELECT EXISTS (
-  SELECT 1 FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id
-  WHERE r.role_code = $1 AND u.status = 'active')`, auth.AdminRoleCode).Scan(&ok)
+	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users u WHERE u.status = 'active' AND `+auth.IsAdminSQL("u.id")+`)`).
+		Scan(&ok)
 	return ok, err
 }
 

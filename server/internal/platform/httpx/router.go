@@ -24,7 +24,7 @@ func Chain(mws ...Middleware) Middleware {
 // Router 是 `/api` 的路由表，基于标准库 ServeMux 的"方法 + 路径"模式（`GET /api/users/{id}`）。
 //
 //   - 注册时必须给出访问控制（硬性规则 10：每个接口声明自己需要的菜单码）：auth.Gate 的
-//     Public()、Login()、AnyMenu(…)、AllMenus(…)。传 nil 直接 panic，启动时就能发现漏写。
+//     Public()、Login()、AnyMenu(…)。传 nil 直接 panic，启动时就能发现漏写。
 //   - 没有匹配的路径返回 JSON 404 `not_found`；路径对但方法不对返回 JSON 405 `method_not_allowed`。
 type Router struct {
 	mux *http.ServeMux
@@ -38,7 +38,7 @@ func NewRouter() *Router {
 // Handle 注册一个接口。pattern 形如 `GET /api/system/users/{id}`；access 是访问控制中间件。
 func (rt *Router) Handle(pattern string, access Middleware, h HandlerFunc) {
 	if access == nil {
-		panic("httpx: 接口 " + pattern + " 没有声明访问控制（Public / Login / AnyMenu / AllMenus）")
+		panic("httpx: 接口 " + pattern + " 没有声明访问控制（Public / Login / AnyMenu）")
 	}
 	rt.mux.Handle(pattern, access(h))
 }

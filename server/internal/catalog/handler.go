@@ -279,7 +279,7 @@ func (h *Handler) deleteItem(w http.ResponseWriter, r *http.Request) error {
 		}
 		rv = &n
 	}
-	if err := h.svc.DeleteItem(r.Context(), auth.Current(r.Context()).UserID, id, rv); err != nil {
+	if err := h.svc.DeleteItem(r.Context(), auth.Current(r.Context()).UserID, auth.ProjectID(r.Context()), id, rv); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -303,7 +303,8 @@ func (h *Handler) action(action string) httpx.HandlerFunc {
 		if req.RowVersion == nil {
 			return errMissingRowVersion
 		}
-		out, err := h.svc.ItemAction(r.Context(), auth.Current(r.Context()).UserID, id, action, *req.RowVersion)
+		out, err := h.svc.ItemAction(r.Context(), auth.Current(r.Context()).UserID, auth.ProjectID(r.Context()), id, action,
+			*req.RowVersion)
 		if err != nil {
 			return err
 		}
@@ -335,7 +336,7 @@ type renumberRequest struct {
 
 func (h *Handler) renumber(w http.ResponseWriter, r *http.Request) error {
 	var req renumberRequest
-	if _, err := httpx.ReadOptionalJSON(r, &req); err != nil {
+	if err := httpx.ReadOptionalJSON(r, &req); err != nil {
 		return err
 	}
 	out, err := h.svc.Renumber(r.Context(), auth.Current(r.Context()).UserID, auth.ProjectID(r.Context()), req.CategoryID)
@@ -363,7 +364,8 @@ func (h *Handler) unseal(w http.ResponseWriter, r *http.Request) error {
 	if req.RowVersion == nil {
 		return errMissingRowVersion
 	}
-	out, err := h.svc.Unseal(r.Context(), auth.Current(r.Context()).UserID, id, *req.RowVersion, req.Reason)
+	out, err := h.svc.Unseal(r.Context(), auth.Current(r.Context()).UserID, auth.ProjectID(r.Context()), id, *req.RowVersion,
+		req.Reason)
 	if err != nil {
 		return err
 	}
@@ -405,7 +407,7 @@ func (h *Handler) reseal(w http.ResponseWriter, r *http.Request) error {
 	if req.RowVersion == nil {
 		return errMissingRowVersion
 	}
-	out, err := h.svc.Reseal(r.Context(), auth.Current(r.Context()).UserID, id, *req.RowVersion)
+	out, err := h.svc.Reseal(r.Context(), auth.Current(r.Context()).UserID, auth.ProjectID(r.Context()), id, *req.RowVersion)
 	if err != nil {
 		return err
 	}

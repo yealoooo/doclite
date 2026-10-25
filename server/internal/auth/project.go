@@ -50,7 +50,7 @@ func ProjectID(ctx context.Context) uuid.UUID {
 	return id
 }
 
-// InProject 在 access（Login、AnyMenu、AllMenus）之后检查项目授权：resolve 找出项目，项目不存在或已删除 404，
+// InProject 在 access（Login、AnyMenu）之后检查项目授权：resolve 找出项目，项目不存在或已删除 404，
 // 没授权 403 `forbidden`；通过后把项目 id 放进 context（[ProjectID]）。
 func (g *Gate) InProject(access httpx.Middleware, resolve ProjectResolver) httpx.Middleware {
 	if access == nil || resolve == nil {
@@ -60,7 +60,7 @@ func (g *Gate) InProject(access httpx.Middleware, resolve ProjectResolver) httpx
 		check := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p := Current(r.Context())
 			if p == nil {
-				panic("auth: InProject 要在 Login、AnyMenu、AllMenus 之后")
+				panic("auth: InProject 要在 Login、AnyMenu 之后")
 			}
 			pid, err := resolve(r)
 			if err == nil {
@@ -110,12 +110,24 @@ func (s *Service) RecheckProject(ctx context.Context, token string, projectID uu
 	return s.CheckProjectAccess(ctx, p.UserID, projectID)
 }
 
-// accessPredicate 是"用户 $uid 能进项目 p"的 SQL 条件（admin，或个人授权，或角色授权）。
-const accessPredicate = `(EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
-             WHERE ur.user_id = $1 AND r.role_code = '` + AdminRoleCode + `')
-  OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = $1)
-  OR EXISTS (SELECT 1 FROM project_roles pr JOIN user_roles ur ON ur.role_id = pr.role_id
-             WHERE pr.project_id = p.id AND ur.user_id = $1))`
+// IsAdminSQL 是"用户 userExpr 有内置的 admin 角色"的 SQL 条件（userExpr 是 SQL 表达式，如 `$1`、`u.id`）。
+// 别的模块的只读查询拼进去用，条件只写这一份。
+func IsAdminSQL(userExpr string) string {
+	return `EXISTS (SELECT 1 FROM user_roles aur JOIN roles ar ON ar.id = aur.role_id
+          WHERE aur.user_id = ` + userExpr + ` AND ar.role_code = '` + AdminRoleCode + `')`
+}
+
+// ProjectAccessSQL 是"用户 userExpr 能进项目 projectExpr"的 SQL 条件（admin，或个人授权，或角色授权；requirements
+// 第 4 节"项目授权"）。别的模块的只读查询拼进去用，条件只写这一份。
+func ProjectAccessSQL(userExpr, projectExpr string) string {
+	return `(` + IsAdminSQL(userExpr) + `
+  OR EXISTS (SELECT 1 FROM project_members apm WHERE apm.project_id = ` + projectExpr + ` AND apm.user_id = ` + userExpr + `)
+  OR EXISTS (SELECT 1 FROM project_roles apr JOIN user_roles aur ON aur.role_id = apr.role_id
+             WHERE apr.project_id = ` + projectExpr + ` AND aur.user_id = ` + userExpr + `))`
+}
+
+// accessPredicate 是"用户 $1 能进项目 p"。
+var accessPredicate = ProjectAccessSQL("$1", "p.id")
 
 // projectAccess 是 auth 对 projects、project_members、project_roles、user_roles、roles 的只读查询（跨模块的读）。
 func projectAccess(ctx context.Context, q db.Querier, userID, projectID uuid.UUID) (alive, allowed, found bool, err error) {

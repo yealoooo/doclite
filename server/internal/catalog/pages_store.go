@@ -33,29 +33,6 @@ func itemPageList(ctx context.Context, q db.Querier, itemID uuid.UUID) ([]curPag
 	return out, rows.Err()
 }
 
-// projectFileIDs 是 ids 里属于这个项目的文件（含已删除的；文件不会换项目，不用加锁读），锁 files 行之前用它
-// 过滤：只锁这个项目里的。
-func projectFileIDs(ctx context.Context, q db.Querier, projectID uuid.UUID, ids []uuid.UUID) ([]uuid.UUID, error) {
-	return collectUUIDs(ctx, q, `SELECT file_id FROM folder_files WHERE file_id = ANY($1) AND project_id = $2`, ids, projectID)
-}
-
-func collectUUIDs(ctx context.Context, q db.Querier, sql string, args ...any) ([]uuid.UUID, error) {
-	rows, err := q.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
-}
-
 // pageFile 是一个文件现在的样子（锁住 files 行之后用新语句读）。
 type pageFile struct {
 	FileID       uuid.UUID

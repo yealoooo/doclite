@@ -108,7 +108,7 @@ func New(pool *pgxpool.Pool, opts Options, log *slog.Logger) (*App, error) {
 	storageSvc := storage.NewService(pool, opts.MasterKey)
 	folderSvc := folder.NewService(pool, bus, authSvc, storageSvc)
 	fileSvc := file.NewService(pool, bus, authSvc, storageSvc, folderSvc, opts.Upload)
-	reviewSvc := review.NewService(pool, bus, authSvc, storageSvc, folderSvc, fileSvc)
+	reviewSvc := review.NewService(pool, bus, authSvc, folderSvc, fileSvc)
 	executor := jobs.New(pool, opts.Jobs, log)
 	exportSvc := export.NewService(pool, bus, storageSvc, executor, export.Options{TmpDir: opts.Upload.TmpDir, PartSize: opts.ExportPartSize}, log)
 	executor.Register(export.JobType, exportSvc.JobHandler())

@@ -214,13 +214,10 @@ func (s *Service) Ingest(ctx context.Context, projectID, folderID, userID uuid.U
 		if err := InsertSnapshot(ctx, tx, snap); err != nil {
 			return err
 		}
-		ffID, err := s.folders.AddFile(ctx, tx, slot, fileID, userID)
+		ffID, err := s.folders.AddFile(ctx, tx, slot, fileID, userID, Log{ProjectID: projectID, FileID: fileID,
+			Action: ActionUpload, OperatorID: userID, Detail: map[string]any{"folder": slot.FolderName,
+				"folder_path": slot.FolderPath, "file_name": slot.FileName, "upload_name": u.FileName}})
 		if err != nil {
-			return err
-		}
-		if err := WriteLogs(ctx, tx, Log{ProjectID: projectID, FileID: fileID, Action: ActionUpload, OperatorID: userID,
-			Detail: map[string]any{"folder": slot.FolderName, "folder_path": slot.FolderPath, "file_name": slot.FileName,
-				"upload_name": u.FileName}}); err != nil {
 			return err
 		}
 		r := st.Response(snap)
@@ -239,14 +236,18 @@ func (s *Service) Ingest(ctx context.Context, projectID, folderID, userID uuid.U
 	return out, created, nil
 }
 
-// precheck 按顺序查重（预判和锁内复查都用它）：先看断网重试（同一文件夹里 upload_name 和 sha 都相同 → 返回已有文件），
-// 再看项目范围（当前版本 sha 相同 → 409 duplicate_content）。都没有时返回 nil, nil。
+// precheck 按顺序查重（预判和锁内复查都用它，一条语句查两样）：先看断网重试（同一文件夹里 upload_name 和 sha 都相同 →
+// 返回已有文件），再看项目范围（当前版本 sha 相同 → 409 duplicate_content）。都没有时返回 nil, nil。
 func (s *Service) precheck(ctx context.Context, q db.Querier, projectID, folderID uuid.UUID, u *Upload) (*IngestResponse, error) {
-	if r, err := s.retried(ctx, q, folderID, u); r != nil || err != nil {
-		return r, err
-	}
-	if err := s.FindDuplicate(ctx, q, projectID, u.SHA256, nil); err != nil {
+	ffID, same, err := findRetryOrSame(ctx, q, projectID, folderID, u.FileName, u.SHA256)
+	if err != nil {
 		return nil, err
+	}
+	if ffID != nil {
+		return retriedResponse(ctx, q, *ffID, u)
+	}
+	if same != nil {
+		return nil, duplicateError(ctx, q, same, nil)
 	}
 	return nil, nil
 }
@@ -257,7 +258,11 @@ func (s *Service) retried(ctx context.Context, q db.Querier, folderID uuid.UUID,
 	if err != nil || ffID == nil {
 		return nil, err
 	}
-	r, err := ingested(ctx, q, *ffID)
+	return retriedResponse(ctx, q, *ffID, u)
+}
+
+func retriedResponse(ctx context.Context, q db.Querier, ffID uuid.UUID, u *Upload) (*IngestResponse, error) {
+	r, err := ingested(ctx, q, ffID)
 	if err != nil {
 		return nil, err
 	}
@@ -272,6 +277,11 @@ func (s *Service) FindDuplicate(ctx context.Context, q db.Querier, projectID uui
 	if err != nil || c == nil {
 		return err
 	}
+	return duplicateError(ctx, q, c, self)
+}
+
+// duplicateError 是查到内容相同的文件 c 时的 409 duplicate_content。
+func duplicateError(ctx context.Context, q db.Querier, c *sameContent, self *uuid.UUID) error {
 	path, err := FolderPath(ctx, q, c.FolderID)
 	if err != nil {
 		return err
@@ -317,7 +327,7 @@ func (s *Service) Check(ctx context.Context, projectID, folderID uuid.UUID, req 
 		return nil, tooLarge(s.opts.MaxUploadBytes)
 	}
 	sha, _ := hex.DecodeString(req.SHA256)
-	ffID, err := findRetry(ctx, s.pool, folderID, req.FileName, sha)
+	ffID, same, err := findRetryOrSame(ctx, s.pool, projectID, folderID, req.FileName, sha)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +339,8 @@ func (s *Service) Check(ctx context.Context, projectID, folderID uuid.UUID, req 
 		return &CheckResponse{AlreadyUploaded: true, FinalName: r.FileName}, nil
 	}
 	out := &CheckResponse{}
-	if err := s.FindDuplicate(ctx, s.pool, projectID, sha, nil); err != nil {
+	if same != nil {
+		err := duplicateError(ctx, s.pool, same, nil)
 		e, ok := httpx.AsError(err)
 		if !ok || e.Code != CodeDuplicateContent {
 			return nil, err

@@ -3,6 +3,7 @@ package file
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,18 +19,31 @@ import (
 // currentVersion 是"s 是这个文件的当前快照"的条件。
 const currentVersion = `s.version_no = (SELECT max(x.version_no) FROM file_snapshots x WHERE x.file_id = s.file_id)`
 
-// projectCode 是项目编码（进 S3 key）。
+// projectCodes 缓存项目编码（项目 id → project_code）。项目编码建了就不改，缓存不用失效。
+var projectCodes sync.Map
+
+// ProjectCode 是项目编码（进 S3 key）。
 func ProjectCode(ctx context.Context, q db.Querier, projectID uuid.UUID) (string, error) {
+	if v, ok := projectCodes.Load(projectID); ok {
+		return v.(string), nil
+	}
 	var code string
-	err := q.QueryRow(ctx, `SELECT project_code FROM projects WHERE id = $1`, projectID).Scan(&code)
-	return code, err
+	if err := q.QueryRow(ctx, `SELECT project_code FROM projects WHERE id = $1`, projectID).Scan(&code); err != nil {
+		return "", err
+	}
+	projectCodes.Store(projectID, code)
+	return code, nil
 }
 
-// findRetry：同一文件夹里未删除的文件，当前快照的 upload_name 和 sha 都相同（断网重试）→ folder_files 的 id。
+// retryCond 是"同一文件夹里未删除的文件，当前快照的 upload_name 和 sha 都相同（断网重试）"（s、ff 分别是快照和
+// folder_files；参数 $1 sha、$2 upload_name、$3 文件夹）。
+const retryCond = `s.content_sha256 = $1 AND s.upload_name = $2 AND ff.folder_id = $3 AND ff.deleted_at IS NULL AND ` + currentVersion
+
+// findRetry：断网重试命中的文件（见 retryCond）→ folder_files 的 id。
 func findRetry(ctx context.Context, q db.Querier, folderID uuid.UUID, uploadName string, sha []byte) (*uuid.UUID, error) {
 	var id uuid.UUID
 	err := q.QueryRow(ctx, `SELECT ff.id FROM file_snapshots s JOIN folder_files ff ON ff.file_id = s.file_id
-WHERE s.content_sha256 = $1 AND s.upload_name = $2 AND ff.folder_id = $3 AND ff.deleted_at IS NULL AND `+currentVersion+`
+WHERE `+retryCond+`
 ORDER BY ff.sort_no, ff.id LIMIT 1`, sha, uploadName, folderID).Scan(&id)
 	if db.IsNoRows(err) {
 		return nil, nil
@@ -38,6 +52,27 @@ ORDER BY ff.sort_no, ff.id LIMIT 1`, sha, uploadName, folderID).Scan(&id)
 		return nil, err
 	}
 	return &id, nil
+}
+
+// findRetryOrSame 一条语句做上传的两步查重：断网重试命中的文件（folder_files 的 id，见 findRetry）和项目里内容相同的
+// 文件（见 findSameContent，不带 self）。都没有时都为 nil。
+func findRetryOrSame(ctx context.Context, q db.Querier, projectID, folderID uuid.UUID, uploadName string, sha []byte) (
+	*uuid.UUID, *sameContent, error) {
+	var retry, fileID, folder *uuid.UUID
+	var name *string
+	err := q.QueryRow(ctx, `SELECT r.id, c.file_id, c.folder_id, c.file_name
+FROM (SELECT 1) one
+LEFT JOIN LATERAL (SELECT ff.id FROM file_snapshots s JOIN folder_files ff ON ff.file_id = s.file_id
+  WHERE `+retryCond+` ORDER BY ff.sort_no, ff.id LIMIT 1) r ON true
+LEFT JOIN LATERAL (SELECT ff.file_id, ff.folder_id, ff.file_name FROM file_snapshots s
+  JOIN folder_files ff ON ff.file_id = s.file_id JOIN folders f ON f.id = ff.folder_id
+  WHERE s.content_sha256 = $1 AND ff.project_id = $4 AND ff.deleted_at IS NULL AND f.deleted_at IS NULL AND `+currentVersion+`
+  ORDER BY f.path_code, ff.sort_no, ff.id LIMIT 1) c ON true`, sha, uploadName, folderID, projectID).
+		Scan(&retry, &fileID, &folder, &name)
+	if err != nil || fileID == nil {
+		return retry, nil, err
+	}
+	return retry, &sameContent{FileID: *fileID, FolderID: *folder, FileName: *name}, nil
 }
 
 // sameContent 是项目里内容相同的文件（查重的结果）。
@@ -64,16 +99,15 @@ LIMIT 1`, sha, projectID, self).Scan(&c.FileID, &c.FolderID, &c.FileName)
 	return &c, nil
 }
 
-// InsertSnapshot 在调用方的事务里插入快照（只追加，硬性规则 2）；v1 是新文件，先插入 files 行。created_at 用
+// InsertSnapshot 在调用方的事务里插入快照（只追加，硬性规则 2）；v1 是新文件，同一条语句先插入 files 行。created_at 用
 // clock_timestamp()（插入的这一刻）：事务可能等了锁，用事务开始的 now() 会早于别的事务里刚发生的事（例如条目锁定），
 // "锁定后有新版本"会漏标。
 func InsertSnapshot(ctx context.Context, q db.Querier, s *Snapshot) error {
+	newFile := ""
 	if s.VersionNo == 1 {
-		if _, err := q.Exec(ctx, `INSERT INTO files (id) VALUES ($1)`, s.FileID); err != nil {
-			return err
-		}
+		newFile = `WITH f AS (INSERT INTO files (id) VALUES ($2)) `
 	}
-	_, err := q.Exec(ctx, `INSERT INTO file_snapshots (id, file_id, version_no, snapshot_type, parent_snapshot_id, edit_ops,
+	_, err := q.Exec(ctx, newFile+`INSERT INTO file_snapshots (id, file_id, version_no, snapshot_type, parent_snapshot_id, edit_ops,
   storage_profile_id, storage_key, cover_key, content_sha256, file_size, mime_type, upload_name, width_px, height_px, dpi,
   color_mode, created_by, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, clock_timestamp())`,

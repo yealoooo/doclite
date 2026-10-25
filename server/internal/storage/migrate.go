@@ -209,11 +209,6 @@ type Migration struct {
 	FailuresTruncated bool               `json:"failures_truncated"`
 }
 
-// Active：排队中或执行中。
-func (m *Migration) Active() bool {
-	return m.Status == string(jobs.Queued) || m.Status == string(jobs.Running)
-}
-
 func (m *Migration) fill(p *migratePayload) {
 	m.SourceProfileID, m.TargetProfileID = p.SourceProfileID, p.TargetProfileID
 	m.SourceProfileName, m.TargetProfileName = p.SourceProfileName, p.TargetProfileName

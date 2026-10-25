@@ -23,8 +23,9 @@
 //   - 文件夹的变更写审计（target_type folder），文件的操作写 file_logs；没有实际变化不写库、不审计、不发事件；
 //   - 提交后发 folders.changed、files.changed。
 //
-// 给上传（internal/file）用的 ClaimSlot、AddFile、PreviewName、Path、ProjectOf 实现 file.Folders。
-// 给审核（internal/review）用的 SetReviewStatus、SetReviewStatusAndRound 改 folder_files 的审核状态和轮次（review_state.go）。
+// 给上传（internal/file）用的 ProjectOf、ClaimSlot、CheckUpload、AddFile、PreviewName 实现 file.Folders。
+// 给审核（internal/review）用的 SetReviewStatus、QueueReviewStatus、SetReviewStatusAndRound 改 folder_files 的审核状态和
+// 轮次（review_state.go）。
 package folder
 
 import (
@@ -44,6 +45,7 @@ import (
 	"doclite/server/internal/platform/events"
 	"doclite/server/internal/platform/httpx"
 	"doclite/server/internal/platform/names"
+	"doclite/server/internal/platform/pathcode"
 	"doclite/server/internal/project"
 	"doclite/server/internal/storage"
 )
@@ -364,7 +366,7 @@ func (s *Service) Update(ctx context.Context, userID, projectID, id uuid.UUID, i
 			if target == nil || target.Deleted || target.ProjectID != projectID {
 				return errTargetNotFound
 			}
-			if inSubtree(target.PathCode, f.PathCode) {
+			if pathcode.InSubtree(target.PathCode, f.PathCode) {
 				return httpx.Conflict(httpx.CodeTreeCycle, "不能把文件夹移到它自己或它下面的子文件夹里")
 			}
 		}

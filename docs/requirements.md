@@ -72,6 +72,7 @@
 - **`0004`（2026-10-19，整个文件夹归档）**：archive_items 加 `source_folder_id`（引用 folders，未删除条目里唯一的部分索引）、`source_status`（sealed / modifying）、`unsealed_by`、`unsealed_at`、`unseal_reason`；status 的 done 改成 draft，CHECK 改为 draft / locked。**不处理旧数据**【用户 2026-10-19：旧数据不用管，开发库直接重建】：开发库 `doclite_dev` 删掉重建，再用精简的演示数据脚本造数据（只要够功能测试，见 roadmap M9-3）。
 - **`0005_perf_indexes.sql`（M10-1，只加索引）**：`archive_item_files (project_id, file_id) INCLUDE (archive_item_id)`（看板按项目取挂接）、`file_reviews (project_id, reviewer_id) INCLUDE (file_id) WHERE status = 'open'`（可以分配的人、改派列表按项目取进行中的分配）。
 - **`0006_drop_plugins_menu.sql`（M10-7）**：删掉菜单 `system.plugins`（只有占位页），角色授权随外键级联删除。
+- **`0007_modifying_audit_indexes.sql`（M11-1，只加索引，用户 2026-10-25 同意）**：`archive_items (project_id, unsealed_at DESC NULLS LAST, id) WHERE source_status = 'modifying' AND deleted_at IS NULL`（修改中的件）、`audit_logs USING brin (created_at)`（审计日志按时间筛选，直接按 created_at 过滤）。
 - 参考 SQL：`/Users/yanlong/project/doclite-project/bak/doclite-v3/docs/sql/key-queries.sql`（查重、path_code 分配、移动、分配、通过、软删除、导出预检、任务领取等）。
 - 0001 中 `cover_key` 注释"WebP、server 生成"已过时。预留不写：快照类型 auto/edit/restore、案卷（volume）、page_label、pdf_ocr/ofd、ocr_results。
 

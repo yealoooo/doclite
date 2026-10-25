@@ -3,7 +3,6 @@ package catalog
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
@@ -298,8 +297,7 @@ func expandFolders(ctx context.Context, q db.Querier, projectID uuid.UUID, selec
 		}
 	}
 	if len(missing) > 0 {
-		return nil, nil, httpx.NewError(http.StatusNotFound, httpx.CodeNotFound,
-			fmt.Sprintf("有 %d 个文件夹不存在、已删除或不在这个项目里", len(missing))).WithDetails(map[string]any{"ids": missing})
+		return nil, nil, httpx.NotFoundIDs(fmt.Sprintf("有 %d 个文件夹不存在、已删除或不在这个项目里", len(missing)), missing)
 	}
 	children, err := liveChildren(ctx, q, selected)
 	if err != nil {

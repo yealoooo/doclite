@@ -158,13 +158,6 @@ func (s *Service) finish(ctx context.Context, tx pgx.Tx, projectID, userID uuid.
 		rows[i] = finished{ID: f.Open.ID, SnapshotID: f.SnapshotID}
 		ids[i] = f.FileID
 	}
-	at, err := finishReviews(ctx, tx, rows, result, reasons, comment)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.folders.SetReviewStatus(ctx, tx, ids, result); err != nil {
-		return nil, err
-	}
 	reviewer := files[0].Open.ReviewerName
 	logs := make([]file.Log, len(files))
 	out := make([]ReviewedFile, len(files))
@@ -183,10 +176,21 @@ func (s *Service) finish(ctx context.Context, tx pgx.Tx, projectID, userID uuid.
 		}
 		logs[i] = file.Log{ProjectID: projectID, FileID: f.FileID, Action: action, OperatorID: userID, Detail: d}
 		out[i] = ReviewedFile{FileID: f.FileID, FolderID: f.FolderID, AssignmentID: f.Open.ID, Result: result,
-			ReviewStatus: result, SnapshotID: f.SnapshotID, VersionNo: f.VersionNo, ReviewRound: f.Round, ReviewedAt: at}
+			ReviewStatus: result, SnapshotID: f.SnapshotID, VersionNo: f.VersionNo, ReviewRound: f.Round}
 	}
-	if err := file.WriteLogs(ctx, tx, logs...); err != nil {
+	// 分配行、文件的审核状态、日志一次往返写。
+	b := &pgx.Batch{}
+	var at time.Time
+	queueFinishReviews(b, rows, result, reasons, comment, &at)
+	s.folders.QueueReviewStatus(b, ids, result)
+	if err := file.QueueLogs(b, logs...); err != nil {
 		return nil, err
+	}
+	if err := tx.SendBatch(ctx, b).Close(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].ReviewedAt = at
 	}
 	return out, nil
 }
@@ -260,13 +264,9 @@ type ReopenResult struct {
 // （assigned_by 沿用那一行）；那人不能再审（停用、没有 review 菜单、失去授权）时不分配、→ unassigned，日志带
 // skipped_reviewer。轮次不变。
 func (s *Service) Reopen(ctx context.Context, p *auth.Principal, projectID, fileID uuid.UUID) (*ReopenResult, error) {
-	menus, err := s.auth.MenuCodes(ctx, p)
-	if err != nil {
-		return nil, err
-	}
-	canAny := menus[auth.MenuReviewAssign]
+	canAny := p.HasMenu(auth.MenuReviewAssign)
 	var out *ReopenResult
-	err = s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
+	err := s.events.InTx(ctx, s.pool, func(tx pgx.Tx, ev *events.Pending) error {
 		locked, err := s.lockFiles(ctx, tx, projectID, []uuid.UUID{fileID})
 		if err != nil {
 			return err

@@ -86,56 +86,51 @@ const (
 
 var blockOrder = []string{blockModifying, blockFields, blockNoPages, blockNoArchiveNo, blockUnapproved}
 
-// lockBlocker 是条目不能锁定的第一个原因（kind 为空表示可以锁定）。fields 是著录的问题（kind 为 blockFields 时）。
-func lockBlocker(ctx context.Context, q db.Querier, st *settings, r *itemRow, ps pageStats) (kind, message string, fields []FieldIssue, err error) {
+// lockBlocker 是条目不能锁定的第一个原因（kind 为空表示可以锁定）。explain 为 false 时没有档号的不查为什么（批量锁定
+// 只给第一个不能锁定的说明，其余只计数，不逐个查）。
+func lockBlocker(ctx context.Context, q db.Querier, st *settings, r *itemRow, ps pageStats, explain bool) (kind, message string, err error) {
 	if r.SourceStatus == sourceModifying {
-		return blockModifying, msgModifying, nil, nil
+		return blockModifying, msgModifying, nil
 	}
 	if issues := st.completionIssues(r.Title, r.ExtraFields); len(issues) > 0 {
 		msgs := make([]string, 0, len(issues))
 		for _, is := range issues {
 			msgs = append(msgs, is.Message)
 		}
-		return blockFields, "著录不全或和现在的设置不符：" + strings.Join(msgs, "；"), issues, nil
+		return blockFields, "著录不全或和现在的设置不符：" + strings.Join(msgs, "；"), nil
 	}
 	if ps.Pages == 0 {
-		return blockNoPages, "条目没有页，不能锁定", nil, nil
+		return blockNoPages, "条目没有页，不能锁定", nil
 	}
 	if r.ArchiveNo == nil {
 		why := ""
-		ch, err := categoryChain(ctx, q, r.ProjectID, r.CategoryPath)
-		if err != nil {
-			return "", "", nil, err
+		if explain {
+			ch, err := categoryChain(ctx, q, r.ProjectID, r.CategoryPath)
+			if err != nil {
+				return "", "", err
+			}
+			reason, err := emptyReason(ctx, q, st, r.ProjectID, r.ID, ch, r.ItemNo)
+			if err != nil {
+				return "", "", err
+			}
+			if reason != nil {
+				why = "：" + reason.Message
+			}
 		}
-		reason, err := emptyReason(ctx, q, st, r.ProjectID, r.ID, ch, r.ItemNo)
-		if err != nil {
-			return "", "", nil, err
-		}
-		if reason != nil {
-			why = "：" + reason.Message
-		}
-		return blockNoArchiveNo, "条目没有档号，不能锁定" + why, nil, nil
+		return blockNoArchiveNo, "条目没有档号，不能锁定" + why, nil
 	}
 	if st.LockRequiresApproved && ps.NotApproved > 0 {
 		return blockUnapproved, fmt.Sprintf("条目有 %d 页还没审核通过（例如第 %d 页），项目设置要求全部页审核通过才能锁定",
-			ps.NotApproved, ps.FirstNotOK), nil, nil
+			ps.NotApproved, ps.FirstNotOK), nil
 	}
-	return "", "", nil, nil
+	return "", "", nil
 }
 
-// ItemAction 是单个条目的状态动作：锁定、解锁。
-func (s *Service) ItemAction(ctx context.Context, operatorID, id uuid.UUID, action string, rowVersion int) (*Item, error) {
+// ItemAction 是单个条目的状态动作：锁定、解锁。projectID 是条目所在的项目（中间件已经查过）。
+func (s *Service) ItemAction(ctx context.Context, operatorID, projectID, id uuid.UUID, action string, rowVersion int) (*Item, error) {
 	if err := checkRowVersion(rowVersion); err != nil {
 		return nil, err
 	}
-	cur, err := getItem(ctx, s.pool, id)
-	if err != nil {
-		return nil, err
-	}
-	if cur == nil {
-		return nil, errItemNotFound
-	}
-	projectID := cur.ProjectID
 	st, err := loadSettings(ctx, s.pool, projectID)
 	if err != nil {
 		return nil, err
@@ -169,7 +164,7 @@ func (s *Service) ItemAction(ctx context.Context, operatorID, id uuid.UUID, acti
 			if err != nil {
 				return err
 			}
-			kind, msg, _, err := lockBlocker(ctx, tx, st, r, stats[id])
+			kind, msg, err := lockBlocker(ctx, tx, st, r, stats[id], true)
 			if err != nil {
 				return err
 			}
@@ -244,8 +239,7 @@ func (s *Service) LockItems(ctx context.Context, operatorID, projectID uuid.UUID
 			}
 		}
 		if len(missing) > 0 {
-			return httpx.NewError(404, httpx.CodeNotFound, fmt.Sprintf("有 %d 个条目不存在或已删除", len(missing))).
-				WithDetails(map[string]any{"ids": missing})
+			return httpx.NotFoundIDs(fmt.Sprintf("有 %d 个条目不存在或已删除", len(missing)), missing)
 		}
 		var todo []*itemRow
 		for _, r := range rows {
@@ -270,7 +264,7 @@ func (s *Service) LockItems(ctx context.Context, operatorID, projectID uuid.UUID
 		var failed []uuid.UUID
 		example := ""
 		for _, r := range todo {
-			kind, msg, _, err := lockBlocker(ctx, tx, st, r, stats[r.ID])
+			kind, msg, err := lockBlocker(ctx, tx, st, r, stats[r.ID], example == "")
 			if err != nil {
 				return err
 			}

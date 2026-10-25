@@ -72,34 +72,23 @@ func (s *Service) create(ctx context.Context, userID, projectID uuid.UUID, req *
 			readyItems = append(readyItems, it)
 		}
 	}
-	ids := make([]uuid.UUID, len(readyItems))
-	for i, it := range readyItems {
-		ids[i] = it.ID
-	}
-	pages, err := itemPageRows(ctx, tx, ids)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	if len(pages) != p.ReadyPageCount {
-		return uuid.Nil, errInternal("冻结的页数 %d 和预检的 %d 对不上", len(pages), p.ReadyPageCount)
-	}
-	fileIDs := make([]uuid.UUID, len(pages))
-	for i, pg := range pages {
-		fileIDs[i] = pg.FileID
+	var fileIDs []uuid.UUID
+	for _, it := range readyItems {
+		fileIDs = append(fileIDs, it.FileIDs...)
 	}
 	snaps, err := file.CurrentOf(ctx, tx, fileIDs)
 	if err != nil {
 		return uuid.Nil, err
 	}
-	rows := make([]taskFileRow, len(pages))
-	nextNo := map[uuid.UUID]int{}
-	for i, pg := range pages {
-		snap := snaps[pg.FileID]
-		if snap == nil {
-			return uuid.Nil, errInternal("文件 %s 没有快照", pg.FileID)
+	rows := make([]taskFileRow, 0, len(fileIDs))
+	for _, it := range readyItems {
+		for i, fid := range it.FileIDs { // 按页号排好了：页号重排成 1..n
+			snap := snaps[fid]
+			if snap == nil {
+				return uuid.Nil, errInternal("文件 %s 没有快照", fid)
+			}
+			rows = append(rows, taskFileRow{ItemID: it.ID, FileID: fid, SnapshotID: snap.ID, PageNo: i + 1})
 		}
-		nextNo[pg.ItemID]++ // itemPageRows 按条目、页号排好了：页号重排成 1..n
-		rows[i] = taskFileRow{ItemID: pg.ItemID, FileID: pg.FileID, SnapshotID: snap.ID, PageNo: nextNo[pg.ItemID]}
 	}
 
 	taskID, jobID := db.NewID(), db.NewID()

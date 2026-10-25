@@ -20,28 +20,33 @@ func (s *Service) Cleanup(ctx context.Context) (int, error) {
 	var afterAt *time.Time
 	var afterID uuid.UUID
 	n := 0
+	clients := newSource(s.storage) // 每个存储一个客户端
 	for {
 		list, err := staleOutputs(ctx, s.pool, afterAt, afterID, cleanupBatch)
 		if err != nil {
 			return n, err
 		}
+		var tasks []uuid.UUID
+		var keys []string
 		for _, o := range list {
 			if err := ctx.Err(); err != nil {
 				return n, err
 			}
-			c, err := s.storage.Client(ctx, o.ProfileID)
+			c, err := clients.client(ctx, o.ProfileID)
 			if err == nil {
 				err = c.Delete(ctx, o.Key)
-			}
-			if err == nil {
-				err = clearOutput(ctx, s.pool, o.TaskID, o.Key)
 			}
 			if err != nil {
 				s.log.Warn("导出：到期清理删导出物失败，下一轮再试", "task_id", o.TaskID, "key", o.Key, "error", err)
 				continue
 			}
-			n++
+			tasks, keys = append(tasks, o.TaskID), append(keys, o.Key)
 		}
+		// 删掉了的一批一条语句清空 output_key。
+		if err := clearOutputs(ctx, s.pool, tasks, keys); err != nil {
+			return n, err
+		}
+		n += len(tasks)
 		if len(list) < cleanupBatch {
 			return n, nil
 		}

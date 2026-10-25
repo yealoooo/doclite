@@ -113,9 +113,9 @@ func getRow(ctx context.Context, q db.Querier, id uuid.UUID) (*row, error) {
 	return r, err
 }
 
-// getRows 按 id 读多行（预签名用）。
-func getRows(ctx context.Context, q db.Querier, ids []uuid.UUID) (map[uuid.UUID]*row, error) {
-	rows, err := q.Query(ctx, `SELECT `+rowColumns+` FROM storage_profiles p WHERE p.id = ANY($1)`, ids)
+// allRows 读全部行（按 id；缓存用）。
+func allRows(ctx context.Context, q db.Querier) (map[uuid.UUID]*row, error) {
+	rows, err := q.Query(ctx, `SELECT `+rowColumns+` FROM storage_profiles p`)
 	if err != nil {
 		return nil, err
 	}

@@ -82,18 +82,20 @@ type sessionRow struct {
 	DisplayName string
 	UserStatus  string
 	IsAdmin     bool
+	MenuCodes   []string
 }
 
 func findSession(ctx context.Context, q db.Querier, tokenHash []byte) (*sessionRow, error) {
 	var s sessionRow
 	err := q.QueryRow(ctx, `SELECT s.id, s.user_id, s.client_type, s.last_seen_at, s.expires_at, s.revoked_at IS NOT NULL,
        u.username, u.display_name, u.status,
-       EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
-               WHERE ur.user_id = s.user_id AND r.role_code = '`+AdminRoleCode+`')
+       `+IsAdminSQL("s.user_id")+`,
+       ARRAY(SELECT DISTINCT rm.menu_code FROM user_roles ur JOIN role_menus rm ON rm.role_id = ur.role_id
+             WHERE ur.user_id = s.user_id)
 FROM user_sessions s JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = $1`, tokenHash).
 		Scan(&s.SessionID, &s.UserID, &s.ClientType, &s.LastSeenAt, &s.ExpiresAt, &s.Revoked,
-			&s.Username, &s.DisplayName, &s.UserStatus, &s.IsAdmin)
+			&s.Username, &s.DisplayName, &s.UserStatus, &s.IsAdmin, &s.MenuCodes)
 	if db.IsNoRows(err) {
 		return nil, nil
 	}
@@ -124,15 +126,25 @@ func revokeUserSessions(ctx context.Context, q db.Querier, userID uuid.UUID) (in
 	return tag.RowsAffected(), nil
 }
 
-// findMe 读用户的基本信息（GET /api/me）。
-func findMe(ctx context.Context, q db.Querier, userID uuid.UUID) (*Me, error) {
-	var me Me
-	err := q.QueryRow(ctx, `SELECT id, username, display_name, status FROM users WHERE id = $1`, userID).
-		Scan(&me.ID, &me.Username, &me.DisplayName, &me.Status)
+// findMe 一条语句读用户的基本信息、角色（按 role_code 排序）和有没有许可证菜单（GET /api/me、登录的响应）。
+func findMe(ctx context.Context, q db.Querier, userID uuid.UUID) (me *Me, licenseMenu bool, err error) {
+	me = &Me{}
+	var codes, names []string
+	err = q.QueryRow(ctx, `SELECT u.id, u.username, u.display_name, u.status,
+  ARRAY(SELECT r.role_code FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = u.id ORDER BY r.role_code),
+  ARRAY(SELECT r.role_name FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = u.id ORDER BY r.role_code),
+  EXISTS (SELECT 1 FROM user_roles ur JOIN role_menus rm ON rm.role_id = ur.role_id
+          WHERE ur.user_id = u.id AND rm.menu_code = $2)
+FROM users u WHERE u.id = $1`, userID, MenuSystemLicense).
+		Scan(&me.ID, &me.Username, &me.DisplayName, &me.Status, &codes, &names, &licenseMenu)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return &me, nil
+	me.Roles = make([]MeRole, len(codes))
+	for i := range codes {
+		me.Roles[i] = MeRole{RoleCode: codes[i], RoleName: names[i]}
+	}
+	return me, licenseMenu, nil
 }
 
 // RoleBrief 是用户拥有的一个角色。
@@ -140,26 +152,6 @@ type RoleBrief struct {
 	ID       uuid.UUID `json:"id"`
 	RoleCode string    `json:"role_code"`
 	RoleName string    `json:"role_name"`
-}
-
-// rolesOfUser 是用户的角色，按 role_code 排序。
-func rolesOfUser(ctx context.Context, q db.Querier, userID uuid.UUID) ([]RoleBrief, error) {
-	rows, err := q.Query(ctx, `SELECT r.id, r.role_code, r.role_name
-FROM user_roles ur JOIN roles r ON r.id = ur.role_id
-WHERE ur.user_id = $1 ORDER BY r.role_code`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []RoleBrief{}
-	for rows.Next() {
-		var r RoleBrief
-		if err := rows.Scan(&r.ID, &r.RoleCode, &r.RoleName); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
 }
 
 const menuColumns = `m.menu_code, m.parent_code, m.menu_name, m.menu_type, m.route_path, m.sort_no`
@@ -194,23 +186,4 @@ ORDER BY m.sort_no, m.menu_code`, userID)
 // allMenus 是全部菜单（含分组），按 sort_no 排序。
 func allMenus(ctx context.Context, q db.Querier) ([]Menu, error) {
 	return scanMenus(ctx, q, `SELECT `+menuColumns+` FROM menus m ORDER BY m.sort_no, m.menu_code`)
-}
-
-// menuCodesOfUser 是用户的菜单码（并集）。
-func menuCodesOfUser(ctx context.Context, q db.Querier, userID uuid.UUID) (map[string]bool, error) {
-	rows, err := q.Query(ctx, `SELECT DISTINCT rm.menu_code FROM user_roles ur
-JOIN role_menus rm ON rm.role_id = ur.role_id WHERE ur.user_id = $1`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]bool{}
-	for rows.Next() {
-		var c string
-		if err := rows.Scan(&c); err != nil {
-			return nil, err
-		}
-		out[c] = true
-	}
-	return out, rows.Err()
 }

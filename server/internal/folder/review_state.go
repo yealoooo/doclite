@@ -24,10 +24,20 @@ func (s *Service) SetReviewStatus(ctx context.Context, tx pgx.Tx, fileIDs []uuid
 	if len(fileIDs) == 0 {
 		return nil
 	}
-	_, err := tx.Exec(ctx, `UPDATE folder_files SET review_status = $2, updated_at = now()
-WHERE file_id = ANY($1) AND deleted_at IS NULL`, fileIDs, status)
+	_, err := tx.Exec(ctx, setReviewStatusSQL, fileIDs, status)
 	return err
 }
+
+// QueueReviewStatus 同 SetReviewStatus，排进调用方的批量（和别的写入一次往返发出去）。
+func (s *Service) QueueReviewStatus(b *pgx.Batch, fileIDs []uuid.UUID, status string) {
+	if len(fileIDs) == 0 {
+		return
+	}
+	b.Queue(setReviewStatusSQL, fileIDs, status)
+}
+
+const setReviewStatusSQL = `UPDATE folder_files SET review_status = $2, updated_at = now()
+WHERE file_id = ANY($1) AND deleted_at IS NULL`
 
 // SetReviewStatusAndRound 改一个文件（file_id，未删除的）的审核状态和轮次（重扫：轮次 +1）。
 func (s *Service) SetReviewStatusAndRound(ctx context.Context, tx pgx.Tx, fileID uuid.UUID, status string, round int) error {

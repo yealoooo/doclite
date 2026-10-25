@@ -39,25 +39,11 @@ type pagePlan struct {
 	// Moved 是留下的页里"挪动过的"（按原页号）：留下的页按原来的顺序取最长递增子序列，其余的就是。只是插入、
 	// 移出引起的页号顺延不算。
 	Moved []pageMove
-	// Kept 是留下的页数。
-	Kept int
 }
 
 // changed：有要写库的变化（页号不连续的旧数据也算，重排成 1..n）。
 func (p *pagePlan) changed() bool {
 	return len(p.Linked) > 0 || len(p.Unlinked) > 0 || len(p.Repaged) > 0
-}
-
-// touched 是新挂上的和移出的文件（要锁 files 行的那些），按新挂上、移出的顺序。
-func (p *pagePlan) touched() []uuid.UUID {
-	out := make([]uuid.UUID, 0, len(p.Linked)+len(p.Unlinked))
-	for _, m := range p.Linked {
-		out = append(out, m.FileID)
-	}
-	for _, m := range p.Unlinked {
-		out = append(out, m.FileID)
-	}
-	return out
 }
 
 // planPages 比较现在的页（current，按页号排）和要的页（wanted，按页序，不重复）。
@@ -90,7 +76,6 @@ func planPages(current []curPage, wanted []uuid.UUID) pagePlan {
 			p.Linked = append(p.Linked, pageMove{FileID: id, To: i + 1})
 		}
 	}
-	p.Kept = len(kept)
 	inLIS := xslices.LongestIncreasing(keptTo)
 	for i, c := range kept {
 		if !inLIS[i] {

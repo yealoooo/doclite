@@ -14,6 +14,7 @@ import (
 	"doclite/server/internal/audit"
 	"doclite/server/internal/platform/archiveno"
 	"doclite/server/internal/platform/db"
+	"doclite/server/internal/platform/pathcode"
 )
 
 // 档号和件号（requirements 5.9"档号和件号"，用户决定 Q2；撞号和分档是总控定的，见 requirements 第 10 节）：
@@ -42,8 +43,7 @@ func archiveNoKey(projectID uuid.UUID, archiveNo string) int32 {
 
 // lockArchiveNo 在事务里拿（项目, 档号）的咨询锁，到事务结束为止。
 func lockArchiveNo(ctx context.Context, tx db.Querier, projectID uuid.UUID, archiveNo string) error {
-	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1::int4, $2::int4)`, lockClassArchiveNo, archiveNoKey(projectID, archiveNo))
-	return err
+	return db.AdvisoryXactLocks(ctx, tx, lockClassArchiveNo, []int32{archiveNoKey(projectID, archiveNo)})
 }
 
 // chainNode 是祖先链上的一个节点（从根往下）。
@@ -73,18 +73,6 @@ func (c chain) path() string {
 	}
 	return strings.Join(parts, "/")
 }
-
-// pathPrefixes 是 path_code 的各级前缀（从根到自己）。
-func pathPrefixes(path string) []string {
-	var out []string
-	for i := 6; i <= len(path); i += 6 {
-		out = append(out, path[:i])
-	}
-	return out
-}
-
-// subtreeUpper 是子树区间的上界：前缀末尾的点换成 `/`（path_code >= path AND path_code < upper）。
-func subtreeUpper(path string) string { return path[:len(path)-1] + "/" }
 
 // render 按模板生成档号；缺级时返回空串和缺的类型。tmpl 不能为 nil。
 func render(tmpl *archiveno.Template, c chain, itemNo int) (string, []archiveno.CategoryType) {
@@ -215,7 +203,7 @@ func renumberSubtree(ctx context.Context, tx pgx.Tx, projectID, operatorID uuid.
 			return c
 		}
 		var c chain
-		for _, pre := range pathPrefixes(p) {
+		for _, pre := range pathcode.Prefixes(p) {
 			if n, ok := nodes[pre]; ok {
 				c = append(c, n)
 			}

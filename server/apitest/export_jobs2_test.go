@@ -89,7 +89,8 @@ func TestExportSettleFailure(t *testing.T) {
 }
 
 // TestExportMultipart：导出物真的走分片上传（测试把每片调到 S3 允许的最小 5 MiB，导出约 11 MB）：正常完成时下载的
-// zip 完整；执行中取消时中止分片上传，之后既没有对象，也没有没完成的分片上传。
+// zip 完整；取消：排队中的任务和 job 一起取消；执行中的任务立即取消、cleaning_up 直到执行器中止分片上传，之后 job
+// 也是 canceled，既没有对象，也没有没完成的分片上传；已取消的再取消 409；到期清理清空取消留下的 output_key。
 func TestExportMultipart(t *testing.T) {
 	t.Parallel()
 	e := newExportEnv(t, "EXP2", withProxy, func(o *exportOpts) { o.partSize = 5 << 20 })
@@ -111,6 +112,17 @@ func TestExportMultipart(t *testing.T) {
 	}
 	it := e.lockedItem(e.org.ID, "大件", ids...)
 	body := map[string]any{"scope_type": "item", "scope_ids": []uuid.UUID{it.ID}, "export_format": "images"}
+
+	// 0. 排队中取消（执行器还没启动）：任务和 job 一起 canceled，再取消 409。
+	q := e.createTask(body)
+	c := Decode[exportTask](e.mgr.Post("/api/export-tasks/"+q.ID.String()+"/cancel", nil).Expect(http.StatusOK))
+	if c.Status != "canceled" || c.CleaningUp || c.FinishedAt == nil {
+		t.Fatalf("取消排队中的：%+v", c)
+	}
+	if st, _, _ := e.jobOf(q.ID); st != "canceled" {
+		t.Fatalf("job：%s", st)
+	}
+	e.mgr.Post("/api/export-tasks/"+q.ID.String()+"/cancel", nil).ExpectError(http.StatusConflict, "invalid_state")
 	e.start()
 
 	// 1. 正常完成：分了几片，下载的 zip 里每页的 sha256 都对。
@@ -153,8 +165,15 @@ func TestExportMultipart(t *testing.T) {
 	if keys := pending(); len(keys) != 1 || !strings.Contains(keys[0], t2.ID.String()) {
 		t.Fatalf("进行中的分片上传：%v", keys)
 	}
-	e.mgr.Post("/api/export-tasks/"+t2.ID.String()+"/cancel", nil).Expect(http.StatusOK)
-	e.waitTask(t2.ID, 10*time.Second, "清理完", func(t exportTask) bool { return !t.CleaningUp })
+	c = Decode[exportTask](e.mgr.Post("/api/export-tasks/"+t2.ID.String()+"/cancel", nil).Expect(http.StatusOK))
+	if c.Status != "canceled" || !c.CleaningUp {
+		t.Fatalf("取消执行中的：%+v", c)
+	}
+	e.mgr.Post("/api/export-tasks/"+t2.ID.String()+"/cancel", nil).ExpectError(http.StatusConflict, "invalid_state")
+	done := e.waitTask(t2.ID, 10*time.Second, "清理完", func(t exportTask) bool { return !t.CleaningUp })
+	if st, _, _ := e.jobOf(t2.ID); st != "canceled" || done.Status != "canceled" || done.OutputSize != nil {
+		t.Fatalf("清理完：job %s，任务 %+v", st, done)
+	}
 	if keys := pending(); len(keys) != 0 {
 		t.Errorf("取消后不应留下没完成的分片上传：%v", keys)
 	}
@@ -162,5 +181,24 @@ func TestExportMultipart(t *testing.T) {
 		if strings.Contains(k, t2.ID.String()) {
 			t.Errorf("取消后不应留下导出物：%s", k)
 		}
+	}
+	if n := QueryValue[int](e.Env, `SELECT count(*) FROM file_logs WHERE action = 'export' AND detail->>'export_task_id' = $1`,
+		t2.ID.String()); n != 0 {
+		t.Errorf("取消的导出不该写 export 日志：%d", n)
+	}
+	if n := QueryValue[int](e.Env, `SELECT count(*) FROM audit_logs WHERE target_type = 'export_task' AND action = 'cancel'`); n != 2 {
+		t.Errorf("取消审计 %d 条", n)
+	}
+	// 排队中取消的不会被执行。
+	if tk := e.task(q.ID); tk.Status != "canceled" || tk.Attempts != 0 {
+		t.Errorf("排队中取消的任务：%+v", tk)
+	}
+	// 到期清理：canceled 留下的 output_key（取消前已经记下的话；对象已经没了）清空。
+	if n, err := e.App.Exports.Cleanup(context.Background()); err != nil || n > 1 {
+		t.Errorf("清理取消的任务：%d %v", n, err)
+	}
+	if n := QueryValue[int](e.Env, `SELECT count(*) FROM export_tasks WHERE status = 'canceled'
+  AND (output_key IS NOT NULL OR storage_profile_id IS NOT NULL)`); n != 0 {
+		t.Errorf("取消的任务应清空导出物：%d", n)
 	}
 }
