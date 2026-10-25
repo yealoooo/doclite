@@ -34,6 +34,8 @@ const props = defineProps<{
   dense?: boolean
   /** 在 image-info store 里登记可见范围用的名字（同一页面有两个列表时区分），默认 files-grid。 */
   visibleOwner?: string
+  /** 文件在文件夹里是第几页（按扫描顺序，从 1 起）；不给时列表显示 sort_no（删除、移出后会有空号）。 */
+  pageOf?: Map<string, number>
 }>()
 
 /** 整理的快捷键（M1-12）：F2 重命名、Delete 删除、Ctrl/⌘+C 复制。 */
@@ -312,7 +314,7 @@ defineExpose({ scrollToKey })
               @dblclick="emit('open', entry)"
             >
               <template v-if="entry.kind === 'file'">
-                <span class="text-right font-mono text-xs text-muted-foreground">{{ entry.file.sort_no }}</span>
+                <span class="text-right font-mono text-xs text-muted-foreground">{{ props.pageOf?.get(entry.file.file_id) ?? entry.file.sort_no }}</span>
                 <FileCover
                   :file-id="entry.file.file_id"
                   :info="images.get(entry.file.file_id)"

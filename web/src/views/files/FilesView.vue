@@ -182,6 +182,8 @@ const entries = computed<Entry[]>(() =>
       )
     : [],
 )
+// 第几页：按扫描顺序（children 接口的顺序）数，和"移到第…页"的页码一致；sort_no 删除、移出后会有空号。
+const pageOf = computed(() => new Map((children.value?.files ?? []).map((f, i) => [f.file_id, i + 1])))
 const entryByKey = computed(() => new Map(entries.value.map((e) => [e.key, e])))
 const counts = computed(() => ({
   folders: children.value?.folders.length ?? 0,
@@ -781,6 +783,7 @@ function onRescanFinished() {
                 :entries="entries"
                 :view="view"
                 :selection="selection"
+                :page-of="pageOf"
                 @open="onOpen"
                 @command="onGridCommand"
               />
@@ -977,6 +980,7 @@ function onRescanFinished() {
           :counts="counts"
           :refresh-token="detailRefresh"
           :catalog-refresh-token="catalogRefresh"
+          :page-of="pageOf"
           @snapshots="openSnapshots"
           @edit-folder="actions.editCurrentFolder()"
         />

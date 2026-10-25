@@ -48,6 +48,8 @@ const props = defineProps<{
   refreshToken: number
   /** M3-7：变了就重新取归类信息（收到 `catalog.changed`）。 */
   catalogRefreshToken?: number
+  /** 文件在当前文件夹里是第几页（按扫描顺序）。 */
+  pageOf?: Map<string, number>
 }>()
 
 const emit = defineEmits<{
@@ -173,7 +175,7 @@ const summary = computed(() => {
         <div class="text-sm font-semibold [overflow-wrap:anywhere] text-foreground" data-testid="detail-file-name">
           {{ file.file_name }}
         </div>
-        <div class="mt-0.5 text-xs text-muted-foreground">第 {{ file.sort_no }} 页</div>
+        <div class="mt-0.5 text-xs text-muted-foreground">第 {{ props.pageOf?.get(file.file_id) ?? file.sort_no }} 页</div>
       </div>
 
       <dl class="kv">
