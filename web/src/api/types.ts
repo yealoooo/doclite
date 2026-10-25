@@ -106,6 +106,10 @@ export interface StorageProfileItem {
   in_use: boolean
   /** 能删除：不是默认、没有被任何数据引用。 */
   deletable: boolean
+  /** 存在这里的快照个数（M11-5，按快照统计，恢复、复制的快照也算）。 */
+  snapshot_count: number
+  /** 这些快照的 file_size 之和（字节，不算封面）。 */
+  snapshot_bytes: number
   created_at: string
   updated_at: string
   /** 这个存储最近一次迁出（M7-2，摘要：没有 remaining、failures）；没有迁过为 null。 */
@@ -226,6 +230,19 @@ export interface MyProject {
   status: ProjectStatus
   /** 根文件夹：文件目录、热文件夹从这里开始。 */
   root_folder_id: string
+  /** 扫描参数建议（M11-5，项目设置 settings.scan_hint；扫描页显示，只是提示）。 */
+  scan_hint: ScanHint
+}
+
+/** 扫描参数建议的格式。 */
+export type ScanFormat = 'jpeg' | 'png' | 'tiff'
+
+/** 扫描参数建议：没设的项为 null。 */
+export interface ScanHint {
+  color_mode: ColorMode | null
+  /** 100–1200。 */
+  dpi: number | null
+  format: ScanFormat | null
 }
 
 /** `GET /api/system/projects` 列表里的一个项目。 */

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -16,7 +17,8 @@ import (
 // projects.settings（requirements 3.4）：读时补默认；写时整体替换，只校验已知键，保留未知键，≤ 64 KiB。
 //
 // 已知键：review.reject_reasons、review.rescan_reassign、archive_no.template、item_fields、
-// catalog.lock_requires_approved、export.require_locked_item、export.retention_days。
+// catalog.lock_requires_approved、export.require_locked_item、export.retention_days、
+// scan_hint.color_mode、scan_hint.dpi、scan_hint.format（M11-5，扫描参数建议：只是提示，三项都可以不填）。
 // 著录项（item_fields）和档号模板的校验按 3.4、5.9 写到的程度：模板用 archiveno.Parse；著录项的 key、label、type、
 // required、options、max_length、default。
 //
@@ -33,6 +35,18 @@ const (
 	defaultRetentionDays = 7
 	// TitleKey 是题名（条目的固定列）在著录校验里的 key，著录项不能叫这个。
 	TitleKey = "title"
+)
+
+// 扫描参数建议（scan_hint）的取值：颜色沿用 file_snapshots.color_mode 的取值，DPI 是整数范围，格式是常见的三种。
+var (
+	ScanColorModes = []string{"color", "gray", "bw"}
+	ScanFormats    = []string{"jpeg", "png", "tiff"}
+)
+
+// 扫描参数建议的 DPI 范围。
+const (
+	MinScanDPI = 100
+	MaxScanDPI = 1200
 )
 
 // DefaultRejectReasons 是内置的驳回原因（存代码，界面译中文）。
@@ -182,7 +196,36 @@ func validateSettings(raw json.RawMessage) (json.RawMessage, error) {
 			return nil, err
 		}
 	}
+	if sh, ok := root["scan_hint"]; ok && sh != nil {
+		if err := validateScanHint(sh); err != nil {
+			return nil, err
+		}
+	}
 	return raw, nil
+}
+
+// validateScanHint：每一项不给或 null 表示不建议。
+func validateScanHint(v any) error {
+	m, err := object(v, "scan_hint")
+	if err != nil {
+		return err
+	}
+	if c := m["color_mode"]; c != nil {
+		if s, ok := c.(string); !ok || !slices.Contains(ScanColorModes, s) {
+			return settingsError("scan_hint.color_mode 只能是 color、gray 或 bw（彩色、灰度、黑白）")
+		}
+	}
+	if d := m["dpi"]; d != nil {
+		if n, ok := integer(d); !ok || n < MinScanDPI || n > MaxScanDPI {
+			return settingsError("scan_hint.dpi 必须是 %d 到 %d 的整数", MinScanDPI, MaxScanDPI)
+		}
+	}
+	if f := m["format"]; f != nil {
+		if s, ok := f.(string); !ok || !slices.Contains(ScanFormats, s) {
+			return settingsError("scan_hint.format 只能是 jpeg、png 或 tiff")
+		}
+	}
+	return nil
 }
 
 func validateItemFields(v any) error {

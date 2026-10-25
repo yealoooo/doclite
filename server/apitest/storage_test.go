@@ -36,6 +36,8 @@ type storageProfile struct {
 	Remark         *string   `json:"remark"`
 	InUse          bool      `json:"in_use"`
 	Deletable      bool      `json:"deletable"`
+	SnapshotCount  int       `json:"snapshot_count"`
+	SnapshotBytes  int64     `json:"snapshot_bytes"`
 }
 
 type testResult struct {
@@ -216,7 +218,7 @@ func TestStorageStatusRules(t *testing.T) {
 	env.Exec(`INSERT INTO file_snapshots (id, file_id, version_no, snapshot_type, storage_profile_id, storage_key, content_sha256,
   file_size, mime_type) VALUES ($1, $2, 1, 'original', $3, 'k', '\x00', 1, 'image/jpeg')`, uuid.New(), fid, other.ID)
 	admin.Get(path(other.ID)).Expect(200).JSON(&other)
-	if !other.InUse || other.Deletable {
+	if !other.InUse || other.Deletable || other.SnapshotCount != 1 || other.SnapshotBytes != 1 {
 		t.Fatalf("被引用的存储：%+v", other)
 	}
 	admin.Patch(path(other.ID), map[string]any{"status": "disabled"}).ExpectError(409, "storage_in_use")
@@ -249,6 +251,29 @@ func TestStorageStatusRules(t *testing.T) {
 	}
 	if QueryValue[int](env, "SELECT count(*) FROM storage_profiles") != 1 {
 		t.Fatal("已有存储配置时不该再登记")
+	}
+}
+
+// TestStorageUsage：存储列表里每个存储的快照数和字节数（M11-5，按快照统计，不算封面）。
+func TestStorageUsage(t *testing.T) {
+	t.Parallel()
+	env, _ := newUploadEnv(t)
+	admin := env.Admin()
+	var other storageProfile
+	admin.Post("/api/system/storage-profiles", storageBody("备用", S3Prefix(t))).Expect(201).JSON(&other)
+	d := env.CreateProject("SU")
+	a := uploadOK(t, admin, d.RootFolderID, "a.jpg", "usage-a")
+	b := uploadOK(t, admin, d.RootFolderID, "b.jpg", "usage-b")
+
+	var list []storageProfile
+	admin.Get("/api/system/storage-profiles").Expect(200).JSON(&list)
+	for _, p := range list {
+		switch {
+		case p.IsDefault && (p.SnapshotCount != 2 || p.SnapshotBytes != a.FileSize+b.FileSize):
+			t.Fatalf("默认存储的用量：%d 个 %d 字节", p.SnapshotCount, p.SnapshotBytes)
+		case p.ID == other.ID && (p.SnapshotCount != 0 || p.SnapshotBytes != 0 || p.InUse):
+			t.Fatalf("没有文件的存储：%+v", p)
+		}
 	}
 }
 

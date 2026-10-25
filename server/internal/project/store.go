@@ -34,12 +34,14 @@ type MyProject struct {
 	Status      string    `json:"status"`
 	// RootFolderID 是根文件夹：文件目录、热文件夹从这里开始。
 	RootFolderID uuid.UUID `json:"root_folder_id"`
+	// ScanHint 是扫描参数建议（M11-5，扫描页显示）。
+	ScanHint ScanHint `json:"scan_hint"`
 }
 
 // listMyProjects：用户能进的未删除项目（含已归档的），按编码排序。
 // 能进 = admin，或在 project_members 里，或拥有 project_roles 里的某个角色（requirements 第 4 节"项目授权"）。
 func listMyProjects(ctx context.Context, q db.Querier, userID uuid.UUID) ([]MyProject, error) {
-	rows, err := q.Query(ctx, `SELECT p.id, p.project_code, p.project_name, p.status, f.id
+	rows, err := q.Query(ctx, `SELECT p.id, p.project_code, p.project_name, p.status, f.id, p.settings
 FROM projects p
 JOIN folders f ON f.project_id = p.id AND f.parent_id IS NULL
 WHERE p.deleted_at IS NULL
@@ -52,9 +54,11 @@ ORDER BY p.project_code, p.id`, userID)
 	out := []MyProject{}
 	for rows.Next() {
 		var p MyProject
-		if err := rows.Scan(&p.ID, &p.ProjectCode, &p.ProjectName, &p.Status, &p.RootFolderID); err != nil {
+		var settings []byte
+		if err := rows.Scan(&p.ID, &p.ProjectCode, &p.ProjectName, &p.Status, &p.RootFolderID, &settings); err != nil {
 			return nil, err
 		}
+		p.ScanHint = ParseSettings(settings).ScanHint
 		out = append(out, p)
 	}
 	return out, rows.Err()

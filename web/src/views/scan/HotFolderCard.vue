@@ -7,6 +7,7 @@
 //   还没设置：两样都选好后，"开始监听"先保存再开始。
 // - 开始、暂停：`hotfolder_start`、`hotfolder_pause`（暂停 = 停止监控 + 不再开始热文件夹的项，正在传的传完）。
 // - 配置里的服务器和当前服务器不一样（换过服务器）：提示重新选目标文件夹，不能开始。
+// - M11-5：显示当前项目的扫描参数建议（项目设置里的；都没设时不显示），只是提示。
 import { FolderInputIcon, FolderOpenIcon, FolderSyncIcon, LoaderCircleIcon, PauseIcon, PlayIcon, TriangleAlertIcon } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
@@ -25,6 +26,7 @@ import {
   type QueueStatus,
 } from '@/lib/scan-queue'
 import { formatClock } from '@/lib/format'
+import { formatScanHint } from '@/lib/project'
 import { shellErrorMessage } from '@/lib/shell'
 import { useProjectStore } from '@/stores/project'
 
@@ -132,6 +134,9 @@ const shownTarget = computed<{ projectName: string; path: string; remark: string
   }
   return target.value && target.value !== 'missing' ? target.value : null
 })
+
+/** 扫描参数建议的文字（M11-5）：当前项目的；都没设时为空串。 */
+const scanHint = computed(() => formatScanHint(project.current?.scan_hint))
 
 const busy = ref<'' | 'dir' | 'target' | 'start' | 'pause'>('')
 
@@ -292,6 +297,9 @@ const headline = computed(() => {
           对应 <code class="font-mono">{{ (shownTarget?.path ?? '/目标文件夹').replace(/\/$/, '') }}/盒 WS-2025-004/</code>。
           客户端会等文件写完再上传，同一个子文件夹里按文件名顺序上传；失败自动重试，断网或服务器重启后接着传（整个文件重传）。
           上传后本地文件留在原处。
+        </p>
+        <p v-if="scanHint" class="mt-1.5 text-xs text-muted-foreground" title="项目设置里的建议，只是提示，不限制上传" data-testid="hotfolder-scan-hint">
+          扫描参数建议：<span class="font-medium text-foreground">{{ scanHint }}</span>
         </p>
         <p v-if="running" class="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="hotfolder-scan">
           <span class="size-1.5 rounded-full bg-ok" />

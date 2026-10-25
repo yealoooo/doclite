@@ -122,6 +122,7 @@
 | `catalog.lock_requires_approved` | 锁定要求全部页通过，默认 true |
 | `export.require_locked_item` | 导出要求已锁定，默认 true |
 | `export.retention_days` | 导出物保留天数，默认 7，1–365 |
+| `scan_hint` | 扫描参数建议（M11-5，2026-10-25）：`{color_mode: color/gray/bw, dpi: 100–1200 的整数, format: jpeg/png/tiff}`，每项可以不给或 null（不建议）；没有默认值。只是提示，不限制上传 |
 
 ### 3.5 日志
 
@@ -183,13 +184,15 @@
 - 界面 /system/projects：列表、新建编辑（含著录设置）、删除、授权（勾人和角色，标出停用的）。业务界面左上角项目切换器：不显示归档的，记住上次选的。
 - 规则【用户 2026-09-27】：project_code `^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$`（不能是 `.` `..`），区分大小写，不可改，未删除项目中唯一，进 S3 key。名称自动去首尾空白、1–100 字，其余按文件夹名规则【用户 2026-10-07】；说明 ≤ 500。
 - 建项目同一事务建根文件夹（名 = 项目名）和归类根（编码 = 项目编码、名 = 项目名、类型 root）；改名时一起改。删除是软删除，有未删除文件 409 `project_not_empty`。archived 只是标记。
-- 授权 `PUT access {user_ids, role_ids}` 整体替换（各 ≤ 1000，可授权给停用用户）。`GET /api/projects` 返回能进的未删除项目（含归档）。
+- 授权 `PUT access {user_ids, role_ids}` 整体替换（各 ≤ 1000，可授权给停用用户）。`GET /api/projects` 返回能进的未删除项目（含归档）：`id、project_code、project_name、status、root_folder_id、scan_hint`（`scan_hint` 是 `{color_mode, dpi, format}`，没设的项为 null，M11-5）。
+- **扫描参数建议**（M11-5，2026-10-25）：编辑项目对话框的"基本信息"里一组"扫描参数建议（可选）"：颜色（不指定 / 彩色 / 灰度 / 黑白）、DPI（100–1200，留空不建议）、格式（不指定 / JPEG / PNG / TIFF），存 `settings.scan_hint`（见 3.4），和名称等一起保存（同一个 PATCH，在详情的 settings 上只换 scan_hint，版本检查和三方合并照旧）；改动随 settings 一起记审计。
 - **版本检查**【用户 2026-10-15，QB】：PATCH 可带 `expected_updated_at`，与库里不同 409 `conflict` 不改；不带不查。updated_at 写成 `max(now, 旧值 + 1µs)`。编辑对话框 409 后重载并按"打开时 / 我的 / 现在的"三方合并提示。
 - 保存著录设置时系统默认值也写进项目（用户 2026-10-15 接受）。
 
 ### 5.4 存储配置（M0）
 
 - 界面 /system/storage：卡片列表、新增编辑、测试连接、设默认、删除。
+- **用量**（M11-5，2026-10-25）：列表（以及 GET {id}、新建、修改、设默认的响应）每个存储带 `snapshot_count`、`snapshot_bytes`：`file_snapshots` 里 storage_profile_id 是它的全部行数和 file_size 之和（恢复、复制的快照指向已有对象也照算，不算封面），列表一次分组查询；没有覆盖 file_size 的索引，要读整张快照表（页面很少打开）。卡片上有快照时显示"已用 1.62 TB（按快照统计）· 812,344 个快照"，没有时"还没有文件"。`in_use` 不变。
 - 字段见建表 SQL：endpoint 是 server 访问地址，public_endpoint 是工作站访问地址（预签名按它签，空时同 endpoint）；path_prefix 默认 `doclite/`；url_expire_hours 1–168，默认 24。
 - secret_key 用 `MASTER_KEY`（32 字节 base64，缺了不启动）AES-256-GCM 加密，绑定行 id，任何输出都不含它；解不开 → 500 `secret_unreadable`，界面提示重填。PATCH 不传或空串 = 不改。
 - 首次启动无存储配置时用 `S3_*` 环境变量登记默认的"SeaweedFS（随系统部署）"。
@@ -377,7 +380,7 @@
 - **上传队列**：本机库，一行一个本地文件（路径、大小、修改时间、sha、目标、状态 等待写入 / 排队 / 上传中 / 已入库 / 重复 / 失败、重试、错误）；一个数据目录只一个进程开队列；重启时上传中回到排队。热文件夹和壳里的上传按钮都进它。
 - **热文件夹**【用户 2026-09-27】：只监控一个目录，对应目标文件夹（可换）；子文件夹逐层按名字建（if_exists）并记住 folder_id（服务端改名移动照传，删除后重建）。写完判定：大小和修改时间 2 秒不变 → Windows 能独占打开 → JPEG 尾 `FF D9`、PNG 有 IEND；60 秒仍不完整记失败。忽略隐藏、系统、临时文件（`.`、`~$` 开头、`.tmp`、Thumbs.db 等）；不跟符号链接，≤ 32 层。同一子文件夹按文件名自然顺序串行（IMG_2 在 IMG_10 前），≤ 2 个子文件夹并行。
 - **每个文件**：核对大小时间 → 算 sha → 取或建文件夹 → 预检 → 生成封面（不依赖系统库；生成不了就不带）→ 流式上传。本地文件不动；没变不重传，变了当新内容。失败自动重试（1 秒起翻倍、封顶 5 分钟），断网整文件重传；400、403 永久失败；网络、5xx 临时；401、426 暂停；invalid_cover 去封面重传。暂停 = 停监控，重启按上次状态恢复。（可简化：原版为 10 万级积压、中途换服务器做了很多细节；"不丢页、不重复、顺序对、断网或 server 重启后接着传"必须保证。）
-- **/scan 页**：热文件夹卡片（目录只能用系统对话框选，目标在当前项目里选或新建；开始 / 暂停）；各状态计数；最近文件（进度、DPI、无封面、重复位置、改名、重试倒计时）；右侧待重扫。浏览器的 /scan 只提示"请在客户端中使用"。
+- **/scan 页**：热文件夹卡片（目录只能用系统对话框选，目标在当前项目里选或新建；开始 / 暂停；项目设置了扫描参数建议时显示"扫描参数建议：彩色 · 300 dpi · JPEG"，只显示设了的项、都没设不显示，取当前项目的（进页面时重取项目列表），只是提示，M11-5）；各状态计数；最近文件（进度、DPI、无封面、重复位置、改名、重试倒计时）；右侧待重扫。浏览器的 /scan 只提示"请在客户端中使用"。
 - **重扫件上传**【用户 2026-10-07，Q6】：不进队列：系统对话框选一个文件 → 查文件尾完整 → 算 sha → 封面 → 上传，显示进度和结果；同时只一个；提示"重扫件不要扫进热文件夹"。只在客户端里（浏览器里提示"请在客户端中使用"）。
 - **图片缓存**：页面经壳的自定义协议取图（`<cover|original>/<file_id>/<snapshot_id>`），先查本机，没有用预签名 URL 下载并存下。按 snapshot_id 存（不用版本号：库回退时同一 v2 可能是另一张），不需失效。默认 2 GB（100 MB–1 TB 可改），按最近访问淘汰到 90%；可按项目查看和清空；大于上限一半的不存。原图校验 sha256、封面校验是 JPEG。**只认来源记录**：只用该快照最近出现在 batch / snapshots 响应里的 URL；命中缓存也要在记录里（缓存是所有账号共用的）；登录、退出、换服务器清空记录。（可简化：原版的索引损坏重建、启动对账。）
 - **大图切块**【Q1】：DZI，512×512、重叠 1，最高级是转正后原尺寸、逐级减半；灰度彩色 JPEG（质量 90），1 位 PNG；存进缓存参与淘汰；同一快照只切一次，同时 ≤ 2 张，可提前切下一张；切不了 422，页面只显示封面。（可简化：原版对条带 TIFF 逐行流式解码；可整张解码，但要有内存和时间上限。）
@@ -406,11 +409,11 @@
 | 路径（省略 /api/） | 菜单 | 说明 |
 |---|---|---|
 | GET health · shell/latest · shell/download/{v}（shell/* 还没做，随自动更新 M8） | 不用登录 | 健康、客户端版本、安装包 |
-| POST auth/login · auth/logout · GET me · me/menus · projects | 登录 | 会话、菜单、我的项目 |
+| POST auth/login · auth/logout · GET me · me/menus · projects | 登录 | 会话、菜单、我的项目（每项带 `scan_hint`，M11-5） |
 | system/users（GET/POST）· {id}（GET/PATCH）· {id}/disable·enable·reset-password（POST）· {id}/roles（PUT） | system.users | 用户 |
 | GET system/roles | roles 或 users | 角色列表 |
 | system/roles（POST）· {id}（GET/PATCH/DELETE）· {id}/menus（PUT）· GET system/menus | system.roles | 角色、菜单 |
-| system/storage-profiles（GET/POST）· {id}（GET/PATCH/DELETE）· test · {id}/test · {id}/set-default · {id}/migrate（POST 建、GET 最近一次的进度和失败清单）· {id}/migrate/cancel（M7-2） | system.storage | 存储 |
+| system/storage-profiles（GET/POST）· {id}（GET/PATCH/DELETE）· test · {id}/test · {id}/set-default · {id}/migrate（POST 建、GET 最近一次的进度和失败清单）· {id}/migrate/cancel（M7-2） | system.storage | 存储（每个存储带 `snapshot_count`、`snapshot_bytes`，M11-5） |
 | system/projects（GET/POST）· {id}（GET/PATCH/DELETE）· access-candidates · projects/{pid}/access（GET/PUT） | system.projects | 项目、授权 |
 | system/license（GET、PUT `{"license": "<.lic 全文>"}`）（M7-1） | system.license | 许可证状态、导入 |
 | GET system/audit-logs（from、to、operator_id、project_id、target_type、action、limit、cursor → `{items, next_cursor}`）· GET system/audit-logs/filter-options（M7-3） | system.audit | 审计日志 |
@@ -441,6 +444,7 @@
 - **2026-10-15**：确认 M3；M4 Q1（用户改选）放不进 PDF 的由 server 无损转换；Q2 导出物格式；Q3 xlsx + CSV；Q4 建任务时冻结；Q5 存 S3 直连下载、保留 7 天；Q6 交付后变更和补交；Q7 预检、并发 2、可取消、重试 3 次；QA 迁移 0003；QB 项目保存版本检查；接受"保存著录设置写入默认值"。
 - **2026-10-18、19（归类改成整个文件夹归档，Mockup `doclite-project/doclite-catalog-redesign.html` v3.1）**：一个文件只能归类一次（照旧）；只能整个文件夹归档，选盒子时每个直接子文件夹一件，题名默认文件夹名，含下级文件夹的跳过并提示；数据单向，文件目录自己维护，归档后文件夹封存（盒子本身不封存）；可以重扫；要改走"解除封存（原因选填）→ 修改 → 重新归档（给对比）"，件号档号著录保留、绑定不断，修改中不能锁定和导出，到处提示；撤销归档 = 删除这一件；条目状态去掉"已完成"，只有未锁定 / 已锁定，必填在锁定时查；归类全部操作（含解锁）只要 catalog + 能进项目，不另设负责人。为此同意改表（迁移 0004）和接口。取代 2026-10-14 的 Q3（按页挂接、原生拖放排序）、Q4（待归类池）、Q5 里的"已完成"和"解锁要 review_assign"。
 - **2026-10-19（看板简化，Mockup `doclite-project/doclite-dashboard-redesign.html` v2）**：去掉矩阵、多色进度条和"待办"，只要简单的统计——一行五个数（已上传 → 审核通过 → 已归档 → 已锁定 → 可导出）+ 按文件夹的表（页数、审核通过、已归档、已锁定）；审核按页，归档、锁定、导出按件（页数做补充）；同意为此给 catalog-summary 加字段（不改表）。见 5.10。
+- **2026-10-25**：扫描参数建议、存储卡片用量（用户同意加字段）：项目设置加 `scan_hint`（JSON 里的键，不改表），`GET /api/projects` 每项带 `scan_hint`，扫描页热文件夹卡片显示；存储列表每项带 `snapshot_count`、`snapshot_bytes`，卡片显示用量。见 3.4、5.3、5.4、第 6 节 /scan 页。
 
 ## 10. 总控代定的规则
 

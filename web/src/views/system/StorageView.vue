@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 系统管理 · 存储配置（参照 plan.html §4 "存储配置" Mockup）：左边存储列表，右边新增或编辑的表单。
-// - 列表每项：名称、默认标记、状态、地址、桶、前缀、是否有文件；可以测试连接、编辑、设为默认、改状态、删除。
+// - 列表每项：名称、默认标记、状态、地址、桶、前缀、用量（M11-5：快照数和字节数，按快照统计；没有快照时"还没有文件"）；
+//   可以测试连接、编辑、设为默认、改状态、删除。
 // - 状态规则（和后端一致，按钮预先禁用并说明原因，后端仍会返回 409）：只有可读写的存储能设为默认；
 //   默认存储不能改只读、停用、删除；有文件的存储不能停用（可以改只读）；被引用的存储不能删除。
 // - 保存的 Secret Key 用当前 MASTER_KEY 解不开时（secret_readable = false），醒目提示重新填写密钥。
@@ -39,6 +40,7 @@ import GuardedButton from '@/components/app/GuardedButton.vue'
 import PageHeader from '@/components/app/PageHeader.vue'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
+import { formatBytes } from '@/lib/files'
 import {
   conflictTitle,
   deleteBlock,
@@ -370,8 +372,14 @@ onBeforeUnmount(() => {
                 data-testid="default-badge"
               ><StarIcon class="size-3" />默认</span>
               <StatusBadge :status="STORAGE_STATUS[p.status]" />
-              <span class="rounded-md bg-secondary px-1.5 py-0.5 text-2xs leading-none text-muted-foreground">
-                {{ p.in_use ? '有文件存在这里' : '还没有文件' }}
+              <span class="rounded-md bg-secondary px-1.5 py-0.5 text-2xs leading-none text-muted-foreground" data-testid="storage-usage">
+                {{
+                  p.snapshot_count > 0
+                    ? `已用 ${formatBytes(p.snapshot_bytes)}（按快照统计）· ${p.snapshot_count.toLocaleString()} 个快照`
+                    : p.in_use
+                      ? '有文件存在这里'
+                      : '还没有文件'
+                }}
               </span>
             </div>
             <p class="text-xs break-all text-muted-foreground">

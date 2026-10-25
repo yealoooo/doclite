@@ -134,7 +134,8 @@ async function retryAll() {
 const filterLabel = computed(() => STATUS_TILES.find((t) => t.status === q?.filter.value)?.label ?? null)
 
 onMounted(() => {
-  if (inShell) void project.ensureLoaded()
+  // 每次进来都重新取项目列表：热文件夹上的扫描参数建议（M11-5）可能刚在项目设置里改过。
+  if (inShell) void project.refresh()
 })
 </script>
 

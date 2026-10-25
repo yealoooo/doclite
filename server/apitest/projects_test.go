@@ -332,6 +332,11 @@ func TestProjectSettings(t *testing.T) {
 		{map[string]any{"item_fields": []any{map[string]any{"key": "a", "label": "A", "type": "enum", "options": []any{"x"}, "default": "y"}}}, "item_fields[0].default"},
 		{map[string]any{"item_fields": []any{map[string]any{"key": "", "label": "A", "type": "text"}}}, "item_fields[0].key"},
 		{map[string]any{"big": strings.Repeat("x", 64<<10)}, "KiB"},
+		{map[string]any{"scan_hint": []any{}}, "scan_hint 必须是对象"},
+		{map[string]any{"scan_hint": map[string]any{"color_mode": "rgb"}}, "scan_hint.color_mode"},
+		{map[string]any{"scan_hint": map[string]any{"dpi": 99}}, "scan_hint.dpi"},
+		{map[string]any{"scan_hint": map[string]any{"dpi": "300"}}, "scan_hint.dpi"},
+		{map[string]any{"scan_hint": map[string]any{"format": "jpg"}}, "scan_hint.format"},
 	}
 	for _, b := range bad {
 		res := admin.Patch(path, map[string]any{"settings": b.settings})
@@ -345,9 +350,36 @@ func TestProjectSettings(t *testing.T) {
 			t.Errorf("settings %v：%s", b.settings, e.Message)
 		}
 	}
+	// 扫描参数建议（M11-5）：三项都可以不填；`GET /api/projects` 带上它，没设的项为 null。
+	scanHint := func() map[string]any {
+		var list []struct {
+			ID       uuid.UUID      `json:"id"`
+			ScanHint map[string]any `json:"scan_hint"`
+		}
+		admin.Get("/api/projects").Expect(200).JSON(&list)
+		for _, p := range list {
+			if p.ID == d.ID {
+				return p.ScanHint
+			}
+		}
+		t.Fatal("能进的项目里没有它")
+		return nil
+	}
+	if h := scanHint(); h["color_mode"] != nil || h["dpi"] != nil || h["format"] != nil || len(h) != 3 {
+		t.Fatalf("没设时：%v", h)
+	}
+	admin.Patch(path, map[string]any{"settings": map[string]any{"x": 1, "scan_hint": map[string]any{"color_mode": "color", "dpi": 300, "format": nil}}}).
+		Expect(200).JSON(&d2)
+	if h := scanHint(); h["color_mode"] != "color" || h["dpi"] != float64(300) || h["format"] != nil {
+		t.Fatalf("设了以后：%v", h)
+	}
+	if !strings.Contains(QueryValue[string](env, `SELECT detail::text FROM audit_logs WHERE target_id = $1 ORDER BY id DESC LIMIT 1`, d.ID), "scan_hint") {
+		t.Fatal("审计里没有 scan_hint")
+	}
+
 	// settings 不变、没有实际变化：不写审计。
 	n := QueryValue[int](env, "SELECT count(*) FROM audit_logs WHERE target_id = $1", d.ID)
-	admin.Patch(path, map[string]any{"settings": map[string]any{"x": 1}}).Expect(200)
+	admin.Patch(path, map[string]any{"settings": map[string]any{"scan_hint": map[string]any{"format": nil, "dpi": 300, "color_mode": "color"}, "x": 1}}).Expect(200)
 	if QueryValue[int](env, "SELECT count(*) FROM audit_logs WHERE target_id = $1", d.ID) != n {
 		t.Fatal("settings 没变也写了审计")
 	}

@@ -132,7 +132,7 @@ cd web && npm run build                                            # vue-tsc 类
 - 登录、会话、迁移、健康检查、客户端版本：`go test -run 'TestHealth|Login|Session|TestCookieSecure|TestClientVersion|TestInitialAdmin|TestMigrations|TestPermsSystem|TestBuiltinRoleMenus|TestClientDisconnect' ./apitest/`
 - 用户、角色：`go test -run 'User|Role|TestPrivilegeEscalation' ./apitest/`
 - 项目（含实时推送）：`go test -run 'Project' ./apitest/`
-- 存储配置：`go test -run 'TestStorage(CRUD|StatusRules|Connection)|TestPresign|TestPermsStorage$' ./apitest/`
+- 存储配置：`go test -run 'TestStorage(CRUD|StatusRules|Connection|Usage)|TestPresign|TestPermsStorage$' ./apitest/`
 - 存储迁移：`go test -run 'StorageMigrate' ./apitest/`
 - 文件目录、上传：`go test -run 'Folder|Upload|TestPermsFiles' ./apitest/`
 - 审核（分配、审核、重扫）：`go test -run 'Review|Rescan' ./apitest/`

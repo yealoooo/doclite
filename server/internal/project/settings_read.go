@@ -34,6 +34,13 @@ type FieldDef struct {
 	Default *string `json:"default"`
 }
 
+// ScanHint 是扫描参数建议（settings.scan_hint，M11-5）：没设的、不合格的项为 null。
+type ScanHint struct {
+	ColorMode *string `json:"color_mode"`
+	DPI       *int    `json:"dpi"`
+	Format    *string `json:"format"`
+}
+
 // Settings 是解析好的项目设置。
 type Settings struct {
 	// RejectReasons 去重、去空；没有时是默认的 8 个。
@@ -46,6 +53,7 @@ type Settings struct {
 	LockRequiresApproved       bool
 	RequireLockedItem          bool
 	RetentionDays              int
+	ScanHint                   ScanHint
 }
 
 // ParseSettings 解析库里存的 settings（nil 或不是对象时全按默认值）。
@@ -86,6 +94,18 @@ func ParseSettings(stored []byte) *Settings {
 		}
 	}
 	s.ItemFields = parseItemFields(eff["item_fields"])
+	if sh, ok := eff["scan_hint"].(map[string]any); ok {
+		if c, ok := sh["color_mode"].(string); ok && slices.Contains(ScanColorModes, c) {
+			s.ScanHint.ColorMode = &c
+		}
+		if n, ok := integer(sh["dpi"]); ok && n >= MinScanDPI && n <= MaxScanDPI {
+			d := int(n)
+			s.ScanHint.DPI = &d
+		}
+		if f, ok := sh["format"].(string); ok && slices.Contains(ScanFormats, f) {
+			s.ScanHint.Format = &f
+		}
+	}
 	return s
 }
 

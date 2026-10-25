@@ -85,16 +85,20 @@ type Profile struct {
 	// HasSecret 总是 true：secret_key 已保存（不返回）。
 	HasSecret bool `json:"has_secret"`
 	// SecretReadable：当前 MASTER_KEY 能解开保存的 secret_key；false 时要重填。
-	SecretReadable bool      `json:"secret_readable"`
-	ForcePathStyle bool      `json:"force_path_style"`
-	URLExpireHours int       `json:"url_expire_hours"`
-	Status         string    `json:"status"`
-	IsDefault      bool      `json:"is_default"`
-	Remark         *string   `json:"remark"`
-	InUse          bool      `json:"in_use"`
-	Deletable      bool      `json:"deletable"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	SecretReadable bool    `json:"secret_readable"`
+	ForcePathStyle bool    `json:"force_path_style"`
+	URLExpireHours int     `json:"url_expire_hours"`
+	Status         string  `json:"status"`
+	IsDefault      bool    `json:"is_default"`
+	Remark         *string `json:"remark"`
+	InUse          bool    `json:"in_use"`
+	Deletable      bool    `json:"deletable"`
+	// SnapshotCount、SnapshotBytes 是存在这里的快照的行数和 file_size 之和（M11-5，"按快照统计"的用量：
+	// 恢复、复制出来的快照指向已有对象，也照算；不算封面）。
+	SnapshotCount int       `json:"snapshot_count"`
+	SnapshotBytes int64     `json:"snapshot_bytes"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 	// Migration 是这个存储最近一次迁出（M7-2，摘要：不带 remaining、failures）；没有迁过为 null。
 	Migration *Migration `json:"migration"`
 	// IncomingMigration 是正在往这个存储迁入的迁移（排队中、执行中；摘要）；没有为 null。
@@ -123,10 +127,15 @@ func (s *Service) List(ctx context.Context) ([]Profile, error) {
 	if err != nil {
 		return nil, err
 	}
+	totals, err := snapshotTotals(ctx, s.pool, nil)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]Profile, 0, len(rows))
 	for _, r := range rows {
 		p := s.profileOf(r.row, r.usage)
 		p.Migration, p.IncomingMigration = latest[p.ID], incoming[p.ID]
+		p.SnapshotCount, p.SnapshotBytes = totals[p.ID].Count, totals[p.ID].Bytes
 		out = append(out, p)
 	}
 	return out, nil
@@ -147,6 +156,11 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Profile, error) {
 		return nil, err
 	}
 	p.Migration, p.IncomingMigration = latest[id], incoming[id]
+	totals, err := snapshotTotals(ctx, s.pool, &id)
+	if err != nil {
+		return nil, err
+	}
+	p.SnapshotCount, p.SnapshotBytes = totals[id].Count, totals[id].Bytes
 	return &p, nil
 }
 

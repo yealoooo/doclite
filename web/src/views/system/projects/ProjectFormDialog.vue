@@ -11,6 +11,9 @@
 // 而且改得和别人不一样的，算我的修改没有保存；别人没动的部分保留我的修改；提示别人改了哪些、放弃了我的哪些，核对后
 // 再保存。别人只改了对话框里看不到的东西（授权、settings 里的其他键）时不提示，用新版本直接重发一次。替换了 M3-7 的
 // "保存前重读比对"。
+// M11-5：基本信息里多一组"扫描参数建议"（settings.scan_hint：颜色、DPI、格式，都可以不填），只在编辑时、取到详情后
+// 能改；保存时和著录项一样在详情的 settings 上只换 scan_hint，其余原样。409 时同样三方合并。server 指向 scan_hint 的
+// 校验错误显示在基本信息里。
 // 截图脚本用的属性：project-form（data-tab、data-settings：loading、ready、error）、project-form-tab（data-tab）、
 // project-form-error（data-scope：basic、settings）、project-form-conflict、project-form-submit。
 import { LoaderCircleIcon } from '@lucide/vue'
@@ -18,7 +21,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 
 import { errorMessage, HANDLE_ALL, isApiError } from '@/api/http'
 import { createProject, getProject, updateProject, type UpdateProjectBody } from '@/api/projects'
-import type { ProjectDetail, ProjectItem, ProjectStatus } from '@/api/types'
+import type { ColorMode, ProjectDetail, ProjectItem, ProjectStatus, ScanFormat, ScanHint } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -31,12 +34,20 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { colorModeLabel } from '@/lib/files'
 import {
   checkProjectCode,
   checkProjectDescription,
   checkProjectName,
+  checkScanDpi,
   MAX_PROJECT_CODE_CHARS,
+  MAX_SCAN_DPI,
+  MIN_SCAN_DPI,
   PROJECT_STATUS_LABEL,
+  SCAN_COLOR_MODES,
+  SCAN_FORMAT_LABEL,
+  SCAN_FORMATS,
+  scanHintFromSettings,
 } from '@/lib/project'
 
 import {
@@ -82,6 +93,43 @@ const conflictNotice = ref('')
 const highlightIndex = ref<number | null>(null)
 const templateHighlight = ref(false)
 let detailSeq = 0
+
+// ---------- 扫描参数建议（M11-5，只在编辑时） ----------
+
+interface ScanDraft {
+  colorMode: ColorMode | ''
+  /** 输入框原文，空表示不建议。 */
+  dpi: string
+  format: ScanFormat | ''
+}
+
+const scan = ref<ScanDraft>({ colorMode: '', dpi: '', format: '' })
+let initialScanSignature = ''
+
+function scanDraftFrom(settings: Record<string, unknown>): ScanDraft {
+  const h = scanHintFromSettings(settings)
+  return { colorMode: h.color_mode ?? '', dpi: h.dpi ? String(h.dpi) : '', format: h.format ?? '' }
+}
+
+/** 写进 settings.scan_hint 的样子。DPI 不是整数时原样（字符串）发给 server，让它报错。 */
+function scanHintOf(d: ScanDraft): Omit<ScanHint, 'dpi'> & { dpi: number | string | null } {
+  const dpi = d.dpi.trim()
+  return {
+    color_mode: d.colorMode || null,
+    dpi: dpi === '' ? null : /^[0-9]+$/.test(dpi) ? Number(dpi) : dpi,
+    format: d.format || null,
+  }
+}
+
+const scanSignature = (d: ScanDraft) => JSON.stringify(scanHintOf(d))
+const scanPart = (settings: Record<string, unknown>) => scanSignature(scanDraftFrom(settings))
+
+function resetScan(settings: Record<string, unknown>) {
+  scan.value = scanDraftFrom(settings)
+  initialScanSignature = scanSignature(scan.value)
+}
+
+const scanDirty = computed(() => !!detail.value && scanSignature(scan.value) !== initialScanSignature)
 
 // ---------- 版本（M4-4） ----------
 
@@ -151,6 +199,7 @@ async function loadDetail(id: string) {
     detail.value = d
     draft.value = draftFromSettings(d.settings)
     initialSignature = draftSignature(draft.value)
+    resetScan(d.settings)
     detailState.value = 'ready'
   } catch (e) {
     if (my !== detailSeq) return
@@ -180,6 +229,8 @@ watch(open, (v) => {
   detail.value = null
   draft.value = null
   initialSignature = ''
+  scan.value = { colorMode: '', dpi: '', format: '' }
+  initialScanSignature = ''
   settingsError.value = ''
   conflictNotice.value = ''
   highlightIndex.value = null
@@ -201,7 +252,8 @@ function validate(): string {
   return (
     (isEdit.value ? '' : checkProjectCode(code.value)) ||
     checkProjectName(name.value) ||
-    checkProjectDescription(description.value)
+    checkProjectDescription(description.value) ||
+    (isEdit.value ? checkScanDpi(scan.value.dpi) : '')
   )
 }
 
@@ -227,8 +279,12 @@ function changesAgainst(b: Base): UpdateProjectBody {
   if (status.value !== b.status) body.status = status.value
   // 著录项和档号：在详情的 settings 上只换三处，其余原样（catalog-draft.ts）。settings 是整体替换，有版本检查才不会
   // 把别人在这期间的修改盖掉。
-  if (settingsDirty.value && detail.value && draft.value) {
-    body.settings = settingsWithDraft(detail.value.settings, draft.value)
+  // 扫描参数建议（M11-5）同样只换 scan_hint。
+  if (detail.value && ((settingsDirty.value && draft.value) || scanDirty.value)) {
+    let settings = detail.value.settings
+    if (settingsDirty.value && draft.value) settings = settingsWithDraft(settings, draft.value)
+    if (scanDirty.value) settings = { ...settings, scan_hint: scanHintOf(scan.value) }
+    body.settings = settings
   }
   return body
 }
@@ -253,6 +309,7 @@ async function mergeAfterConflict(id: string, old: Base, err: unknown): Promise<
     detailSeq++
     draft.value = draftFromSettings(fresh.settings)
     initialSignature = draftSignature(draft.value)
+    resetScan(fresh.settings)
   } else {
     const theirs = catalogPart(fresh.settings)
     if (theirs !== catalogPart(before.settings)) {
@@ -261,6 +318,12 @@ async function mergeAfterConflict(id: string, old: Base, err: unknown): Promise<
       if (settingsDirty.value && draft.value && draftSignature(draft.value) !== theirs) dropped.push('著录项和档号')
       draft.value = draftFromSettings(fresh.settings)
       initialSignature = draftSignature(draft.value)
+    }
+    const theirScan = scanPart(fresh.settings)
+    if (theirScan !== scanPart(before.settings)) {
+      changed.push('扫描参数建议')
+      if (scanDirty.value && scanSignature(scan.value) !== theirScan) dropped.push('扫描参数建议')
+      resetScan(fresh.settings)
     }
   }
   detail.value = fresh
@@ -328,8 +391,12 @@ async function submit() {
     open.value = false
   } catch (err) {
     const msg = errorMessage(err)
-    if (msg.startsWith('settings 不对')) await showSettingsError(msg)
-    else error.value = msg
+    // 指向 scan_hint 的错误显示在基本信息里（扫描参数建议在那里）。
+    if (msg.startsWith('settings 不对') && !msg.includes('scan_hint')) await showSettingsError(msg)
+    else {
+      error.value = msg
+      tab.value = 'basic'
+    }
   } finally {
     saving.value = false
   }
@@ -452,6 +519,62 @@ async function submit() {
             </button>
           </div>
           <p class="text-xs text-muted-foreground">已归档只是一个标记：项目切换器默认不显示，不限制继续操作。</p>
+        </div>
+        <div v-if="isEdit" class="grid gap-2" data-testid="project-scan-hint">
+          <Label>扫描参数建议（可选）</Label>
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <div class="inline-flex w-fit rounded-md bg-muted p-0.5" role="radiogroup" aria-label="颜色">
+              <button
+                v-for="m in (['', ...SCAN_COLOR_MODES] as const)"
+                :key="m"
+                type="button"
+                role="radio"
+                :aria-checked="scan.colorMode === m"
+                :disabled="basicLocked || !detail"
+                class="rounded px-3 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                :class="scan.colorMode === m ? 'bg-background font-medium text-foreground shadow-xs' : 'text-muted-foreground'"
+                data-testid="scan-hint-color"
+                :data-value="m"
+                @click="scan.colorMode = m"
+              >
+                {{ m ? colorModeLabel(m) : '不指定颜色' }}
+              </button>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <Input
+                id="pf-scan-dpi"
+                v-model="scan.dpi"
+                class="w-24"
+                inputmode="numeric"
+                autocomplete="off"
+                placeholder="例如 300"
+                aria-label="DPI"
+                :disabled="basicLocked || !detail"
+                data-testid="scan-hint-dpi"
+              />
+              <span class="text-sm text-muted-foreground">dpi</span>
+            </div>
+            <div class="inline-flex w-fit rounded-md bg-muted p-0.5" role="radiogroup" aria-label="格式">
+              <button
+                v-for="f in (['', ...SCAN_FORMATS] as const)"
+                :key="f"
+                type="button"
+                role="radio"
+                :aria-checked="scan.format === f"
+                :disabled="basicLocked || !detail"
+                class="rounded px-3 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                :class="scan.format === f ? 'bg-background font-medium text-foreground shadow-xs' : 'text-muted-foreground'"
+                data-testid="scan-hint-format"
+                :data-value="f"
+                @click="scan.format = f"
+              >
+                {{ f ? SCAN_FORMAT_LABEL[f] : '不指定格式' }}
+              </button>
+            </div>
+          </div>
+          <p class="text-xs text-muted-foreground">
+            显示在扫描页的热文件夹上，提醒扫描员按这个设置扫描；只是提示，不限制上传。DPI 填 {{ MIN_SCAN_DPI }}–{{ MAX_SCAN_DPI }}，不建议就留空。
+          </p>
         </div>
       </form>
 
