@@ -15,12 +15,14 @@ import (
 //
 //	GET    /api/folders/{id}            → 200 FolderItem（本身和祖先链）
 //	GET    /api/folders/{id}/children   → 200 Children
+//	GET    /api/folders/{id}/search?q=&limit=  → 200 SearchResult（子树里按文件名搜，limit 默认 100、最多 200）
 //	POST   /api/folders  {parent_id, folder_name, remark?, if_exists?: "return"} → 201 FolderItem；同名且 if_exists 时 200
 //
 // files（整理）：
 //
 //	PATCH  /api/folders/{id}  {folder_name?, remark?, parent_id?} → 200 FolderItem
 //	DELETE /api/folders/{id}                                       → 204
+//	PUT    /api/folders/{id}/order  {folder_file_ids}                → 204（文件夹里全部文件的新顺序）
 //	PATCH  /api/folder-files/{id}  {file_name?, folder_id?}        → 200 FolderFileUpdated
 //	POST   /api/folder-files/{id}/copy  {folder_id?}（可以没有请求体）→ 201 FolderFileCopied
 //	DELETE /api/folder-files/{id}                                  → 204
@@ -39,9 +41,11 @@ func (h *Handler) Routes(r *httpx.Router, g *auth.Gate) {
 	files := g.AnyMenu(auth.MenuFiles)
 	r.Handle("GET /api/folders/{id}", g.InProject(read, h.folderProject), h.get)
 	r.Handle("GET /api/folders/{id}/children", g.InProject(read, h.folderProject), h.children)
+	r.Handle("GET /api/folders/{id}/search", g.InProject(read, h.folderProject), h.search)
 	r.Handle("POST /api/folders", read, h.create)
 	r.Handle("PATCH /api/folders/{id}", g.InProject(files, h.folderProject), h.update)
 	r.Handle("DELETE /api/folders/{id}", g.InProject(files, h.folderProject), h.delete)
+	r.Handle("PUT /api/folders/{id}/order", g.InProject(files, h.folderProject), h.reorder)
 	r.Handle("PATCH /api/folder-files/{id}", g.InProject(files, h.folderFileProject), h.updateFolderFile)
 	r.Handle("POST /api/folder-files/{id}/copy", g.InProject(files, h.folderFileProject), h.copyFolderFile)
 	r.Handle("DELETE /api/folder-files/{id}", g.InProject(files, h.folderFileProject), h.deleteFolderFile)
@@ -91,6 +95,24 @@ func (h *Handler) children(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+func (h *Handler) search(w http.ResponseWriter, r *http.Request) error {
+	id, err := httpx.PathUUID(r, "id")
+	if err != nil {
+		return err
+	}
+	limit, err := httpx.QueryLimit(r, DefaultSearchLimit, MaxSearchLimit)
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	res, err := h.svc.Search(ctx, auth.ProjectID(ctx), id, r.URL.Query().Get("q"), limit)
+	if err != nil {
+		return err
+	}
+	httpx.WriteJSON(w, http.StatusOK, res)
+	return nil
+}
+
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) error {
 	var in CreateInput
 	if err := httpx.ReadJSON(r, &in); err != nil {
@@ -134,6 +156,25 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) error {
 	}
 	ctx := r.Context()
 	if err := h.svc.Delete(ctx, auth.Current(ctx).UserID, auth.ProjectID(ctx), id); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func (h *Handler) reorder(w http.ResponseWriter, r *http.Request) error {
+	id, err := httpx.PathUUID(r, "id")
+	if err != nil {
+		return err
+	}
+	var req struct {
+		FolderFileIDs []uuid.UUID `json:"folder_file_ids"`
+	}
+	if err := httpx.ReadJSON(r, &req); err != nil {
+		return err
+	}
+	ctx := r.Context()
+	if err := h.svc.ReorderFiles(ctx, auth.Current(ctx).UserID, auth.ProjectID(ctx), id, req.FolderFileIDs); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)

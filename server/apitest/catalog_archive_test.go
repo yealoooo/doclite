@@ -281,6 +281,10 @@ func TestCatalogSeal(t *testing.T) {
 		{"移动文件夹", func() *Response { return admin.Patch("/api/folders/"+fa.String(), map[string]any{"parent_id": other}) }},
 		{"把文件夹移进去", func() *Response { return admin.Patch("/api/folders/"+other.String(), map[string]any{"parent_id": fa}) }},
 		{"删除文件夹", func() *Response { return admin.Delete("/api/folders/" + fa.String()) }},
+		{"调顺序", func() *Response {
+			return admin.Put("/api/folders/"+fa.String()+"/order", map[string]any{"folder_file_ids": []uuid.UUID{a2.FolderFileID,
+				a1.FolderFileID}})
+		}},
 	}
 	for _, b := range blocked {
 		r := b.do()
@@ -329,7 +333,14 @@ func TestCatalogSeal(t *testing.T) {
 	// 解除封存（修改中）：和未归档的一样可以整理——上传、改名、删除（修改中的条目的页也能删）。
 	c.act(it.ID, "unlock").Expect(http.StatusOK)
 	c.unseal(it.ID).Expect(http.StatusOK)
-	e.upload(fa, "a3.tif")
+	a3 := e.upload(fa, "a3.tif")
+	// 调顺序：重新归档的对比里算"调序"（a1、a2 的相对顺序反了，挪动的是 1 页）。
+	admin.Put("/api/folders/"+fa.String()+"/order", map[string]any{"folder_file_ids": []uuid.UUID{a3.FolderFileID, a2.FolderFileID,
+		a1.FolderFileID}}).Expect(http.StatusNoContent)
+	if p := Decode[resealPreview](admin.Get("/api/archive-items/" + it.ID.String() + "/reseal-preview").Expect(http.StatusOK)); len(p.Moved) != 1 ||
+		p.Moved[0].FileID != a1.FileID || len(p.Added) != 1 {
+		t.Fatalf("调序后的对比：%+v", p)
+	}
 	admin.Patch(ff(a1.FolderFileID), map[string]any{"file_name": "a1-改.tif"}).Expect(http.StatusOK)
 	admin.Delete(ff(a2.FolderFileID)).Expect(http.StatusNoContent)
 	if arch := archiveOf(t, admin, box, fa); arch == nil || arch.SourceStatus != "modifying" || arch.UnsealedByName == nil ||

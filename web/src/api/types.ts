@@ -420,6 +420,23 @@ export interface FolderChildren {
   files: FileEntry[]
 }
 
+/** `GET /api/folders/{id}/search` 的一项（M11-4）。 */
+export interface FolderSearchHit {
+  folder_file_id: string
+  file_id: string
+  file_name: string
+  folder_id: string
+  /** 所在文件夹的路径（含根，如"项目名/盒 1/件 3"）。 */
+  folder_path: string
+  sort_no: number
+}
+
+/** `GET /api/folders/{id}/search`：truncated 表示不止 limit 个，只返回了前 limit 个。 */
+export interface FolderSearchResult {
+  items: FolderSearchHit[]
+  truncated: boolean
+}
+
 /** 生成不了图片 URL 的原因（存储停用、密钥解不开、签名失败）。 */
 export interface UrlError {
   /** `storage_unavailable`、`secret_unreadable`、`presign_failed`。 */

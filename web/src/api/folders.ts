@@ -2,9 +2,10 @@
 // 改名、改备注、移动、删除（菜单码 files，M1-12）。每个函数的最后一个参数可以传 `handle`（见 http.ts）。
 // M9：响应里带文件夹的归档信息（`archive`）；封存的文件夹（requirements 5.5）里建子文件夹、文件夹本身改名、移动、删除
 // 一律 409 `folder_archived`（details 见 FolderArchivedDetails），改备注照常。
+// M11-4（用户 2026-10-25）：文件夹内调序（菜单码 files）、子树里按文件名搜（scan 或 files）。
 
 import { type Handle, request } from './http'
-import type { CreateFolderBody, FolderChildren, FolderItem, UpdateFolderBody } from './types'
+import type { CreateFolderBody, FolderChildren, FolderItem, FolderSearchResult, UpdateFolderBody } from './types'
 
 /** 文件夹本身和祖先链（从根到父）。不存在或已删除 404，进不了项目 403。 */
 export function getFolder(id: string, handle?: Handle) {
@@ -14,6 +15,19 @@ export function getFolder(id: string, handle?: Handle) {
 /** 未删除的直接子文件夹和文件，都按 sort_no、名称排序，不分页，不带图片地址。 */
 export function listChildren(id: string, handle?: Handle) {
   return request<FolderChildren>(`/api/folders/${id}/children`, { handle })
+}
+
+/** 子树里按文件名搜（不分大小写，% _ 按字面）：按文件夹、扫描顺序排；limit 默认 100、最多 200，多了 `truncated`。 */
+export function searchFolderFiles(id: string, q: string, limit?: number, handle?: Handle) {
+  return request<FolderSearchResult>(`/api/folders/${id}/search`, { query: { q, limit }, handle })
+}
+
+/**
+ * 调整文件夹里文件的顺序（204）：`ids` 是文件夹里全部未删除文件（folder_file_id）的新顺序，server 重排成 1..n。
+ * 错误：409 `conflict`（文件夹里的文件变了，刷新后再调）、`folder_archived`（已封存）；400（空、重复、太多）。
+ */
+export function reorderFolderFiles(id: string, ids: string[], handle?: Handle) {
+  return request<void>(`/api/folders/${id}/order`, { method: 'PUT', body: { folder_file_ids: ids }, handle })
 }
 
 /**

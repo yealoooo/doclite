@@ -1,6 +1,7 @@
 package apitest
 
 import (
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -16,9 +17,11 @@ func TestPermsFolders(t *testing.T) {
 	                                          admin  manager  scanner  reviewer  cataloger  scan  files  review_assign  none
 	GET    /api/folders/{id}                    Y      Y        Y        Y         Y         Y     Y        -           -
 	GET    /api/folders/{id}/children           Y      Y        Y        Y         Y         Y     Y        -           -
+	GET    /api/folders/{id}/search             Y      Y        Y        Y         Y         Y     Y        -           -
 	POST   /api/folders                         Y      Y        Y        Y         Y         Y     Y        -           -
 	PATCH  /api/folders/{id}                    Y      Y        Y        Y         Y         -     Y        -           -
 	DELETE /api/folders/{id}                    Y      Y        Y        Y         Y         -     Y        -           -
+	PUT    /api/folders/{id}/order              Y      Y        Y        Y         Y         -     Y        -           -
 	PATCH  /api/folder-files/{id}               Y      Y        Y        Y         Y         -     Y        -           -
 	POST   /api/folder-files/{id}/copy          Y      Y        Y        Y         Y         -     Y        -           -
 	DELETE /api/folder-files/{id}               Y      Y        Y        Y         Y         -     Y        -           -
@@ -330,6 +333,100 @@ FROM file_snapshots WHERE file_id = $1 AND version_no = 1`, cp.FileID, c.Snapsho
 	if QueryValue[string](env, `SELECT detail->'before'->>'folder_path' FROM audit_logs WHERE target_id = $1 AND action = 'delete'`,
 		x.ID) != "FF 项目/盒 X" {
 		t.Fatal("删除的审计不对")
+	}
+}
+
+// TestFolderOrderSearch：文件夹内调序（sort_no 1..n、审计只记挪动过的、事件、顺序没变不写、清单对不上 409、参数 400；
+// 封存的 409 在 TestCatalogSeal）和子树里按文件名搜（不分大小写、% _ 按字面、排序和路径、limit 和 truncated、参数 400）。
+func TestFolderOrderSearch(t *testing.T) {
+	t.Parallel()
+	env, _ := newUploadEnv(t)
+	admin := env.Admin()
+	p := env.CreateProject("FO")
+	x := mkdir(admin, p.RootFolderID, "盒 X")
+	sub := mkdir(admin, x.ID, "补扫")
+	a := uploadOK(t, admin, x.ID, "a.jpg", "a")
+	b := uploadOK(t, admin, x.ID, "b.jpg", "b")
+	c := uploadOK(t, admin, x.ID, "c.jpg", "c")
+	s1 := uploadOK(t, admin, sub.ID, "Scan_50%.JPG", "s1")
+	uploadOK(t, admin, sub.ID, "scanX50.jpg", "s2")
+	order := func(ids ...uuid.UUID) *Response {
+		t.Helper()
+		return admin.Put("/api/folders/"+x.ID.String()+"/order", map[string]any{"folder_file_ids": ids})
+	}
+	reorders := func() int {
+		return QueryValue[int](env, `SELECT count(*) FROM audit_logs WHERE target_id = $1 AND action = 'reorder'`, x.ID)
+	}
+
+	// 调序：c 排到最前 → sort_no 1..n；审计只记挪动过的 c；发 files.changed。
+	stream := openStream(t, admin, p.ID)
+	order(c.FolderFileID, a.FolderFileID, b.FolderFileID).Expect(204)
+	if names := listChildren(admin, x.ID).fileNames(); !slices.Equal(names, []string{"c.jpg", "a.jpg", "b.jpg"}) {
+		t.Fatalf("调序后：%v", names)
+	}
+	if QueryValue[string](env, `SELECT string_agg(sort_no::text, ',' ORDER BY sort_no) FROM folder_files
+WHERE folder_id = $1 AND deleted_at IS NULL`, x.ID) != "1,2,3" {
+		t.Fatal("sort_no 没有重排成 1..n")
+	}
+	if ev := stream.next(t); ev["type"] != "files.changed" || !hasIDs(ev["folder_ids"], x.ID) || !hasIDs(ev["file_ids"], c.FileID) {
+		t.Fatalf("事件：%v", ev)
+	}
+	d := QueryValue[map[string]any](env, `SELECT detail FROM audit_logs WHERE target_id = $1 AND action = 'reorder'`, x.ID)
+	if moved, _ := d["moved"].([]any); len(moved) != 1 || moved[0].(map[string]any)["file_name"] != "c.jpg" ||
+		d["folder_path"] != "FO 项目/盒 X" || d["file_count"] != float64(3) {
+		t.Fatalf("审计：%v", d)
+	}
+	// 顺序没变：不写审计。清单对不上（少一个、混进别的文件夹的）409；空、重复 400；文件夹不在 404。
+	order(c.FolderFileID, a.FolderFileID, b.FolderFileID).Expect(204)
+	if reorders() != 1 {
+		t.Fatal("顺序没变也写了审计")
+	}
+	order(c.FolderFileID, a.FolderFileID).ExpectError(409, "conflict")
+	order(c.FolderFileID, a.FolderFileID, b.FolderFileID, s1.FolderFileID).ExpectError(409, "conflict")
+	order().ExpectError(400, "invalid_input")
+	order(c.FolderFileID, a.FolderFileID, a.FolderFileID).ExpectError(400, "invalid_input")
+	admin.Put("/api/folders/"+uuid.NewString()+"/order", map[string]any{"folder_file_ids": []uuid.UUID{a.FolderFileID}}).
+		ExpectError(404, "not_found")
+
+	// 搜索：整棵子树，按文件夹、sort_no 排，带路径；不分大小写；% _ 按字面；limit、truncated；参数 400。
+	type hit struct {
+		FolderFileID uuid.UUID `json:"folder_file_id"`
+		FileID       uuid.UUID `json:"file_id"`
+		FileName     string    `json:"file_name"`
+		FolderID     uuid.UUID `json:"folder_id"`
+		FolderPath   string    `json:"folder_path"`
+		SortNo       int       `json:"sort_no"`
+	}
+	search := func(folder uuid.UUID, q string, limit string) (names []string, hits []hit, truncated bool) {
+		t.Helper()
+		r := Decode[struct {
+			Items     []hit `json:"items"`
+			Truncated bool  `json:"truncated"`
+		}](admin.Get("/api/folders/" + folder.String() + "/search?q=" + url.QueryEscape(q) + "&limit=" + limit).Expect(200))
+		for _, h := range r.Items {
+			names = append(names, h.FileName)
+		}
+		return names, r.Items, r.Truncated
+	}
+	names, hits, tr := search(p.RootFolderID, " .jpg ", "")
+	if !slices.Equal(names, []string{"c.jpg", "a.jpg", "b.jpg", "Scan_50%.JPG", "scanX50.jpg"}) || tr ||
+		hits[3].FolderID != sub.ID || hits[3].FolderPath != "FO 项目/盒 X/补扫" || hits[3].FileID != s1.FileID || hits[0].SortNo != 1 {
+		t.Fatalf("搜整个项目：%+v", hits)
+	}
+	if names, _, _ := search(sub.ID, "SCAN", "100"); len(names) != 2 {
+		t.Fatalf("不分大小写：%v", names)
+	}
+	if names, _, _ := search(x.ID, "_50%", "100"); !slices.Equal(names, []string{"Scan_50%.JPG"}) {
+		t.Fatalf("%% _ 按字面：%v", names)
+	}
+	if names, _, _ := search(sub.ID, "c.jpg", "100"); len(names) != 0 {
+		t.Fatalf("只搜子树：%v", names)
+	}
+	if names, _, tr := search(x.ID, "jpg", "2"); len(names) != 2 || !tr {
+		t.Fatalf("limit：%v %v", names, tr)
+	}
+	for _, q := range []string{"/search?q=", "/search?q=%20", "/search?q=a&limit=201", "/search?q=" + url.QueryEscape(strings.Repeat("字", 101))} {
+		admin.Get("/api/folders/"+x.ID.String()+q).ExpectError(400, "invalid_input")
 	}
 }
 

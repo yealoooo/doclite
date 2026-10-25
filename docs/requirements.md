@@ -129,6 +129,7 @@
 - file_logs action：upload、rescan、rename、move、copy、delete、assign_review、reassign_review、approve、reject、reopen、link、unlink、export（edit、restore 留给插件）；审核动作带 version_no、review_round。
 - 改名、移动文件夹只写审计；删文件夹每个文件记 delete【用户 2026-09-27】。
 - audit_logs target：user、role、storage_profile、project、folder、archive_category、archive_item、export_task；detail `{before, after}` 只放变了的。空修改不写库、不审计、不发事件。登录退出不审计。
+- 文件夹内调序（2026-10-25）写一条 folder / reorder 审计：文件夹名、路径、文件数、moved（挪动过的文件，算法同重新归档的"调序"），不写 file_logs。
 - 归档相关的 archive_item 审计 action：archive（归档，带来源文件夹路径和页数）、unseal（解除封存，带原因）、reseal（重新归档，带新增、去掉、调序的页）、lock、unlock、delete（撤销归档）；每页照旧写 file_logs link / unlink。
 
 ### 3.6 并发和加锁
@@ -204,10 +205,13 @@
 
 ### 5.5 文件目录（M1）
 
-- **界面 /files**（像资源管理器）：目录树；面包屑和备注；封面网格 / 列表（虚拟滚动）；多选；详情（file_id、位置、版本、存储和 key、规格、审核和归类信息、日志）；右键（重命名、移动、复制、下载原图、查看原图、快照历史、删除，已驳回的可"上传重扫件"）；"已驳回"筛选；上传文件 / 文件夹。
+- **界面 /files**（像资源管理器）：目录树；面包屑和备注；封面网格 / 列表（虚拟滚动）；多选；详情（file_id、位置、版本、存储和 key、规格、审核和归类信息、日志）；右键（重命名、移动、移到第…页、复制、下载原图、查看原图、快照历史、删除，已驳回的可"上传重扫件"）；"已驳回"筛选；上传文件 / 文件夹。
+  - **排列、搜索、调序**【用户 2026-10-25】：摘要那一行的下拉框"按扫描顺序（默认）/ 按文件名 / 按入库时间"（入库时间 = folder_files.created_at，放进这个文件夹的时间），只在本页排、每人记在 localStorage；顶栏"搜索文件名…"（去抖约 300 ms）搜当前文件夹和它的全部子文件夹，结果替换文件区（文件名 + 位置，"只显示前 N 个"、没有时空状态），点一个跳到它的文件夹并选中、滚到它，Esc 或清空回到列表；选中文件的"移到第…页"（多选的保持原来的先后，从第 n 页起排在一起），不按扫描顺序排、在搜索、文件夹封存时置灰并写原因，409 `conflict` 时提示并刷新。
 - **名称**【用户 2026-09-27】：1–255 字；不含 `\ / : * ? < > |`、双引号、控制字符；首尾不空白、不以点结尾、不是 `.` `..`。**Windows 保留名**【用户 2026-09-28】CON、PRN、AUX、NUL、COM1–9、LPT1–9 不分大小写，取第一个点前的部分去尾空格比较（`con.txt`、`con .jpg` 不行；`con (1).jpg`、`COM10.jpg` 可以），400 `invalid_input`，上传也不自动改名。老名字移动、复制时不重校验【用户 2026-10-07】。
 - **重名**（同文件夹、不分大小写、不算已删除）：明确改名撞名 409 `conflict`；上传、移动、复制文件撞名自动改为"名字 (n).扩展名"；新建、移动文件夹撞名 409；新建文件夹带 `if_exists: "return"` 时返回已有的（200）。
 - **顺序**：sort_no = 目标文件夹未删除文件 max+1（到达先后 = 纸张顺序），移入复制入排末尾；列表按 sort_no、名称。
+- **调序**【用户 2026-10-25】 `PUT folders/{id}/order {folder_file_ids}` → 204：带文件夹里全部未删除文件的新顺序，一条语句重排成 sort_no 1..n。集合和现在的对不上 409 `conflict`（"文件夹里的文件有变化……请刷新后再调"）；空、重复、> 10000 个 400；封存 409 `folder_archived`。加锁同上传、移入移出：文件树共享锁 → 文件夹行（不锁 files 行）。顺序没变不写库、不审计、不发事件；变了写一条 folder / reorder 审计、发 `files.changed`（folder_ids 是它，file_ids 是挪动过的）。归档、重新归档照常按 sort_no 排页，所以修改中的文件夹调序后，重新归档的对比里算"调序"。
+- **按文件名搜**【用户 2026-10-25】 `GET folders/{id}/search?q=&limit=` → `{items: [{folder_file_id, file_id, file_name, folder_id, folder_path, sort_no}], truncated}`：这个文件夹和全部子文件夹里名字含 q 的未删除文件（不分大小写，q 去首尾空白 1–100 字，`% _ \` 按字面），按文件夹 path_code、sort_no 排；limit 默认 100、最多 200，多了 `truncated: true`。
 - 根文件夹不能改名、移动、删除（409 `root_folder_locked`），可改备注。移进自己子树 409 `tree_cycle`；目标在别项目或已删除 404；只在本项目内移动复制。
 - **复制**：新 file_id，v1 类型 copy，复用源当前快照的对象，记来源；新文件待分配、自动改名、排末尾；只在新文件记 copy 日志；源存储停用 409 `storage_unavailable`。
 - 同时改名和移动：新名在目标重名 409，日志先 rename 后 move。
@@ -215,7 +219,7 @@
 - **封存**【用户 2026-10-18、19】：文件夹是某个未删除条目的来源、且条目不在"修改中"时，以下一律 409 `folder_archived`（details：folder_id、条目 id、件号、档号、题名、节点名称链、锁定与否，界面据此给"解除封存去修改"的引导）：往里上传、复制进去、移入移出文件、删除里面的文件、给里面的文件改名、在里面建子文件夹、这个文件夹本身改名、移动、删除。**可以**：重扫（同一文件出新版本）、审核、改这个文件夹的备注。上级文件夹（盒子）不封存：改名、移动可以，封存的子文件夹跟着走、内容不变；删上级时子树里有已归类文件照旧 409 `file_cataloged`。"修改中"的文件夹和未归档的一样可以整理，里面的页也可以删（重新归档时从件里移出）【总控】。批量操作里有一个碰到封存就整体不做。
 - **批量** move / delete：≤ 500、同一项目（否则 400）、一个事务、一个不合规就整体不做（details.ids 是 folder_files id）。
 - children 一次返回子文件夹（名、备注、子文件夹数、文件数、**归档信息**）和文件（id、名、sort_no、审核状态、轮次、版本号、是否已归类），不分页、不带图片地址。归档信息（新增字段，没有时为 null）：条目 id、件号、档号、题名、节点名称链、锁定与否、封存状态（sealed / modifying）、解除封存的人和时间；`GET folders/{id}` 同样带上自己的归档信息。日志倒序带操作人名；已删除的文件 404。
-- 菜单：读、列、建文件夹 scan 或 files；整理只要 files。
+- 菜单：读、列、搜索、建文件夹 scan 或 files；整理（含调序）只要 files。
 
 ### 5.6 上传和重扫（M1、M2）
 
@@ -395,7 +399,7 @@
 | type | 字段 | 含义 |
 |---|---|---|
 | folders.changed | folder_ids | 文件夹建、改名、改备注、移动、删除、归档状态变（归档、解除封存、重新归档、撤销归档、锁定、解锁）；项目改名时是根 |
-| files.changed | folder_ids, file_ids? | 上传、重扫、改名、移动、复制、删除、审核状态变、挂上移出（只换页号不算）；> 500 个只带 folder_ids |
+| files.changed | folder_ids, file_ids? | 上传、重扫、改名、移动、复制、删除、文件夹内调序、审核状态变、挂上移出（只换页号不算）；> 500 个只带 folder_ids |
 | catalog.changed | category_ids?, item_ids | 归类节点或条目变化 |
 | export.changed | task_ids | 任务建立、取消、开始、进度（≤ 1 次/秒）、完成、失败、重试、清理完 |
 | resync | — | 整体刷新 |
@@ -417,8 +421,8 @@
 | system/projects（GET/POST）· {id}（GET/PATCH/DELETE）· access-candidates · projects/{pid}/access（GET/PUT） | system.projects | 项目、授权 |
 | system/license（GET、PUT `{"license": "<.lic 全文>"}`）（M7-1） | system.license | 许可证状态、导入 |
 | GET system/audit-logs（from、to、operator_id、project_id、target_type、action、limit、cursor → `{items, next_cursor}`）· GET system/audit-logs/filter-options（M7-3） | system.audit | 审计日志 |
-| folders/{id}（GET）· folders/{id}/children · POST folders | scan 或 files | 文件夹 |
-| folders/{id}（PATCH/DELETE）· folder-files/{id}（PATCH/DELETE）· {id}/copy · folder-files:move · :delete | files | 整理 |
+| folders/{id}（GET）· folders/{id}/children · GET folders/{id}/search（2026-10-25）· POST folders | scan 或 files | 文件夹、按文件名搜 |
+| folders/{id}（PATCH/DELETE）· PUT folders/{id}/order（2026-10-25）· folder-files/{id}（PATCH/DELETE）· {id}/copy · folder-files:move · :delete | files | 整理、调序 |
 | POST folders/{id}/files · files:check · files/{fid}/rescan · GET projects/{pid}/rescans | scan 或 files | 上传、预检、重扫、待重扫 |
 | POST files/batch · GET files/{fid}/snapshots | 登录 | 图片、版本 |
 | GET files/{fid}/logs | files | 日志 |
@@ -445,6 +449,7 @@
 - **2026-10-18、19（归类改成整个文件夹归档，Mockup `doclite-project/doclite-catalog-redesign.html` v3.1）**：一个文件只能归类一次（照旧）；只能整个文件夹归档，选盒子时每个直接子文件夹一件，题名默认文件夹名，含下级文件夹的跳过并提示；数据单向，文件目录自己维护，归档后文件夹封存（盒子本身不封存）；可以重扫；要改走"解除封存（原因选填）→ 修改 → 重新归档（给对比）"，件号档号著录保留、绑定不断，修改中不能锁定和导出，到处提示；撤销归档 = 删除这一件；条目状态去掉"已完成"，只有未锁定 / 已锁定，必填在锁定时查；归类全部操作（含解锁）只要 catalog + 能进项目，不另设负责人。为此同意改表（迁移 0004）和接口。取代 2026-10-14 的 Q3（按页挂接、原生拖放排序）、Q4（待归类池）、Q5 里的"已完成"和"解锁要 review_assign"。
 - **2026-10-19（看板简化，Mockup `doclite-project/doclite-dashboard-redesign.html` v2）**：去掉矩阵、多色进度条和"待办"，只要简单的统计——一行五个数（已上传 → 审核通过 → 已归档 → 已锁定 → 可导出）+ 按文件夹的表（页数、审核通过、已归档、已锁定）；审核按页，归档、锁定、导出按件（页数做补充）；同意为此给 catalog-summary 加字段（不改表）。见 5.10。
 - **2026-10-25**：扫描参数建议、存储卡片用量（用户同意加字段）：项目设置加 `scan_hint`（JSON 里的键，不改表），`GET /api/projects` 每项带 `scan_hint`，扫描页热文件夹卡片显示；存储列表每项带 `snapshot_count`、`snapshot_bytes`，卡片显示用量。见 3.4、5.3、5.4、第 6 节 /scan 页。
+- **2026-10-25**：文件夹内调序、文件名搜索和排序（用户同意新增接口 `PUT folders/{id}/order`、`GET folders/{id}/search`，不改表）。见 5.5。
 
 ## 10. 总控代定的规则
 

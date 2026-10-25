@@ -446,3 +446,62 @@ func updateFolderFile(ctx context.Context, q db.Querier, id, folderID uuid.UUID,
 		id, folderID, name, sortNo)
 	return err
 }
+
+// orderEntry 是文件夹里的一个文件（调序用）。
+type orderEntry struct {
+	ID       uuid.UUID
+	FileID   uuid.UUID
+	FileName string
+}
+
+// folderOrder 是文件夹里未删除的文件，按列表的顺序（sort_no、名称）。
+func folderOrder(ctx context.Context, q db.Querier, folderID uuid.UUID) ([]orderEntry, error) {
+	rows, err := q.Query(ctx, `SELECT id, file_id, file_name FROM folder_files WHERE folder_id = $1 AND deleted_at IS NULL
+ORDER BY sort_no, file_name, id`, folderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []orderEntry
+	for rows.Next() {
+		var e orderEntry
+		if err := rows.Scan(&e.ID, &e.FileID, &e.FileName); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// renumberFiles 把这些 folder_files 的 sort_no 依次改成 1..n（只改 folder_files，硬性规则 3）。
+func renumberFiles(ctx context.Context, q db.Querier, ids []uuid.UUID) error {
+	_, err := q.Exec(ctx, `UPDATE folder_files ff SET sort_no = u.i, updated_at = now()
+FROM unnest($1::uuid[]) WITH ORDINALITY AS u(id, i) WHERE ff.id = u.id`, ids)
+	return err
+}
+
+// searchFiles 是子树 prefix 里名字匹配 pattern（ILIKE，已转义）的未删除文件，按文件夹 path_code、sort_no、名字排，
+// 最多 limit 个；文件夹路径一起查出来。
+func searchFiles(ctx context.Context, q db.Querier, projectID uuid.UUID, prefix, pattern string, limit int) ([]SearchHit, error) {
+	rows, err := q.Query(ctx, `WITH hit AS (
+  SELECT ff.id, ff.file_id, ff.file_name, ff.folder_id, ff.sort_no, f.path_code
+  FROM folder_files ff JOIN folders f ON f.id = ff.folder_id
+  WHERE f.project_id = $1 AND f.path_code >= $2 COLLATE "C" AND f.path_code < $3 COLLATE "C" AND f.deleted_at IS NULL
+    AND ff.deleted_at IS NULL AND ff.file_name ILIKE $4 ESCAPE '\'
+  ORDER BY f.path_code COLLATE "C", ff.sort_no, ff.file_name, ff.id LIMIT $5)
+SELECT h.id, h.file_id, h.file_name, h.folder_id, `+file.FolderPathSQL("h.folder_id")+`, h.sort_no
+FROM hit h ORDER BY h.path_code COLLATE "C", h.sort_no, h.file_name, h.id`, projectID, prefix, pathcode.Upper(prefix), pattern, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SearchHit{}
+	for rows.Next() {
+		var h SearchHit
+		if err := rows.Scan(&h.FolderFileID, &h.FileID, &h.FileName, &h.FolderID, &h.FolderPath, &h.SortNo); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}

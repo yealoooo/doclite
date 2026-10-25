@@ -29,7 +29,7 @@ export const AUDIT_ACTIONS: Record<string, string[]> = {
   role: ['create', 'update', 'delete', 'set_menus'],
   project: ['create', 'update', 'delete', 'set_access'],
   storage_profile: ['create', 'update', 'delete', 'set_default', 'unset_default', 'migrate_start', 'migrate_cancel', 'migrate_end'],
-  folder: ['create', 'update', 'move', 'delete'],
+  folder: ['create', 'update', 'move', 'delete', 'reorder'],
   archive_category: ['create', 'update', 'move', 'delete', 'renumber'],
   archive_item: ['archive', 'update', 'move', 'unseal', 'reseal', 'lock', 'unlock', 'delete', 'renumber', 'reorder'],
   export_task: ['create', 'cancel', 'download'],
@@ -424,6 +424,8 @@ export function describe(log: AuditLog): string {
       const folders = Math.max(0, Number(b.folder_count ?? 1) - 1)
       return files || folders ? `连同 ${folders} 个子文件夹、${files} 个文件` : ''
     }
+    case 'folder/reorder':
+      return `挪动 ${count(d.moved) ?? 0} 个文件，共 ${Number(d.file_count ?? 0)} 个`
     case 'archive_category/create':
       return `${formatValue('category_type', a.category_type)} ${str(a.category_code) ?? ''}`.trim()
     case 'archive_category/move':

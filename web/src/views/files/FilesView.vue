@@ -5,7 +5,12 @@
 //   前进后退能在文件夹之间切换。打开别的项目里的文件夹链接时，能进那个项目就自动切过去。
 // - 左侧目录树（FolderTree，按需加载）；顶部面包屑（`GET /api/folders/{id}`）；主区图标和列表两种视图
 //   （FileGrid，按行虚拟化）；右侧详情（FileDetailPanel）；快照历史对话框。
-// - 固定按 sort_no、名称排序（children 接口的顺序）；不做文件名搜索和排序下拉。
+// - 排列（M11-4）：文件夹摘要那一行的下拉框——扫描顺序（默认，children 接口的顺序 sort_no、名称）、文件名、入库时间，
+//   只在本页排，记在 localStorage。
+// - 文件名搜索（M11-4）：顶栏的搜索框（去抖 300 ms）搜当前文件夹和它的子文件夹（FileSearchResults 替换主区），点一个
+//   结果跳到它的文件夹并选中、滚到它；Esc 或清空回到列表。
+// - 调序（M11-4）：选中文件的"移到第…页"（右键菜单、选择栏；MoveToPositionDialog）。只在按扫描顺序排、没在搜索、
+//   文件夹没封存时可用，否则置灰并写原因。
 // - 实时：订阅当前项目的 SSE（useProjectStream）。`folders.changed`、`files.changed` 去抖后只刷新受影响的
 //   文件夹（当前文件夹、它的子文件夹、面包屑上的、树上已加载的）；`resync` 或断线重连后整体刷新。
 //   当前文件夹被删掉时回到上一级。
@@ -34,21 +39,25 @@ import {
   FolderUpIcon,
   HistoryIcon,
   ImageIcon,
+  ListOrderedIcon,
   LoaderCircleIcon,
   NotebookPenIcon,
   PencilIcon,
   PencilLineIcon,
   ScanLineIcon as RescanIcon,
+  SearchIcon,
   Trash2Icon,
   UploadIcon,
+  XIcon,
 } from '@lucide/vue'
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { watchDebounced } from '@vueuse/core'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 
 import { getFolder } from '@/api/folders'
 import { isApiError } from '@/api/http'
-import type { ArchiveItem, FileEntry, ProjectEvent } from '@/api/types'
+import type { ArchiveItem, FileEntry, FolderSearchHit, ProjectEvent } from '@/api/types'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import ErrorState from '@/components/app/ErrorState.vue'
 import GuardedButton from '@/components/app/GuardedButton.vue'
@@ -56,7 +65,7 @@ import PageHeader from '@/components/app/PageHeader.vue'
 import StreamStatus from '@/components/app/StreamStatus.vue'
 import SealBanner from '@/components/catalog/SealBanner.vue'
 import UnsealDialog from '@/components/catalog/UnsealDialog.vue'
-import { type Entry, toEntries, useViewMode } from '@/components/files/entries'
+import { type Entry, fileKey, sortFiles, toEntries, useSortMode, useViewMode } from '@/components/files/entries'
 import FileGrid, { type GridCommand } from '@/components/files/FileGrid.vue'
 import FolderPicker, { type PickedFolder } from '@/components/files/FolderPicker.vue'
 import FolderTree from '@/components/files/FolderTree.vue'
@@ -64,6 +73,8 @@ import RescanDialog from '@/components/files/RescanDialog.vue'
 import SnapshotHistoryDialog from '@/components/files/SnapshotHistoryDialog.vue'
 import ViewModeToggle from '@/components/files/ViewModeToggle.vue'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { NativeSelect } from '@/components/ui/native-select'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -84,7 +95,9 @@ import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 
 import FileDetailPanel from './FileDetailPanel.vue'
+import FileSearchResults from './FileSearchResults.vue'
 import FolderFormDialog from './FolderFormDialog.vue'
+import MoveToPositionDialog from './MoveToPositionDialog.vue'
 import RenameFileDialog from './RenameFileDialog.vue'
 import { useFileActions } from './useFileActions'
 
@@ -100,6 +113,8 @@ const tree = useFolderTree()
 
 /** 视图（记在 localStorage，只是个人习惯，读写失败就用默认）。 */
 const view = useViewMode('doclite.files.view')
+/** 文件的排列（M11-4，同样记在 localStorage）。 */
+const sortMode = useSortMode('doclite.files.sort')
 
 // ---------- 当前文件夹和列表 ----------
 
@@ -161,7 +176,9 @@ const entries = computed<Entry[]>(() =>
         children.value.folders,
         // batch 说不存在、无权访问、已删除的文件，从列表里移除（design §4.4）。
         // M2-7："只看已驳回"时只留已驳回的文件（文件夹照常显示，可以往下走）。
-        children.value.files.filter((f) => !images.isMissing(f.file_id) && (!rejectedOnly.value || f.review_status === 'rejected')),
+        sortFiles(children.value.files, sortMode.value).filter(
+          (f) => !images.isMissing(f.file_id) && (!rejectedOnly.value || f.review_status === 'rejected'),
+        ),
       )
     : [],
 )
@@ -491,6 +508,70 @@ function sealedCommandBlocked(cmd: GridCommand): boolean {
   return false
 }
 
+// ---------- 文件名搜索（M11-4） ----------
+
+const grid = ref<InstanceType<typeof FileGrid> | null>(null)
+/** 搜索框里的字；去抖 300 ms 后（去掉首尾空白）成为 searchQuery，清空时立即回到列表。 */
+const searchInput = ref('')
+const searchQuery = ref('')
+watchDebounced(searchInput, (v) => (searchQuery.value = v.trim().slice(0, 100)), { debounce: 300 })
+watch(searchInput, (v) => {
+  if (!v.trim()) searchQuery.value = ''
+})
+const searching = computed(() => !!searchQuery.value && !!folder.value)
+watch(searching, (v) => v && selection.clear())
+function clearSearch() {
+  searchInput.value = ''
+  searchQuery.value = ''
+}
+
+/** 点了搜索结果：跳到它的文件夹，列表出来后选中、滚到这个文件。 */
+let pendingFocus: { folderId: string; key: string } | null = null
+function onPickHit(hit: FolderSearchHit) {
+  clearSearch()
+  rejectedOnly.value = false
+  pendingFocus = { folderId: hit.folder_id, key: fileKey(hit.file_id) }
+  if (folder.value?.id === hit.folder_id) applyPendingFocus()
+  else void navigate(hit.folder_id)
+}
+function applyPendingFocus() {
+  const p = pendingFocus
+  if (!p || folder.value?.id !== p.folderId || !children.value) return
+  pendingFocus = null
+  if (!entryByKey.value.has(p.key)) return
+  selection.set([p.key])
+  void nextTick(() => grid.value?.scrollToKey(p.key))
+}
+watch(entries, applyPendingFocus)
+
+// ---------- 调序（M11-4） ----------
+
+/** "移到第…页"不能用的原因（按钮置灰并显示）。 */
+const reorderReason = computed(() => {
+  if (sealed.value) return SEALED_REASON
+  if (searching.value) return '搜索时不能调顺序'
+  if (sortMode.value !== 'scan') return '按扫描顺序排列时才能调顺序（归档按扫描顺序排页）'
+  return null
+})
+const positionOpen = ref(false)
+const positionFiles = ref<FileEntry[]>([])
+function openPosition() {
+  if (reorderReason.value || !actions.files.value.length) return
+  positionFiles.value = actions.files.value.slice()
+  positionOpen.value = true
+}
+function onPositionSaved(n: number) {
+  const k = positionFiles.value.length
+  toast.success(k === 1 ? `已把「${positionFiles.value[0]!.file_name}」移到第 ${n} 页` : `已把 ${k} 个文件移到第 ${n}–${n + k - 1} 页`)
+  const cur = folder.value
+  if (cur) afterChange([cur.id])
+}
+function onPositionConflict(message: string) {
+  toast.error(message)
+  const cur = folder.value
+  if (cur) afterChange([cur.id])
+}
+
 /** 重扫结束（成功或状态已变）：刷新列表和详情（SSE 的 files.changed 随后也会到）。 */
 function onRescanFinished() {
   const cur = folder.value
@@ -536,6 +617,28 @@ function onRescanFinished() {
       </template>
       <template #actions>
         <StreamStatus v-if="project.current" :state="stream.state.value" />
+        <!-- M11-4：在当前文件夹和它的子文件夹里按文件名搜。 -->
+        <div v-if="project.current" class="relative w-56">
+          <SearchIcon class="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            v-model="searchInput"
+            class="h-8 pr-7 pl-7"
+            placeholder="搜索文件名…"
+            maxlength="100"
+            aria-label="在当前文件夹和子文件夹里搜索文件名"
+            data-testid="file-search"
+            @keydown.esc.prevent="clearSearch()"
+          />
+          <button
+            v-if="searchInput"
+            type="button"
+            class="absolute top-1/2 right-1.5 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+            aria-label="清空搜索"
+            @click="clearSearch()"
+          >
+            <XIcon class="size-3.5" />
+          </button>
+        </div>
         <Button
           v-if="project.current"
           variant="outline"
@@ -610,7 +713,19 @@ function onRescanFinished() {
               <FolderUpIcon />上传文件夹
             </GuardedButton>
           </div>
-          <span class="shrink-0 border-l pl-2">按扫描顺序</span>
+          <!-- M11-4：排列（只在本页排；归档按扫描顺序）。 -->
+          <NativeSelect
+            v-model="sortMode"
+            size="xs"
+            class="shrink-0"
+            aria-label="文件的排列方式"
+            title="只影响这里的显示；归档按扫描顺序排页"
+            data-testid="file-sort"
+          >
+            <option value="scan">按扫描顺序</option>
+            <option value="name">按文件名</option>
+            <option value="created">按入库时间</option>
+          </NativeSelect>
         </div>
 
         <!-- 封存横条（M9） -->
@@ -623,7 +738,15 @@ function onRescanFinished() {
           @open-catalog="openCatalog"
         />
 
-        <ContextMenu :modal="false">
+        <!-- M11-4：搜索结果替换文件列表。 -->
+        <FileSearchResults
+          v-if="searching && folder"
+          :folder-id="folder.id"
+          :folder-name="folder.folder_name"
+          :query="searchQuery"
+          @pick="onPickHit"
+        />
+        <ContextMenu v-else :modal="false">
           <ContextMenuTrigger as-child>
             <div class="flex min-h-0 flex-1 flex-col" data-testid="file-area" @contextmenu.capture="onAreaContextMenu">
               <ErrorState
@@ -654,6 +777,7 @@ function onRescanFinished() {
               </div>
               <FileGrid
                 v-else
+                ref="grid"
                 :entries="entries"
                 :view="view"
                 :selection="selection"
@@ -687,6 +811,10 @@ function onRescanFinished() {
               <ContextMenuItem :disabled="sealed" data-testid="menu-move" @select="actions.moveSelected()">
                 <FolderInputIcon />移动到…
               </ContextMenuItem>
+              <ContextMenuItem :disabled="!!reorderReason" data-testid="menu-position" @select="openPosition()">
+                <ListOrderedIcon />移到第…页
+                <span v-if="reorderReason && !sealed" class="ml-auto text-2xs text-muted-foreground">按扫描顺序时可用</span>
+              </ContextMenuItem>
               <ContextMenuItem :disabled="sealed" data-testid="menu-copy" @select="actions.copySelected()">
                 <CopyIcon />复制<ContextMenuShortcut>{{ modKey }}+C</ContextMenuShortcut>
               </ContextMenuItem>
@@ -710,6 +838,10 @@ function onRescanFinished() {
               <ContextMenuLabel class="text-xs text-muted-foreground">已选 {{ actions.files.value.length }} 个文件</ContextMenuLabel>
               <ContextMenuItem :disabled="sealed" data-testid="menu-move" @select="actions.moveSelected()">
                 <FolderInputIcon />移动到…
+              </ContextMenuItem>
+              <ContextMenuItem :disabled="!!reorderReason" data-testid="menu-position" @select="openPosition()">
+                <ListOrderedIcon />移到第…页
+                <span v-if="reorderReason && !sealed" class="ml-auto text-2xs text-muted-foreground">按扫描顺序时可用</span>
               </ContextMenuItem>
               <ContextMenuItem :disabled="sealed" data-testid="menu-copy" @select="actions.copySelected()">
                 <CopyIcon />复制<ContextMenuShortcut>{{ modKey }}+C</ContextMenuShortcut>
@@ -779,6 +911,9 @@ function onRescanFinished() {
           <template v-if="actions.kind.value === 'file' || actions.kind.value === 'files'">
             <GuardedButton variant="ghost" size="xs" :reason="sealReason" data-testid="bar-move" @click="actions.moveSelected()">
               <FolderInputIcon />移动到…
+            </GuardedButton>
+            <GuardedButton variant="ghost" size="xs" :reason="reorderReason" data-testid="bar-position" @click="openPosition()">
+              <ListOrderedIcon />移到第…页
             </GuardedButton>
             <GuardedButton variant="ghost" size="xs" :reason="sealReason" data-testid="bar-copy" @click="actions.copySelected()">
               <CopyIcon />复制
@@ -894,6 +1029,16 @@ function onRescanFinished() {
       destructive
       :loading="actions.remove.loading"
       @confirm="actions.confirmDelete()"
+    />
+
+    <!-- 调序（M11-4） -->
+    <MoveToPositionDialog
+      v-model:open="positionOpen"
+      :folder-id="folder?.id ?? null"
+      :files="children?.files ?? []"
+      :selected="positionFiles"
+      @saved="onPositionSaved"
+      @conflict="onPositionConflict"
     />
 
     <!-- 查看原图（M2-4） -->
