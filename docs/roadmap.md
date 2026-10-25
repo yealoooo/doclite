@@ -470,3 +470,19 @@
   - license 的 `imported_by` 实际是显示名；
   - `not_ready_count` 和 `ready_item_count`。
 - **要做（M11-4）：** 文件夹内调页序、文件名搜索和排序、扫描参数建议、存储卡片的用量。
+
+### [x] M11-4 文件目录调页序、文件名搜索和排序（用户 2026-10-25，commit 8fe7b9f、ebf07c0）
+- **接口：**
+  - `PUT /api/folders/{id}/order {folder_file_ids}`：要写全文件夹里的文件；成功返回 204。错误：已封存 409 `folder_archived`；传的文件和现有的对不上 409 `conflict`；顺序没变就不写库。记一条审计 folder/reorder，挪动的页用最长递增子序列算，和重新归档的"调序"一致。
+  - `GET /api/folders/{id}/search?q=&limit=`：搜这个文件夹和全部子文件夹，不分大小写，`% _` 按字面，limit 默认 100、最多 200，带 truncated。
+- **界面：** /files 加了排列下拉（扫描顺序、文件名、入库时间，按人记住）；加了搜索框，结果列出位置，点了跳过去；加了"移到第…页"，不是按扫描顺序排、正在搜索、文件夹已封存时置灰并写原因。列表和详情里的页码按扫描顺序数（sort_no 会有空号）。
+- **没做：** 拖放调序。FileGrid 是虚拟滚动的，原生拖放放不进去。
+- **验收清单：** FILE-22 到 FILE-25。
+
+### [x] M11-5 扫描参数建议、存储卡片用量（用户 2026-10-25，commit f7a24ab）
+- **扫描参数建议：** 项目 settings 加 `scan_hint {color_mode, dpi, format}`（JSON 里的键，不改表），`GET /api/projects` 每项都带；在项目编辑里设置，/scan 的热文件夹卡片上显示；只是提示，不拦截上传。
+- **存储用量：** 存储接口加 `snapshot_count`、`snapshot_bytes`，按快照统计，不算封面；卡片显示"已用 …（按快照统计）· n 个快照"。
+- **验收清单：** PROJ-11、STOR-11、SCAN-11。
+- **须知：** 用量统计要扫整张 file_snapshots 表（没有合适的索引）；迁移进行时存储页每 2 秒重取一次。
+
+合并后完整测试通过（API 测试 469 秒）。web 已重新打包，client 已重新编译。
