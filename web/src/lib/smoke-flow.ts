@@ -355,8 +355,7 @@ export async function checkFlowExport(st: FlowState) {
   const exportMs = Math.round(performance.now() - started)
   const dl = await getExportDownload(task.id, HANDLE_ALL)
   // 和导出页的"下载"同一段代码：壳里交给 open_external（自检里壳只记下地址）。
-  const via = await openDownload(dl.url, () => {})
-  if (via !== 'shell') throw new Error(`下载应该交给壳（open_external），实际 ${via}`)
+  await openDownload(dl.url)
   const check = await invoke<ExternalCheck>('smoke_external_check', { url: dl.url, fileName: dl.file_name, size: dl.size })
   const names = check.entries.map((e) => e.name)
   const want = ['目录.xlsx', '清单.csv']
@@ -371,7 +370,6 @@ export async function checkFlowExport(st: FlowState) {
     pages: task.page_count,
     export_ms: exportMs,
     file_name: dl.file_name,
-    via,
     download: { host: check.url_host, status: check.status, size: check.size, ms: check.ms, content_type: check.content_type },
     entries: names,
   }

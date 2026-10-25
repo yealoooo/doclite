@@ -258,7 +258,7 @@ const problems = computed(() => props.draft.fields.map((f) => fieldProblems(f, p
         <template v-if="parsed.ok">
           <div class="flex items-baseline gap-2">
             <span class="text-muted-foreground">预览</span>
-            <b class="font-mono text-[15px] font-semibold tracking-tight text-foreground" data-testid="template-preview-value">{{ preview }}</b>
+            <b class="font-mono text-base font-semibold tracking-tight text-foreground" data-testid="template-preview-value">{{ preview }}</b>
           </div>
           <div class="text-muted-foreground">
             示例：<template v-for="(t, i) in parsed.template.types" :key="t"

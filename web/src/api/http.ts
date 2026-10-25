@@ -51,6 +51,11 @@ export function errorMessage(err: unknown): string {
   return String(err)
 }
 
+/** 操作失败给人看的一句话：`byCode` 里有这个错误码的用它（补上"该怎么办"），没有的用 server 的 message。 */
+export function errorText(err: unknown, byCode: Partial<Record<string, string>>): string {
+  return err instanceof ApiError ? (byCode[err.code] ?? err.message) : errorMessage(err)
+}
+
 export type QueryValue = string | number | boolean | null | undefined
 
 export interface RequestOptions {

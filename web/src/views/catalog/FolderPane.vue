@@ -19,15 +19,16 @@ import { toast } from 'vue-sonner'
 import { probeFolder } from '@/api/folders'
 import { isApiError } from '@/api/http'
 import type { FileEntry, FolderArchive, SubfolderEntry } from '@/api/types'
+import ErrorState from '@/components/app/ErrorState.vue'
 import FolderArchiveBadge from '@/components/catalog/FolderArchiveBadge.vue'
 import { StatusBadge } from '@/components/ui/status-badge'
 import SealBanner from '@/components/catalog/SealBanner.vue'
 import FolderGlyph from '@/components/files/FolderGlyph.vue'
 import FolderTree from '@/components/files/FolderTree.vue'
 import { useFolderBrowser } from '@/composables/useFolderBrowser'
-import { type TreeFolder, useFolderTree } from '@/composables/useFolderTree'
+import { useFolderTree } from '@/composables/useFolderTree'
 import { useSelection } from '@/composables/useSelection'
-import { ARCHIVE_STATE } from '@/lib/catalog'
+import { ARCHIVE_STATE, treeFolderModifying } from '@/lib/catalog'
 import { useImageInfoStore } from '@/stores/image-info'
 import { type Entry, fileKey, folderKey } from '@/components/files/entries'
 import FileGrid from '@/components/files/FileGrid.vue'
@@ -144,13 +145,6 @@ const currentSummary = computed(() => {
   }
 })
 
-/** 树上带青点：自己修改中，或者已加载的子文件夹里有修改中的。 */
-function treeModifying(f: TreeFolder): boolean {
-  if (f.archive?.source_status === 'modifying') return true
-  const kids = tree.childrenOf(f)
-  return !!kids?.some((k) => k.archive?.source_status === 'modifying')
-}
-
 // ---------- 选择和拖动 ----------
 
 function onRowClick(f: SubfolderEntry, ev: MouseEvent) {
@@ -201,7 +195,7 @@ function onFilesChanged(folderIds: Set<string> | null) {
 }
 
 function refresh() {
-  void tree.refreshAll(folder.value?.id)
+  void tree.refreshShown(folder.value?.id)
   void browser.reload()
   void browser.reloadCrumb()
 }
@@ -234,7 +228,7 @@ const folderKeyOf = folderKey
       <aside class="w-44 shrink-0 overflow-y-auto border-r bg-sidebar/60 px-1.5 py-2 xl:w-52">
         <FolderTree :tree="tree" :selected-id="folder?.id ?? currentId" @select="go">
           <template #suffix="{ folder: f }">
-            <span v-if="treeModifying(f)" class="flex shrink-0 text-modifying" title="里面有修改中的文件夹（改完要重新归档）" data-testid="tree-modifying-dot"><PencilLineIcon class="size-3" aria-hidden="true" /><span class="sr-only">修改中</span></span>
+            <span v-if="treeFolderModifying(f, tree.childrenOf(f))" class="flex shrink-0 text-modifying" title="里面有修改中的文件夹（改完要重新归档）" data-testid="tree-modifying-dot"><PencilLineIcon class="size-3" aria-hidden="true" /><span class="sr-only">修改中</span></span>
           </template>
         </FolderTree>
       </aside>
@@ -275,10 +269,7 @@ const folderKeyOf = folderKey
           ><ExternalLinkIcon class="size-3" />文件目录</button>
         </div>
 
-        <div v-if="state === 'error' && !children" class="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-xs">
-          <p class="text-destructive">{{ loadError }}</p>
-          <button type="button" class="underline" @click="browser.open(currentId)">重试</button>
-        </div>
+        <ErrorState v-if="state === 'error' && !children" class="flex-1" :message="loadError" @retry="browser.open(currentId)" />
         <div v-else-if="!children" class="flex flex-1 items-center justify-center gap-2 text-xs text-muted-foreground">
           <LoaderCircleIcon class="size-3.5 animate-spin" />正在加载…
         </div>

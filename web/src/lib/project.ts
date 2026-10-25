@@ -1,12 +1,18 @@
 // 项目页用到的文字和表单校验，和 server 的 doclite_domain::projects 一致（只做预检，后端仍会校验）。
 
 import type { ProjectStatus } from '@/api/types'
+import type { StatusStyle } from '@/lib/status'
 
-import { charCount } from './validate'
+import { charCount, CONTROL } from './validate'
 
 export const PROJECT_STATUS_LABEL: Record<ProjectStatus, string> = {
   active: '进行中',
   archived: '已归档',
+}
+
+export const PROJECT_STATUS: Record<ProjectStatus, StatusStyle> = {
+  active: { label: PROJECT_STATUS_LABEL.active, badge: 'bg-ok-soft text-ok' },
+  archived: { label: PROJECT_STATUS_LABEL.archived, badge: 'bg-muted text-muted-foreground' },
 }
 
 export const MAX_PROJECT_CODE_CHARS = 32
@@ -20,9 +26,6 @@ export function checkProjectCode(value: string): string {
   }
   return ''
 }
-
-// 控制字符（Rust 的 char::is_control，即 Unicode Cc 类）。
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
 
 /** 项目名称：它也是根文件夹的名称，按文件夹名的规则（design §1.7）。 */
 export function checkProjectName(value: string): string {

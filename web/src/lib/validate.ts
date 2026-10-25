@@ -15,8 +15,10 @@ export function charCount(s: string): number {
   return [...s].length
 }
 
-// 控制字符（Rust 的 char::is_control，即 Unicode Cc 类）。
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
+// 控制字符（Unicode Cc 类：C0、DEL、C1），和 server 一致。
+export const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
+/** 同上，但换行、回车、制表符可以（多行的备注、说明）。 */
+export const CONTROL_EXCEPT_NEWLINE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/
 
 /** 登录名：去掉首尾空白后不能为空，不能含空白或控制字符，最长 64 个字符。返回错误说明，合法时返回空字符串。 */
 export function checkUsername(value: string): string {
@@ -106,6 +108,6 @@ export function checkEntryName(name: string, kind: 'file' | 'folder'): string {
 export function checkRemark(value: string): string {
   const v = value.trim()
   if (charCount(v) > MAX_REMARK_CHARS) return `备注最长 ${MAX_REMARK_CHARS} 个字符`
-  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(v)) return '备注不能包含控制字符'
+  if (CONTROL_EXCEPT_NEWLINE.test(v)) return '备注不能包含控制字符'
   return ''
 }

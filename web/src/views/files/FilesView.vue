@@ -27,31 +27,42 @@ import {
   CopyIcon,
   DownloadIcon,
   EyeIcon,
+  FilterIcon,
   FolderInputIcon,
   FolderOpenIcon,
   FolderPlusIcon,
   FolderUpIcon,
   HistoryIcon,
-  LayoutGridIcon,
-  ListIcon,
+  ImageIcon,
   LoaderCircleIcon,
   NotebookPenIcon,
   PencilIcon,
   PencilLineIcon,
+  ScanLineIcon as RescanIcon,
   Trash2Icon,
   UploadIcon,
 } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 
 import { getFolder } from '@/api/folders'
 import { isApiError } from '@/api/http'
-import type { FileEntry, ProjectEvent } from '@/api/types'
+import type { ArchiveItem, FileEntry, ProjectEvent } from '@/api/types'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
+import ErrorState from '@/components/app/ErrorState.vue'
+import GuardedButton from '@/components/app/GuardedButton.vue'
+import PageHeader from '@/components/app/PageHeader.vue'
+import StreamStatus from '@/components/app/StreamStatus.vue'
+import SealBanner from '@/components/catalog/SealBanner.vue'
+import UnsealDialog from '@/components/catalog/UnsealDialog.vue'
+import { type Entry, toEntries, useViewMode } from '@/components/files/entries'
+import FileGrid, { type GridCommand } from '@/components/files/FileGrid.vue'
 import FolderPicker, { type PickedFolder } from '@/components/files/FolderPicker.vue'
 import FolderTree from '@/components/files/FolderTree.vue'
+import RescanDialog from '@/components/files/RescanDialog.vue'
 import SnapshotHistoryDialog from '@/components/files/SnapshotHistoryDialog.vue'
+import ViewModeToggle from '@/components/files/ViewModeToggle.vue'
 import { Button } from '@/components/ui/button'
 import {
   ContextMenu,
@@ -62,35 +73,23 @@ import {
   ContextMenuShortcut,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
-import StreamStatus from '@/components/app/StreamStatus.vue'
 import { useFolderBrowser } from '@/composables/useFolderBrowser'
 import { useFolderTree } from '@/composables/useFolderTree'
 import { useEventBatch, useProjectStream } from '@/composables/useProjectStream'
 import { useSelection } from '@/composables/useSelection'
+import { treeFolderModifying } from '@/lib/catalog'
+import type { RescanTarget } from '@/lib/rescan'
 import { useImageInfoStore } from '@/stores/image-info'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
-// ---- 封存（M9） ----
-import GuardedButton from '@/components/app/GuardedButton.vue'
-import SealBanner from '@/components/catalog/SealBanner.vue'
-import UnsealDialog from '@/components/catalog/UnsealDialog.vue'
-import type { ArchiveItem } from '@/api/types'
 
-import { type Entry, toEntries, useViewMode } from '@/components/files/entries'
 import FileDetailPanel from './FileDetailPanel.vue'
-import FileGrid, { type GridCommand } from '@/components/files/FileGrid.vue'
 import FolderFormDialog from './FolderFormDialog.vue'
 import RenameFileDialog from './RenameFileDialog.vue'
 import { useFileActions } from './useFileActions'
-// ---- 查看原图（M2-4）用到的，单独引入（不改上面已有的引入） ----
-import { ImageIcon } from '@lucide/vue'
-import { defineAsyncComponent } from 'vue'
+
 // 查看原图的对话框（带 OpenSeadragon）第一次打开时才加载。
 const OriginalViewerDialog = defineAsyncComponent(() => import('./OriginalViewerDialog.vue'))
-// M2-7：已驳回的筛选和上传重扫件。
-import { FilterIcon, ScanLineIcon as RescanIcon } from '@lucide/vue'
-import RescanDialog from '@/components/files/RescanDialog.vue'
-import type { RescanTarget } from '@/lib/rescan'
 
 const project = useProjectStore()
 const session = useSessionStore()
@@ -288,10 +287,10 @@ async function refreshAll() {
   images.invalidate()
   detailRefresh.value++
   if (reopenIfFailed()) {
-    await tree.refreshAll()
+    await tree.refreshShown()
     return
   }
-  await Promise.all([tree.refreshAll(folder.value?.id), browser.reload(), browser.reloadCrumb()])
+  await Promise.all([tree.refreshShown(folder.value?.id), browser.reload(), browser.reloadCrumb()])
 }
 
 const stream = useProjectStream(() => project.currentId, {
@@ -304,7 +303,7 @@ const stream = useProjectStream(() => project.currentId, {
     } else if (browser.loaded()) {
       // 第一次连上时列表已经加载好了：补刷列表和树（加载和连接建立之间可能漏了事件）。
       void browser.reload()
-      void tree.refreshAll(folder.value?.id)
+      void tree.refreshShown(folder.value?.id)
     } else if (listState.value === 'error') {
       // 首次加载失败（例如 server 刚恢复）：重新打开。
       reopenIfFailed()
@@ -448,7 +447,6 @@ function openRescan(file: FileEntry) {
 // ---------- 封存（M9） ----------
 
 const canCatalog = computed(() => session.menuCodes.has('catalog'))
-const canFilesMenu = computed(() => session.menuCodes.has('files'))
 /** 打开的文件夹已封存：里面不能放、拿、改文件，不能建子文件夹，自己不能改名、移动、删除。 */
 const sealed = computed(() => folder.value?.archive?.source_status === 'sealed')
 const SEALED_REASON = '这个文件夹已归档并封存：要修改先解除封存（可以重扫、看图、改备注）'
@@ -508,69 +506,48 @@ function onRescanFinished() {
     :data-stream="stream.state.value"
     :data-list="listState"
   >
-    <header class="flex h-14 shrink-0 items-center gap-3 border-b px-5">
-      <h1 class="shrink-0 text-base font-semibold tracking-tight text-foreground">文件目录</h1>
-      <nav
-        v-if="crumbs.length"
-        class="flex min-w-0 items-center gap-0.5 border-l pl-3 text-sm"
-        aria-label="当前位置"
-        data-testid="breadcrumb"
-      >
-        <template v-for="(c, i) in crumbs" :key="c.id">
-          <ChevronRightIcon v-if="i > 0" class="size-3.5 shrink-0 text-muted-foreground" />
-          <span
-            v-if="i === crumbs.length - 1"
-            class="truncate font-medium text-foreground"
-            :class="i === 0 ? 'max-w-64' : 'max-w-56'"
-            data-testid="breadcrumb-current"
-          >{{ c.folder_name }}</span>
-          <button
-            v-else
-            type="button"
-            class="max-w-40 truncate rounded px-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-            :title="c.folder_name"
-            @click="navigate(c.id)"
-          >
-            {{ c.folder_name }}
-          </button>
-        </template>
-      </nav>
-      <div class="flex-1" />
-      <StreamStatus v-if="project.current" :state="stream.state.value" />
-      <Button
-        v-if="project.current"
-        variant="outline"
-        size="sm"
-        data-testid="goto-folder"
-        @click="pickerOpen = true"
-      >
-        <FolderInputIcon />转到…
-      </Button>
-      <div class="flex shrink-0 rounded-md bg-muted p-0.5" role="radiogroup" aria-label="视图">
-        <button
-          type="button"
-          role="radio"
-          :aria-checked="view === 'icons'"
-          class="flex items-center gap-1 rounded px-2 py-1 text-xs"
-          :class="view === 'icons' ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground'"
-          data-testid="view-icons"
-          @click="view = 'icons'"
+    <PageHeader>
+      <template #meta>
+        <nav
+          v-if="crumbs.length"
+          class="flex min-w-0 items-center gap-0.5 border-l pl-3 text-sm"
+          aria-label="当前位置"
+          data-testid="breadcrumb"
         >
-          <LayoutGridIcon class="size-3.5" />图标
-        </button>
-        <button
-          type="button"
-          role="radio"
-          :aria-checked="view === 'list'"
-          class="flex items-center gap-1 rounded px-2 py-1 text-xs"
-          :class="view === 'list' ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground'"
-          data-testid="view-list"
-          @click="view = 'list'"
+          <template v-for="(c, i) in crumbs" :key="c.id">
+            <ChevronRightIcon v-if="i > 0" class="size-3.5 shrink-0 text-muted-foreground" />
+            <span
+              v-if="i === crumbs.length - 1"
+              class="truncate font-medium text-foreground"
+              :class="i === 0 ? 'max-w-64' : 'max-w-56'"
+              data-testid="breadcrumb-current"
+            >{{ c.folder_name }}</span>
+            <button
+              v-else
+              type="button"
+              class="max-w-40 truncate rounded px-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              :title="c.folder_name"
+              @click="navigate(c.id)"
+            >
+              {{ c.folder_name }}
+            </button>
+          </template>
+        </nav>
+      </template>
+      <template #actions>
+        <StreamStatus v-if="project.current" :state="stream.state.value" />
+        <Button
+          v-if="project.current"
+          variant="outline"
+          size="sm"
+          data-testid="goto-folder"
+          @click="pickerOpen = true"
         >
-          <ListIcon class="size-3.5" />列表
-        </button>
-      </div>
-    </header>
+          <FolderInputIcon />转到…
+        </Button>
+        <ViewModeToggle v-model="view" />
+      </template>
+    </PageHeader>
 
     <!-- 项目还在加载 / 没有能进的项目 -->
     <div v-if="!project.current" class="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
@@ -588,7 +565,7 @@ function onRescanFinished() {
         <FolderTree :tree="tree" :selected-id="folder?.id ?? folderQuery ?? project.current.root_folder_id" @select="navigate">
           <template #suffix="{ folder: f }">
             <span
-              v-if="f.archive?.source_status === 'modifying' || tree.childrenOf(f)?.some((k) => k.archive?.source_status === 'modifying')"
+              v-if="treeFolderModifying(f, tree.childrenOf(f))"
               class="flex shrink-0 text-modifying"
               title="里面有修改中的文件夹（改完要重新归档）"
               data-testid="tree-modifying-dot"
@@ -642,7 +619,6 @@ function onRescanFinished() {
           :archive="folder.archive"
           where="files"
           :can-catalog="canCatalog"
-          :can-files="canFilesMenu"
           @unseal="askUnseal"
           @open-catalog="openCatalog"
         />
@@ -650,10 +626,12 @@ function onRescanFinished() {
         <ContextMenu :modal="false">
           <ContextMenuTrigger as-child>
             <div class="flex min-h-0 flex-1 flex-col" data-testid="file-area" @contextmenu.capture="onAreaContextMenu">
-              <div v-if="listState === 'error' && !children" class="flex flex-1 flex-col items-center justify-center gap-3 text-sm">
-                <p class="text-destructive">{{ listError ?? '加载失败' }}</p>
-                <Button variant="outline" size="sm" @click="browser.open(folderQuery ?? project.current.root_folder_id)">重试</Button>
-              </div>
+              <ErrorState
+                v-if="listState === 'error' && !children"
+                class="flex-1"
+                :message="listError"
+                @retry="browser.open(folderQuery ?? project.current.root_folder_id)"
+              />
               <div v-else-if="!children" class="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
                 <LoaderCircleIcon class="size-4 animate-spin" />正在加载…
               </div>

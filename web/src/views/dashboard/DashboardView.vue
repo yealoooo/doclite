@@ -24,6 +24,7 @@ import { getCatalogSummary } from '@/api/catalog'
 import { errorMessage, HANDLE_ALL } from '@/api/http'
 import type { CatalogCounts, CatalogSummary, ProjectEvent } from '@/api/types'
 import { Button } from '@/components/ui/button'
+import PageHeader from '@/components/app/PageHeader.vue'
 import StreamStatus from '@/components/app/StreamStatus.vue'
 import { useFolderSummaries } from '@/composables/useFolderSummaries'
 import { useEventBatch, useProjectStream } from '@/composables/useProjectStream'
@@ -265,23 +266,25 @@ onBeforeUnmount(() => {
     :data-state="rootState"
     :data-updates="updates"
   >
-    <header class="flex h-14 shrink-0 items-center gap-3 border-b px-6">
-      <h1 class="shrink-0 text-base font-semibold tracking-tight text-foreground">项目看板</h1>
-      <span v-if="project.current" class="min-w-0 truncate border-l pl-3 text-sm text-muted-foreground">
-        {{ project.current.project_name }}
-      </span>
-      <div class="flex-1" />
-      <span v-if="refreshError && rootState === 'ready'" class="truncate text-xs text-destructive" :title="refreshError">
-        刷新失败：{{ refreshError }}
-      </span>
-      <span v-if="updatedAt" class="shrink-0 text-xs text-muted-foreground tabular-nums" data-testid="dashboard-updated">
-        更新于 {{ formatClock(updatedAt) }}
-      </span>
-      <StreamStatus v-if="project.current" :state="stream.state.value" />
-      <Button v-if="project.current" variant="outline" size="sm" data-testid="dashboard-refresh" @click="refreshNow">
-        <RefreshCwIcon />刷新
-      </Button>
-    </header>
+    <PageHeader>
+      <template #meta>
+        <span v-if="project.current" class="min-w-0 truncate border-l pl-3 text-sm text-muted-foreground">
+          {{ project.current.project_name }}
+        </span>
+      </template>
+      <template #actions>
+        <span v-if="refreshError && rootState === 'ready'" class="truncate text-xs text-destructive" :title="refreshError">
+          刷新失败：{{ refreshError }}
+        </span>
+        <span v-if="updatedAt" class="shrink-0 text-xs text-muted-foreground tabular-nums" data-testid="dashboard-updated">
+          更新于 {{ formatClock(updatedAt) }}
+        </span>
+        <StreamStatus v-if="project.current" :state="stream.state.value" />
+        <Button v-if="project.current" variant="outline" size="sm" data-testid="dashboard-refresh" @click="refreshNow">
+          <RefreshCwIcon />刷新
+        </Button>
+      </template>
+    </PageHeader>
 
     <!-- 项目还在加载 / 没有能进的项目 -->
     <div v-if="!project.current" class="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">

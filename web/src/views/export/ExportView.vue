@@ -25,7 +25,9 @@ import { cancelExportTask, getExportDownload, MAX_SCOPE_IDS, probeExportTask } f
 import { ApiError, HANDLE_ALL, isApiError } from '@/api/http'
 import type { ExportFormat, ExportTask, ProjectEvent } from '@/api/types'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
+import ErrorState from '@/components/app/ErrorState.vue'
 import { Button } from '@/components/ui/button'
+import PageHeader from '@/components/app/PageHeader.vue'
 import StreamStatus from '@/components/app/StreamStatus.vue'
 import { useProjectStream } from '@/composables/useProjectStream'
 import { openDownload } from '@/lib/download'
@@ -227,20 +229,11 @@ async function download(t: ExportTask) {
   downloading.add(t.id)
   try {
     const d = await getExportDownload(t.id, ['invalid_state', 'storage_unavailable'])
-    // 预签名地址带 response-content-disposition（attachment）。壳里交给系统浏览器；浏览器里用隐藏的 iframe，
-    // 不离开页面、不触发 beforeunload（lib/download.ts）。
-    const via = await openDownload(d.url, () => {
-      toast.error('下载没有开始，请检查存储是否可以访问', {
-        description: '打开下载地址时得到的是一个页面而不是文件：存储连不上，或者返回了错误。',
-      })
+    // 预签名地址带 response-content-disposition（attachment），交给系统浏览器下载（lib/download.ts）。
+    await openDownload(d.url)
+    toast.success(`已在系统浏览器中开始下载 ${d.file_name}`, {
+      description: `${formatBytes(d.size)} · 下载进度和保存位置在系统浏览器的下载列表里`,
     })
-    if (via === 'shell') {
-      toast.success(`已在系统浏览器中开始下载 ${d.file_name}`, {
-        description: `${formatBytes(d.size)} · 下载进度和保存位置在系统浏览器的下载列表里`,
-      })
-    } else {
-      toast.success(`开始下载 ${d.file_name}`, { description: `${formatBytes(d.size)} · 浏览器直接从存储下载` })
-    }
   } catch (e) {
     if (isApiError(e, 'invalid_state') || isApiError(e, 'storage_unavailable')) {
       toast.error(e.message)
@@ -383,15 +376,17 @@ const counts = computed(() => {
     :data-rows="tasks.length"
     :data-changes-requests="changes.requests.value"
   >
-    <header class="flex h-14 shrink-0 items-center gap-3 border-b px-5">
-      <h1 class="shrink-0 text-base font-semibold tracking-tight text-foreground">导出交付</h1>
-      <span class="shrink-0 rounded-full bg-muted px-2 text-2xs leading-5 text-muted-foreground">只导出已归档的文件</span>
-      <div class="flex-1" />
-      <StreamStatus v-if="project.current" :state="stream.state.value" />
-      <Button v-if="project.current" size="sm" data-testid="export-new-button" @click="openBlank">
-        <PlusIcon />新建导出
-      </Button>
-    </header>
+    <PageHeader title="导出交付">
+      <template #meta>
+        <span class="shrink-0 rounded-full bg-muted px-2 text-2xs leading-5 text-muted-foreground">只导出已归档的文件</span>
+      </template>
+      <template #actions>
+        <StreamStatus v-if="project.current" :state="stream.state.value" />
+        <Button v-if="project.current" size="sm" data-testid="export-new-button" @click="openBlank">
+          <PlusIcon />新建导出
+        </Button>
+      </template>
+    </PageHeader>
 
     <div v-if="!project.current" class="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
       <span v-if="project.state === 'loading' || project.state === 'idle'" class="flex items-center gap-2">
@@ -423,10 +418,7 @@ const counts = computed(() => {
           <div v-if="list.state.value === 'loading'" class="flex items-center gap-2 p-5 text-xs text-muted-foreground">
             <LoaderCircleIcon class="size-3.5 animate-spin" />正在加载导出任务…
           </div>
-          <div v-else-if="list.state.value === 'error'" class="p-5 text-xs text-destructive">
-            导出任务加载失败：{{ list.error.value }}
-            <button type="button" class="ml-1 underline" @click="list.load()">重试</button>
-          </div>
+          <ErrorState v-else-if="list.state.value === 'error'" class="py-16" :message="`导出任务加载失败：${list.error.value}`" @retry="list.load()" />
           <div
             v-else-if="list.state.value === 'ready' && !tasks.length"
             class="flex flex-col items-center gap-2 px-6 py-16 text-center text-sm text-muted-foreground"

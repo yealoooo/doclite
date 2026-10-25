@@ -1,5 +1,5 @@
 // 托盘菜单上"继续热文件夹"失败时（例如监控目录不在了、服务器换了），壳打开主窗口并发 `tray:error {message}`
-// （shell/src-tauri/src/tray.rs）。在登录后的外框（AppLayout）里订阅，不管当前在哪个页面都弹出原因；
+// （BRIDGE.md 的 `tray:error`）。在登录后的外框（AppLayout）里订阅，不管当前在哪个页面都弹出原因；
 // 不在扫描上传页、又有这个菜单时，提示上带"去扫描上传"。只在壳里订阅，组件卸载时取消。
 
 import { onBeforeUnmount, onMounted } from 'vue'

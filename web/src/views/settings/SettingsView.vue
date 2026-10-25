@@ -209,11 +209,7 @@ async function copyDiagnostics() {
 </script>
 
 <template>
-  <PageHeader title="设置">
-    <template #meta>
-      <span v-if="inShell" class="rounded-full bg-info-soft px-2 py-0.5 text-xs text-info">桌面客户端</span>
-    </template>
-  </PageHeader>
+  <PageHeader title="设置" />
 
   <section
     class="min-h-0 flex-1 overflow-y-auto px-6 py-5"

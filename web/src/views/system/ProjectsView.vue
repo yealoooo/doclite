@@ -25,7 +25,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { formatDateTime } from '@/lib/format'
-import { PROJECT_STATUS_LABEL } from '@/lib/project'
+import { PROJECT_STATUS, PROJECT_STATUS_LABEL } from '@/lib/project'
 import { checkKeyword, MAX_KEYWORD_CHARS } from '@/lib/validate'
 import { useProjectStore } from '@/stores/project'
 
@@ -249,10 +249,7 @@ async function confirmDelete() {
               </div>
             </TableCell>
             <TableCell>
-              <StatusBadge
-                :status="{ label: PROJECT_STATUS_LABEL[p.status], badge: p.status === 'active' ? 'bg-ok-soft text-ok' : 'bg-muted text-muted-foreground' }"
-                size="md"
-              />
+              <StatusBadge :status="PROJECT_STATUS[p.status]" size="md" />
             </TableCell>
             <TableCell class="text-muted-foreground tabular-nums">
               <span v-if="p.member_count === 0 && p.role_count === 0" class="text-warn">未授权（仅管理员）</span>

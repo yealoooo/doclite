@@ -1,10 +1,9 @@
 // 订阅当前项目的实时事件（M1-10）：`GET /api/projects/{pid}/stream`，经 `openStream()`（浏览器是 fetch 流，
-// 壳里走 Rust 的 api_stream）。
+// 壳里走壳的 api_stream）。
 //
 // - 断线（网络错误、server 结束流、5xx）后按指数退避重连：1、2、4、8、16、30 秒（封顶 30 秒，±20% 抖动）；
 //   连接保持过 10 秒才把退避清零，免得 server 一连上就断时每秒重连一次。
 // - 空闲超时：45 秒没有收到任何数据（server 每 15 秒发一条保活注释）就当作连接已半开，主动断开重连。
-//   和壳的 `net/stream.rs`（DEFAULT_IDLE_TIMEOUT 45 秒）一致。
 // - 断开期间的事件不补发：每次重新连上都调 `onOpen(false)`，调用方应整体刷新一次。
 //   第一次连上调 `onOpen(true)`（页面的首次加载可能早于连接建立，调用方可以按需补刷一次）。
 // - 401（会话失效，请求封装会跳登录页）、403、404（项目进不去了）不再重连，调 `onStopped(err)`；没给 onStopped 时
@@ -189,7 +188,7 @@ export interface EventBatchOptions {
   maxWaitMs?: number
   /**
    * 连续不断地有事件时（上一轮刚跑完不到 2 秒又来了，例如上传、批量操作期间）最多等多久（毫秒），让重取少一些。
-   * 默认同 maxWaitMs。
+   * 这时去抖也放宽到 2 秒（上传时大约一秒一条，300 ms 的去抖每条都会跑一轮）。默认同 maxWaitMs。
    */
   burstMaxWaitMs?: number
 }
@@ -217,8 +216,10 @@ export function useEventBatch(flush: () => void | Promise<void>, opts: EventBatc
     const now = Date.now()
     if (!firstAt) firstAt = now
     if (timer) clearTimeout(timer)
-    const max = now - lastRunAt < BURST_WINDOW_MS ? burstMaxWaitMs : maxWaitMs
-    timer = setTimeout(() => void run(), Math.min(debounceMs, Math.max(0, firstAt + max - now)))
+    const burst = burstMaxWaitMs > maxWaitMs && now - lastRunAt < BURST_WINDOW_MS
+    const max = burst ? burstMaxWaitMs : maxWaitMs
+    const wait = burst ? Math.max(debounceMs, BURST_WINDOW_MS) : debounceMs
+    timer = setTimeout(() => void run(), Math.min(wait, Math.max(0, firstAt + max - now)))
   }
 
   async function run() {

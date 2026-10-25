@@ -18,7 +18,7 @@
 //   停用、启用用户和项目授权不发项目事件："分给谁"在 files.changed 和窗口重新拿到焦点时刷新。
 // - 所有图片都经 image-info store（batch）和 FileCover。
 // - 浏览目录树和文件要 files 或 scan 菜单（children 接口），看日志要 files 菜单；内置的项目负责人都有。
-import { LayoutGridIcon, ListIcon, LoaderCircleIcon, RotateCcwIcon } from '@lucide/vue'
+import { LoaderCircleIcon, RotateCcwIcon } from '@lucide/vue'
 import { useEventListener } from '@vueuse/core'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -52,6 +52,7 @@ import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import FolderTree from '@/components/files/FolderTree.vue'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/ui/status-badge'
+import PageHeader from '@/components/app/PageHeader.vue'
 import StreamStatus from '@/components/app/StreamStatus.vue'
 import { useFolderBrowser } from '@/composables/useFolderBrowser'
 import { useFolderTree } from '@/composables/useFolderTree'
@@ -63,6 +64,7 @@ import { useImageInfoStore } from '@/stores/image-info'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { type Entry, toEntries, useViewMode } from '@/components/files/entries'
+import ViewModeToggle from '@/components/files/ViewModeToggle.vue'
 import FileGrid from '@/components/files/FileGrid.vue'
 import { chunk } from '@/lib/utils'
 import { useFolderSummaries } from '@/composables/useFolderSummaries'
@@ -642,10 +644,10 @@ async function refreshAll() {
   if (!folder.value) {
     const p = project.current
     if (p && listState.value !== 'loading') void browser.open(folderQuery.value ?? p.root_folder_id)
-    await Promise.all([tree.refreshAll(), counts.refreshAll()])
+    await Promise.all([tree.refreshShown(), counts.refreshAll()])
     return
   }
-  await Promise.all([tree.refreshAll(folder.value.id), browser.reload(), counts.refreshAll()])
+  await Promise.all([tree.refreshShown(folder.value.id), browser.reload(), counts.refreshAll()])
 }
 
 const stream = useProjectStream(() => project.currentId, {
@@ -685,56 +687,35 @@ useEventListener(window, 'focus', () => {
     :data-stream="stream.state.value"
     :data-list="listState"
   >
-    <header class="flex h-14 shrink-0 items-center gap-3 border-b px-5">
-      <h1 class="shrink-0 text-base font-semibold tracking-tight text-foreground">审核分配</h1>
-      <div v-if="project.current" class="flex min-w-0 items-center gap-1.5 border-l pl-3" data-testid="project-counts">
-        <StatusBadge
-          v-for="s in STATUS_ORDER"
-          :key="s"
-          :status="REVIEW_STATUS[s]"
-          size="md"
-          dot
-          :data-testid="`count-${s}`"
-          :data-count="rootCounts?.[s] ?? ''"
-        >{{ REVIEW_STATUS[s].label }} {{ formatCount(rootCounts?.[s]) }}</StatusBadge>
-      </div>
-      <div class="flex-1" />
-      <StreamStatus v-if="project.current" :state="stream.state.value" />
-      <Button
-        v-if="project.current && canBrowse"
-        variant="outline"
-        size="sm"
-        :disabled="!folder"
-        data-testid="open-reassign"
-        @click="reassignOpen = true"
-      >
-        <RotateCcwIcon />改派…
-      </Button>
-      <div v-if="canBrowse" class="flex shrink-0 rounded-md bg-muted p-0.5" role="radiogroup" aria-label="视图">
-        <button
-          type="button"
-          role="radio"
-          :aria-checked="view === 'icons'"
-          class="flex items-center gap-1 rounded px-2 py-1 text-xs"
-          :class="view === 'icons' ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground'"
-          data-testid="view-icons"
-          @click="view = 'icons'"
+    <PageHeader>
+      <template #meta>
+        <div v-if="project.current" class="flex min-w-0 items-center gap-1.5 border-l pl-3" data-testid="project-counts">
+          <StatusBadge
+            v-for="s in STATUS_ORDER"
+            :key="s"
+            :status="REVIEW_STATUS[s]"
+            size="md"
+            dot
+            :data-testid="`count-${s}`"
+            :data-count="rootCounts?.[s] ?? ''"
+          >{{ REVIEW_STATUS[s].label }} {{ formatCount(rootCounts?.[s]) }}</StatusBadge>
+        </div>
+      </template>
+      <template #actions>
+        <StreamStatus v-if="project.current" :state="stream.state.value" />
+        <Button
+          v-if="project.current && canBrowse"
+          variant="outline"
+          size="sm"
+          :disabled="!folder"
+          data-testid="open-reassign"
+          @click="reassignOpen = true"
         >
-          <LayoutGridIcon class="size-3.5" />图标
-        </button>
-        <button
-          type="button"
-          role="radio"
-          :aria-checked="view === 'list'"
-          class="flex items-center gap-1 rounded px-2 py-1 text-xs"
-          :class="view === 'list' ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground'"
-          data-testid="view-list"
-          @click="view = 'list'"
-        >
-          <ListIcon class="size-3.5" />列表
-        </button>
-      </div>
-    </header>
+          <RotateCcwIcon />改派…
+        </Button>
+        <ViewModeToggle v-if="canBrowse" v-model="view" />
+      </template>
+    </PageHeader>
 
     <!-- 没有浏览文件目录的菜单 -->
     <div v-if="!canBrowse" class="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">

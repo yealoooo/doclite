@@ -8,7 +8,7 @@
 //   `invalid_state`，`details` 和预检的响应一样（界面用它更新预检结果）。
 // - 补交："只补交有变更的 n 件"用 `resubmit_of`（不要把 id 列表放进 `scope_ids`：不受 5000 个的限制，范围由 server 在
 //   同一个快照里算）。
-// - 下载：先调 `/download` 拿预签名地址，再 `location.href = url`（浏览器直接从 S3 下载，不经过 server）。
+// - 下载：先调 `/download` 拿预签名地址，再交给系统浏览器下载（lib/download.ts；直接从 S3 下载，不经过 server）。
 // - 事件：项目实时通道 `export.changed {task_ids}`（建任务、取消、开始执行、进度（每秒最多一次）、完成、失败、排队重试、
 //   取消后收尾完、退出时放回、超时回收），收到后只重新拉这些任务。
 //

@@ -17,6 +17,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 
+import PageHeader from '@/components/app/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import { useUploadQueue } from '@/composables/useUploadQueue'
 import { SHELL_ONLY } from '@/lib/client'
@@ -144,10 +145,7 @@ onMounted(() => {
     :data-mode="inShell ? 'shell' : 'browser'"
     :data-state="q?.state.value ?? 'browser'"
   >
-    <header class="flex h-14 shrink-0 items-center gap-3 border-b px-5">
-      <h1 class="text-base font-semibold tracking-tight text-foreground">扫描上传</h1>
-      <span v-if="inShell" class="rounded-full bg-info-soft px-2 py-0.5 text-xs text-info">桌面客户端</span>
-    </header>
+    <PageHeader />
 
     <div class="flex min-h-0 flex-1">
       <!-- ===== 浏览器：热文件夹只能在客户端里用 ===== -->

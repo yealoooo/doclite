@@ -17,7 +17,7 @@
 // - m2-rescan-shell-done（另存 m2-rescan-list-shell.png）：壳模式（壳模式的地址 + Wails 桥的模拟，scripts/lib/wails-mock.mjs；
 //   封面经 devshell 的取图地址，即客户端的本机缓存代码）：/scan 左边是热文件夹和上传队列，右边是同样的待重扫列表。点一页的"上传重扫件"→"选择重扫件…"，
 //   页面调 `pick_and_rescan {fileId}`（模拟的命令像壳一样带 sha 和封面发 multipart 到真实 server，返回壳的结果），
-//   对话框写"已重扫：现在是 v2，待审核（第 2 轮）""自动分给 演示审核员"，列表里这一页消失；接口核对 v2 快照、封面、
+//   对话框写"已重扫：现在是 v2，待审（第 2 轮）""自动分给 演示审核员"，列表里这一页消失；接口核对 v2 快照、封面、
 //   自动再分配和 rescan 日志。
 // （浏览器里上传重扫件的几张——files-done、wrong-file、retries、local-checks、e2e-browser——M10-2 删掉了：重扫件只在客户端
 // 里传，壳模式见 m2-rescan-shell-done；出错时的提示文字由 describeRescanError 统一给出，客户端的重传规则在 client 的测试里。）
@@ -526,7 +526,7 @@ const shots = [
       assert(seenProgress.some((x) => /^正在上传 100%/.test(x.text)), `传完应该显示 100%：${JSON.stringify(seenProgress)}`)
       console.log(`  ✓ 壳的 rescan:progress：对话框依次显示 ${seenProgress.map((x) => x.text).join(' → ')}`)
       assert(r.result === 'done', `结果：${JSON.stringify(r)}`)
-      assert(r.title === '已重扫：现在是 v2，待审核（第 2 轮）', `标题：${r.title}`)
+      assert(r.title === '已重扫：现在是 v2，待审（第 2 轮）', `标题：${r.title}`)
       assert(r.reassign === `自动分给 ${ctx.revName}`, `自动分配：${r.reassign}`)
       const calls = await page.evaluate(() => window.__mock.state.calls.filter((c) => c.cmd === 'pick_and_rescan'))
       assert(calls.length === 1 && calls[0].args.fileId === target.file_id && Object.keys(calls[0].args).join() === 'fileId', `pick_and_rescan 的参数：${JSON.stringify(calls)}`)

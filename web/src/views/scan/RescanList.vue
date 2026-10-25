@@ -6,13 +6,15 @@
 // - 每一项：封面（当前版本，经 image-info store 的 batch 取）、文件夹 / 文件名、项目里的位置、文件夹备注（原件位置）、
 //   审核人、驳回原因和说明、第几轮和版本号，"上传重扫件"打开 RescanDialog。
 // - 提示"重扫件不要扫进热文件夹"（热文件夹会把它当成新的一页）。
-// - 实时：订阅当前项目的 SSE，files.changed、folders.changed、resync 和重连后去抖（300 ms，最多等 1 秒）重新取一次
-//   （取回已经加载的那么多，最多 2000 个）。重扫成功后对话框通知这里马上刷新。
+// - 封面只取看得见的行（IntersectionObserver，上下各多取 300 px）。
+// - 实时：订阅当前项目的 SSE，files.changed、folders.changed、resync 和重连后去抖（300 ms，最多等 1 秒；上传期间
+//   连续不断时最多等 5 秒）重新取一次（取回已经加载的那么多，最多 2000 个）。重扫成功后对话框通知这里马上刷新。
 import { LoaderCircleIcon, RefreshCwIcon, ScanLineIcon, TriangleAlertIcon } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { listRescans, RESCAN_PAGE_SIZE } from '@/api/rescans'
 import type { ProjectEvent, RescanItem } from '@/api/types'
+import ErrorState from '@/components/app/ErrorState.vue'
 import FileCover from '@/components/files/FileCover.vue'
 import RescanDialog from '@/components/files/RescanDialog.vue'
 import { Button } from '@/components/ui/button'
@@ -92,20 +94,57 @@ watch(
   { immediate: true },
 )
 
-watch(items, (list) => images.setVisible('rescan-list', list.map((i) => i.file_id)))
+// ---------- 封面：只取看得见的行 ----------
+
+const scroller = ref<HTMLElement | null>(null)
+/** 在可见范围（含上下 300 px）里的行。 */
+const shown = new Set<string>()
+let io: IntersectionObserver | null = null
+
+function syncVisible() {
+  images.setVisible('rescan-list', [...shown])
+}
+
+/** 列表换了（重新取、加载更多）：重新观察每一行，观察开始时会回调一次各行当前是否可见。 */
+async function observeRows() {
+  await nextTick()
+  if (!io) return
+  io.disconnect()
+  shown.clear()
+  syncVisible()
+  scroller.value?.querySelectorAll<HTMLElement>('[data-testid="rescan-item"]').forEach((el) => io!.observe(el))
+}
+
+watch(items, () => void observeRows())
 
 onMounted(() => {
   void project.ensureLoaded()
+  io = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        const id = (e.target as HTMLElement).dataset.fileId
+        if (!id) continue
+        if (e.isIntersecting) shown.add(id)
+        else shown.delete(id)
+      }
+      syncVisible()
+    },
+    { root: scroller.value, rootMargin: '300px 0px' },
+  )
+  void observeRows()
 })
 
 // ---------- 实时 ----------
 
 const changed = new Set<string>()
-const batch = useEventBatch(() => {
-  if (changed.size) images.invalidate(changed)
-  changed.clear()
-  void reload()
-})
+const batch = useEventBatch(
+  () => {
+    if (changed.size) images.invalidate(changed)
+    changed.clear()
+    void reload()
+  },
+  { burstMaxWaitMs: 5000 },
+)
 
 const stream = useProjectStream(() => project.currentId, {
   onEvent: (e: ProjectEvent) => {
@@ -120,6 +159,7 @@ const stream = useProjectStream(() => project.currentId, {
 
 onBeforeUnmount(() => {
   seq++
+  io?.disconnect()
   images.clearVisible('rescan-list')
 })
 
@@ -169,15 +209,12 @@ const badge = computed(() => (total.value === null ? '' : total.value > 999 ? '9
       <span><span class="font-medium text-warn">重扫件不要扫进热文件夹</span>（会被当成新的一页）。扫到别的目录，再点"上传重扫件"单独选择。</span>
     </div>
 
-    <div class="min-h-0 flex-1 overflow-y-auto">
+    <div ref="scroller" class="min-h-0 flex-1 overflow-y-auto">
       <div v-if="!project.current" class="p-4 text-sm text-muted-foreground">请先在左上角选择项目</div>
       <div v-else-if="state === 'loading' || state === 'idle'" class="flex items-center gap-2 p-4 text-sm text-muted-foreground">
         <LoaderCircleIcon class="size-4 animate-spin" />正在读取待重扫的文件…
       </div>
-      <div v-else-if="state === 'error'" class="space-y-2 p-4 text-sm">
-        <p class="text-destructive">{{ error ?? '读取失败' }}</p>
-        <Button size="xs" variant="outline" @click="reload">重试</Button>
-      </div>
+      <ErrorState v-else-if="state === 'error'" class="py-10" :message="error ?? '读取失败'" @retry="reload" />
       <div v-else-if="items.length === 0" class="p-4 text-sm text-muted-foreground" data-testid="rescan-empty">
         <div class="font-medium text-foreground">没有待重扫的文件</div>
         <p class="mt-1 text-xs">审核员驳回的页会出现在这里，带着原件位置和驳回原因。</p>

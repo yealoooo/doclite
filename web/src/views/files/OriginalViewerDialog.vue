@@ -165,7 +165,7 @@ const spec = computed(() => (info.value ? formatSpec(info.value) : ''))
     <DialogPortal>
       <DialogOverlay class="fixed inset-0 z-50 bg-black/40" />
       <DialogContent
-        class="fixed inset-3 z-50 flex flex-col overflow-hidden rounded-xl bg-background shadow-[0_0_0_1px_rgba(0,0,0,0.08),0_16px_48px_rgba(0,0,0,0.25)] outline-none"
+        class="fixed inset-3 z-50 flex flex-col overflow-hidden rounded-xl bg-background shadow-overlay outline-none"
         data-testid="original-viewer"
         :data-file-id="currentId ?? undefined"
         :data-compare="compare ? 'on' : 'off'"

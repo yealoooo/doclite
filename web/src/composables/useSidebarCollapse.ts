@@ -6,7 +6,7 @@
 import { useLocalStorage } from '@vueuse/core'
 import { onBeforeUnmount, onMounted } from 'vue'
 
-import { FLAG_SERIALIZER } from '@/lib/utils'
+import { FLAG_SERIALIZER, isEditable } from '@/lib/utils'
 
 const collapsed = useLocalStorage('doclite.sidebar.collapsed', false, { serializer: FLAG_SERIALIZER })
 
@@ -15,19 +15,11 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(naviga
 /** 快捷键的写法（提示里用）。 */
 export const SIDEBAR_SHORTCUT = isMac ? '⌘B' : 'Ctrl+B'
 
-/** 焦点在能打字的地方（输入框、文本框、下拉框、可编辑区域）。 */
-function typingIn(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false
-  if (target.isContentEditable) return true
-  const tag = target.tagName
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
-}
-
 function onKeydown(e: KeyboardEvent) {
   if (e.defaultPrevented || e.repeat || e.altKey || e.shiftKey) return
   const mod = isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey
   if (!mod || e.key.toLowerCase() !== 'b') return
-  if (typingIn(e.target) || typingIn(document.activeElement)) return
+  if (isEditable(e.target) || isEditable(document.activeElement)) return
   e.preventDefault()
   collapsed.value = !collapsed.value
 }

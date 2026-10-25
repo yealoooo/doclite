@@ -5,12 +5,11 @@
 // 截图脚本用的属性：data-testid=modifying-dialog（data-count）；每行 modifying-row（data-item-id）；按钮 modifying-reseal。
 import { ExternalLinkIcon } from '@lucide/vue'
 
+import type { ModifyingItem } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { formatItemNo } from '@/lib/catalog'
 import { formatDateTime } from '@/lib/format'
-
-import type { ModifyingItem } from './modifying'
 
 const open = defineModel<boolean>('open', { required: true })
 

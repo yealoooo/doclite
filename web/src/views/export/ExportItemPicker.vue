@@ -11,6 +11,7 @@ import { computed, ref, watch } from 'vue'
 import { listArchiveItems } from '@/api/catalog'
 import { errorMessage, HANDLE_ALL } from '@/api/http'
 import type { ArchiveItemSummary } from '@/api/types'
+import ErrorState from '@/components/app/ErrorState.vue'
 import CategoryTree from '@/components/catalog/CategoryTree.vue'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -50,25 +51,28 @@ const picked = ref(new Map<string, PickedItem>())
 const chosenSet = computed(() => new Set(props.chosen))
 
 let openSeq = 0
+/** 打开时（和失败后重试）从头加载归类树。 */
+async function load() {
+  const my = ++openSeq
+  treeState.value = 'loading'
+  settled.value = false
+  categoryId.value = null
+  items.value = []
+  listState.value = 'idle'
+  picked.value = new Map()
+  try {
+    const root = await tree.init(props.projectId)
+    if (my !== openSeq || !root) return
+    treeState.value = 'ready'
+    settled.value = true
+  } catch {
+    if (my === openSeq) treeState.value = 'error'
+  }
+}
 watch(
   open,
-  async (v) => {
-    if (!v) return
-    const my = ++openSeq
-    treeState.value = 'loading'
-    settled.value = false
-    categoryId.value = null
-    items.value = []
-    listState.value = 'idle'
-    picked.value = new Map()
-    try {
-      const root = await tree.init(props.projectId)
-      if (my !== openSeq || !root) return
-      treeState.value = 'ready'
-      settled.value = true
-    } catch {
-      if (my === openSeq) treeState.value = 'error'
-    }
+  (v) => {
+    if (v) void load()
   },
   { immediate: true },
 )
@@ -153,7 +157,7 @@ function confirm() {
 
       <div class="grid h-96 grid-cols-[minmax(0,5fr)_minmax(0,7fr)] gap-3">
         <div class="overflow-auto rounded-lg border bg-background p-1.5">
-          <p v-if="treeState === 'error'" class="p-3 text-sm text-destructive">归类树加载失败，请关掉重试</p>
+          <ErrorState v-if="treeState === 'error'" class="h-full" message="归类树加载失败" @retry="load" />
           <div v-else-if="treeState === 'loading'" class="flex items-center gap-2 p-3 text-xs text-muted-foreground">
             <LoaderCircleIcon class="size-3.5 animate-spin" />正在加载归类树…
           </div>

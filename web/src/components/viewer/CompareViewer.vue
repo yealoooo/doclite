@@ -277,7 +277,7 @@ const sides = computed(() => [
     <button
       v-if="mode === 'toggle'"
       type="button"
-      class="absolute top-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-md bg-background/95 px-2 py-1 text-xs shadow-[0_0_0_1px_rgba(0,0,0,0.08),0_2px_6px_rgba(0,0,0,0.08)] hover:bg-background"
+      class="absolute top-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-md bg-background/95 px-2 py-1 text-xs shadow-float hover:bg-background"
       data-testid="compare-toggle-side"
       @click="toggleSide()"
     >

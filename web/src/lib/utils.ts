@@ -2,9 +2,9 @@ import type { ClassValue } from "clsx"
 import { clsx } from "clsx"
 import { extendTailwindMerge } from "tailwind-merge"
 
-/** style.css 里加的字号（text-2xs、text-compact）、阴影（shadow-outline）告诉 tailwind-merge，免得被当成颜色合并掉。 */
+/** style.css 里加的字号（text-2xs、text-compact）、阴影（shadow-outline、float、overlay）告诉 tailwind-merge，免得被当成颜色合并掉。 */
 const twMerge = extendTailwindMerge({
-  extend: { theme: { text: ["2xs", "compact"], shadow: ["outline"] } },
+  extend: { theme: { text: ["2xs", "compact"], shadow: ["outline", "float", "overlay"] } },
 })
 
 export function cn(...inputs: ClassValue[]) {
@@ -22,4 +22,17 @@ export function chunk<T>(list: readonly T[], size: number): T[][] {
   const out: T[][] = []
   for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size))
   return out
+}
+
+/** 焦点在可以输入文字的地方（输入框、文本框、下拉框、可编辑区域）；勾选框、单选框、按钮类的 input 不算。 */
+export function isEditable(el: EventTarget | null): boolean {
+  if (!(el instanceof HTMLElement)) return false
+  if (el.isContentEditable) return true
+  const tag = el.tagName
+  if (tag === 'TEXTAREA' || tag === 'SELECT') return true
+  if (tag === 'INPUT') {
+    const type = (el as HTMLInputElement).type
+    return !['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file'].includes(type)
+  }
+  return false
 }

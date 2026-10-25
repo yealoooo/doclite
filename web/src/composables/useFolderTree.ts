@@ -4,7 +4,8 @@
 //
 // - 只在展开时加载这个文件夹的子项（`GET /api/folders/{id}/children`，只取其中的子文件夹）；
 // - `revealPath(folder)` 展开并加载祖先链（定位到深处的文件夹时）；
-// - `refresh(ids)` 只重新加载已经加载过的那些（SSE 的 `folders.changed`）；`refreshAll()` 整体刷新；
+// - `refresh(ids)` 只重新加载已经加载过的那些（SSE 的 `folders.changed`）；`refreshShown(except)` 整体刷新时只重新加载
+//   看得到的，收起的留着旧的子节点（收起的节点上照样能看到下面有修改中的），展开时重新取；
 // - 根文件夹的名称取自项目名（`reset(root)` 时传入），面包屑取到新名字时用 `rename()` 更新。
 //
 //   const tree = useFolderTree()
@@ -90,7 +91,8 @@ export function useFolderTree() {
     ensureLoaded: core.ensureLoaded,
     revealPath,
     refresh: core.refresh,
-    refreshAll: core.refreshAll,
+    /** 整体刷新（resync、重连、归档之后）：只重新加载看得到的；`except` 是调用方自己会重新加载的。 */
+    refreshShown: (except?: string | null) => core.refreshShown(undefined, { except, keepHidden: true }),
     rename,
     childrenOf: core.childrenOf,
     pathOf: core.pathOf,

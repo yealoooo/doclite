@@ -10,8 +10,7 @@
 //   或空白；失败的块数到 TILE_FAILURE_NOTICE 就提示，带"重试"（reload）。一块都没取到就按加载失败（保留封面，可以重试）。
 // - 操作：适合窗口、100%、滚轮缩放、拖动平移、旋转查看（只转视图，不保存）。按钮和键盘由使用它的页面做，
 //   通过 ref 调下面暴露的方法（M2-6 的键位见 roadmap Q3）。OpenSeadragon 自带的按键已关掉。
-// - 三种提示：加载中、失败（可以重试）、太大或解不了（只显示封面，提示下载原图）。页面要自己显示提示时把 `overlays`
-//   设为 false，按 `status` 事件显示。
+// - 三种提示：加载中、失败（可以重试）、太大或解不了（只显示封面，提示下载原图）。
 // - 截图脚本用的属性：data-testid=image-viewer，data-state（empty、loading、ready、too_large、unsupported、failed）、
 //   data-step、data-mode（tiles）、data-cover（none、loading、loaded、failed）、data-zoom（百分比）、
 //   data-rotation、data-file-id、data-snapshot-id、data-tile-requests（这张图请求过的块数）、
@@ -60,16 +59,11 @@ export interface ViewerView {
   fitted: boolean
 }
 
-const props = withDefaults(
-  defineProps<{
-    fileId: string | null
-    /** batch 的一项或 snapshots 的一个版本；没有时显示空白。 */
-    info: ViewerImageInfo | null | undefined
-    /** 在查看器里显示加载、失败、太大的提示（默认显示）。 */
-    overlays?: boolean
-  }>(),
-  { overlays: true },
-)
+const props = defineProps<{
+  fileId: string | null
+  /** batch 的一项或 snapshots 的一个版本；没有时显示空白。 */
+  info: ViewerImageInfo | null | undefined
+}>()
 
 const emit = defineEmits<{
   status: [status: ViewerStatus]
@@ -552,58 +546,56 @@ const problemHint = computed(() => {
       data-testid="viewer-cover-badge"
     >封面（长边 400 像素）</span>
 
-    <template v-if="props.overlays">
-      <!-- 加载中 -->
-      <div
-        v-if="status.phase === 'loading'"
-        class="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-background/95 py-1.5 pr-3.5 pl-3 text-xs text-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.08),0_2px_8px_rgba(0,0,0,0.08)]"
-        data-testid="viewer-loading"
-      >
-        <LoaderCircleIcon class="size-3.5 animate-spin text-muted-foreground" />
-        <span>{{ loadingText }}</span>
-        <span v-if="status.cover === 'loaded'" class="text-muted-foreground">· 先显示封面</span>
-      </div>
+    <!-- 加载中 -->
+    <div
+      v-if="status.phase === 'loading'"
+      class="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-background/95 py-1.5 pr-3.5 pl-3 text-xs text-foreground shadow-float"
+      data-testid="viewer-loading"
+    >
+      <LoaderCircleIcon class="size-3.5 animate-spin text-muted-foreground" />
+      <span>{{ loadingText }}</span>
+      <span v-if="status.cover === 'loaded'" class="text-muted-foreground">· 先显示封面</span>
+    </div>
 
-      <!-- 原图画出来了，但有块没取到（那里发虚或空白） -->
-      <div
-        v-else-if="status.phase === 'ready' && status.tileFailures >= TILE_FAILURE_NOTICE"
-        class="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-background/95 py-1 pr-1.5 pl-3 text-xs text-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.08),0_2px_8px_rgba(0,0,0,0.08)]"
-        data-testid="viewer-tile-failures"
-        :data-count="status.tileFailures"
-      >
-        <AlertTriangleIcon class="size-3.5 shrink-0 text-warn" />
-        <span>有 {{ status.tileFailures }} 块原图没取到，那里可能发虚或空白</span>
-        <Button variant="outline" size="xs" data-testid="viewer-tile-retry" @click="reload()">
+    <!-- 原图画出来了，但有块没取到（那里发虚或空白） -->
+    <div
+      v-else-if="status.phase === 'ready' && status.tileFailures >= TILE_FAILURE_NOTICE"
+      class="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-background/95 py-1 pr-1.5 pl-3 text-xs text-foreground shadow-float"
+      data-testid="viewer-tile-failures"
+      :data-count="status.tileFailures"
+    >
+      <AlertTriangleIcon class="size-3.5 shrink-0 text-warn" />
+      <span>有 {{ status.tileFailures }} 块原图没取到，那里可能发虚或空白</span>
+      <Button variant="outline" size="xs" data-testid="viewer-tile-retry" @click="reload()">
+        <RotateCwIcon />重试
+      </Button>
+    </div>
+
+    <!-- 失败、太大、解不了 -->
+    <div
+      v-else-if="status.phase === 'failed' || status.phase === 'too_large' || status.phase === 'unsupported'"
+      class="absolute bottom-4 left-1/2 w-[min(460px,calc(100%-2rem))] -translate-x-1/2 rounded-lg bg-background p-3 text-compact text-foreground shadow-overlay"
+      data-testid="viewer-problem"
+      :data-kind="status.phase"
+      :data-code="status.code ?? undefined"
+    >
+      <div class="flex items-start gap-2">
+        <AlertTriangleIcon class="mt-0.5 size-4 shrink-0" :class="status.phase === 'failed' ? 'text-destructive' : 'text-warn'" />
+        <div class="min-w-0 flex-1">
+          <div class="font-medium">{{ problemTitle }}</div>
+          <div v-if="status.message" class="mt-0.5 text-xs break-words text-muted-foreground">{{ status.message }}</div>
+          <div class="mt-0.5 text-xs text-muted-foreground">{{ problemHint }}</div>
+        </div>
+      </div>
+      <div class="mt-2 flex justify-end gap-1.5">
+        <Button v-if="status.retryable" variant="outline" size="xs" data-testid="viewer-retry" @click="reload()">
           <RotateCwIcon />重试
         </Button>
+        <Button variant="outline" size="xs" data-testid="viewer-download" @click="emit('download')">
+          <DownloadIcon />下载原图
+        </Button>
       </div>
-
-      <!-- 失败、太大、解不了 -->
-      <div
-        v-else-if="status.phase === 'failed' || status.phase === 'too_large' || status.phase === 'unsupported'"
-        class="absolute bottom-4 left-1/2 w-[min(460px,calc(100%-2rem))] -translate-x-1/2 rounded-lg bg-background p-3 text-compact text-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.08),0_2px_2px_rgba(0,0,0,0.04),0_8px_16px_-4px_rgba(0,0,0,0.12)]"
-        data-testid="viewer-problem"
-        :data-kind="status.phase"
-        :data-code="status.code ?? undefined"
-      >
-        <div class="flex items-start gap-2">
-          <AlertTriangleIcon class="mt-0.5 size-4 shrink-0" :class="status.phase === 'failed' ? 'text-destructive' : 'text-warn'" />
-          <div class="min-w-0 flex-1">
-            <div class="font-medium">{{ problemTitle }}</div>
-            <div v-if="status.message" class="mt-0.5 text-xs break-words text-muted-foreground">{{ status.message }}</div>
-            <div class="mt-0.5 text-xs text-muted-foreground">{{ problemHint }}</div>
-          </div>
-        </div>
-        <div class="mt-2 flex justify-end gap-1.5">
-          <Button v-if="status.retryable" variant="outline" size="xs" data-testid="viewer-retry" @click="reload()">
-            <RotateCwIcon />重试
-          </Button>
-          <Button variant="outline" size="xs" data-testid="viewer-download" @click="emit('download')">
-            <DownloadIcon />下载原图
-          </Button>
-        </div>
-      </div>
-    </template>
+    </div>
     <slot />
   </div>
 </template>

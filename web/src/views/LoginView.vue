@@ -70,7 +70,7 @@ async function submit() {
       </div>
 
       <form
-        class="flex flex-col gap-4 rounded-xl bg-card p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.08),0_2px_2px_rgba(0,0,0,0.04),0_8px_16px_-8px_rgba(0,0,0,0.08)]"
+        class="flex flex-col gap-4 rounded-xl bg-card p-6 shadow-overlay"
         @submit.prevent="submit"
       >
         <div class="flex flex-col gap-2">

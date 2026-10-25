@@ -356,6 +356,14 @@ export function folderArchiveState(a: { source_status?: string | null; locked: b
   return a.locked ? ARCHIVE_STATE.locked : ARCHIVE_STATE.archived
 }
 
+type HasArchive = { archive?: { source_status?: string | null } | null }
+
+/** 目录树上带青色笔（/files、归类页左栏）：自己修改中，或者已加载的子文件夹里有修改中的。 */
+export function treeFolderModifying(folder: HasArchive, children: readonly HasArchive[] | undefined): boolean {
+  if (folder.archive?.source_status === 'modifying') return true
+  return !!children?.some((k) => k.archive?.source_status === 'modifying')
+}
+
 /** 件号按模板的补零位数显示（模板解析不了时不补零）。 */
 export function formatItemNo(itemNo: number, width: number): string {
   return String(itemNo).padStart(width, '0')

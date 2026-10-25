@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 本机图片缓存的管理面板（M1-11，design §4.5），只在壳里有意义（浏览器只能用自带的缓存，看不到占用）。
+// 本机图片缓存的管理面板（M1-11，design §4.5），只在壳里有（客户端没有 images 能力时提示升级客户端）。
 // - 总占用、上限、文件数、缓存目录；各项目的占用（封面、原图张数），项目名取自 GET /api/projects，
 //   当前账号进不了的项目（例如别的账号在这台电脑上看过）只显示 id；
 // - 按项目清空、全部清空（都先确认）；修改上限（GB）。
@@ -15,7 +15,7 @@ import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { shellHas } from '@/lib/client'
+import { CLIENT_TOO_OLD, isShell, SHELL_ONLY, shellHas } from '@/lib/client'
 import { formatBytes } from '@/lib/files'
 import {
   cacheClear,
@@ -160,7 +160,7 @@ defineExpose({ refresh })
 
 <template>
   <div class="flex flex-col gap-4 text-sm" data-testid="image-cache-panel">
-    <p v-if="!inShell" class="text-muted-foreground">本机图片缓存只在桌面客户端里有；浏览器使用自带的缓存。</p>
+    <p v-if="!inShell" class="text-muted-foreground">本机图片缓存：{{ isShell() ? CLIENT_TOO_OLD : SHELL_ONLY }}</p>
 
     <template v-else>
       <!-- 总占用 -->

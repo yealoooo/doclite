@@ -57,6 +57,7 @@ import CompareViewer, { type CompareSide, type CompareSideKey } from '@/componen
 import ImageViewer, { type ViewerStatus, type ViewerView } from '@/components/viewer/ImageViewer.vue'
 import { staleInfo, viewerModeLabel, viewerStatusText } from '@/components/viewer/viewer-status'
 import ViewerToolbar from '@/components/viewer/ViewerToolbar.vue'
+import PageHeader from '@/components/app/PageHeader.vue'
 import StreamStatus from '@/components/app/StreamStatus.vue'
 import { useEventBatch, useProjectStream } from '@/composables/useProjectStream'
 import { useSelection } from '@/composables/useSelection'
@@ -1088,45 +1089,47 @@ const emptyText = computed(() => {
     :data-compare="compare ? 'on' : 'off'"
     :data-prepared="lastPrepared ?? undefined"
   >
-    <header class="flex h-14 shrink-0 items-center gap-3 border-b px-5">
-      <h1 class="shrink-0 text-base font-semibold tracking-tight text-foreground">审核</h1>
-      <span v-if="list.counts.value" class="shrink-0 text-xs text-muted-foreground" data-testid="review-head-counts">
-        待审 {{ list.counts.value.open.toLocaleString() }} · 共 {{ list.counts.value.all.toLocaleString() }} 个分给我
-      </span>
-      <Popover v-if="list.otherOpen.value > 0" v-model:open="otherOpen">
-        <PopoverTrigger as-child>
-          <button
-            type="button"
-            class="inline-flex shrink-0 items-center gap-1 rounded-full bg-info-soft px-2.5 text-xs leading-6 text-info hover:bg-info-soft/70"
-            data-testid="other-projects"
-            :data-count="list.otherOpen.value"
-          >
-            其他项目还有 {{ list.otherOpen.value.toLocaleString() }} 个待审
-          </button>
-        </PopoverTrigger>
-        <PopoverContent align="start" class="w-80 gap-2 p-2">
-          <div class="px-2 pt-1 text-xs text-muted-foreground">点项目切过去（左上角的项目切换器也可以）</div>
-          <button
-            v-for="p in otherProjectRows"
-            :key="p.project_id"
-            type="button"
-            class="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
-            data-testid="other-project"
-            @click="
-              otherOpen = false;
-              project.select(p.project_id)
-            "
-          >
-            <span class="font-mono text-xs text-muted-foreground">{{ p.code }}</span>
-            <span class="min-w-0 flex-1 truncate">{{ p.name }}</span>
-            <span v-if="p.status === 'archived'" class="shrink-0 rounded bg-muted px-1 text-2xs text-muted-foreground">已归档</span>
-            <span class="shrink-0 font-mono text-xs">{{ p.open.toLocaleString() }}</span>
-          </button>
-        </PopoverContent>
-      </Popover>
-      <div class="flex-1" />
-      <StreamStatus v-if="project.current" :state="stream.state.value" />
-    </header>
+    <PageHeader title="审核">
+      <template #meta>
+        <span v-if="list.counts.value" class="shrink-0 text-xs text-muted-foreground" data-testid="review-head-counts">
+          待审 {{ list.counts.value.open.toLocaleString() }} · 共 {{ list.counts.value.all.toLocaleString() }} 个分给我
+        </span>
+        <Popover v-if="list.otherOpen.value > 0" v-model:open="otherOpen">
+          <PopoverTrigger as-child>
+            <button
+              type="button"
+              class="inline-flex shrink-0 items-center gap-1 rounded-full bg-info-soft px-2.5 text-xs leading-6 text-info hover:bg-info-soft/70"
+              data-testid="other-projects"
+              :data-count="list.otherOpen.value"
+            >
+              其他项目还有 {{ list.otherOpen.value.toLocaleString() }} 个待审
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" class="w-80 gap-2 p-2">
+            <div class="px-2 pt-1 text-xs text-muted-foreground">点项目切过去（左上角的项目切换器也可以）</div>
+            <button
+              v-for="p in otherProjectRows"
+              :key="p.project_id"
+              type="button"
+              class="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
+              data-testid="other-project"
+              @click="
+                otherOpen = false;
+                project.select(p.project_id)
+              "
+            >
+              <span class="font-mono text-xs text-muted-foreground">{{ p.code }}</span>
+              <span class="min-w-0 flex-1 truncate">{{ p.name }}</span>
+              <span v-if="p.status === 'archived'" class="shrink-0 rounded bg-muted px-1 text-2xs text-muted-foreground">已归档</span>
+              <span class="shrink-0 font-mono text-xs">{{ p.open.toLocaleString() }}</span>
+            </button>
+          </PopoverContent>
+        </Popover>
+      </template>
+      <template #actions>
+        <StreamStatus v-if="project.current" :state="stream.state.value" />
+      </template>
+    </PageHeader>
 
     <!-- 项目还在加载 / 没有能进的项目 -->
     <div v-if="!project.current" class="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
@@ -1370,7 +1373,7 @@ const emptyText = computed(() => {
             <button
               v-if="prevReject && current && current.review_round > 1"
               type="button"
-              class="absolute top-2 left-1/2 z-10 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-1.5 rounded-full bg-background/95 py-1 pr-1.5 pl-3 text-xs text-foreground ring-1 ring-warn/25 shadow-[0_2px_8px_rgba(0,0,0,0.08)] hover:bg-background"
+              class="absolute top-2 left-1/2 z-10 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-1.5 rounded-full bg-background/95 py-1 pr-1.5 pl-3 text-xs text-foreground ring-1 ring-warn/25 shadow-float hover:bg-background"
               data-testid="viewer-prev-reject"
               @mousedown.prevent
               @click="openCompare()"
@@ -1388,7 +1391,7 @@ const emptyText = computed(() => {
           <!-- 原图没显示出来、只看了封面：醒目标出来（验收第 1 轮） -->
           <div
             v-if="currentId && (seen === 'cover' || seen === 'cover-confirm')"
-            class="pointer-events-none absolute top-11 right-2 z-20 flex items-center gap-1.5 rounded-md bg-warn px-2.5 py-1 text-xs font-medium text-white shadow-[0_2px_8px_rgba(0,0,0,0.18)]"
+            class="pointer-events-none absolute top-11 right-2 z-20 flex items-center gap-1.5 rounded-md bg-warn px-2.5 py-1 text-xs font-medium text-white shadow-float"
             data-testid="review-cover-only"
             :data-seen="seen"
           >

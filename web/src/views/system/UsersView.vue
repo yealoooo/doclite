@@ -16,6 +16,7 @@ import PageHeader from '@/components/app/PageHeader.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { StatusBadge } from '@/components/ui/status-badge'
 import {
   Table,
   TableBody,
@@ -27,6 +28,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatDateTime } from '@/lib/format'
 import { manageUserBlock } from '@/lib/privilege'
+import { USER_STATUS } from '@/lib/status'
 import { checkKeyword, MAX_KEYWORD_CHARS } from '@/lib/validate'
 import { useSessionStore } from '@/stores/session'
 
@@ -323,10 +325,7 @@ async function enable(user: UserItem) {
               </div>
             </TableCell>
             <TableCell>
-              <Badge
-                :class="user.status === 'active' ? 'bg-ok-soft text-ok' : 'bg-destructive-soft text-destructive'"
-                class="rounded-md"
-              >{{ user.status === 'active' ? '启用' : '停用' }}</Badge>
+              <StatusBadge :status="USER_STATUS[user.status]" size="md" />
             </TableCell>
             <TableCell class="text-muted-foreground tabular-nums">{{ formatDateTime(user.last_login_at) }}</TableCell>
             <TableCell class="text-muted-foreground tabular-nums">{{ formatDateTime(user.created_at) }}</TableCell>

@@ -26,11 +26,8 @@ const emit = defineEmits<{
 
 const project = useProjectStore()
 
-/** 收起时显示的项目编码（最多 12 个字符，窄栏里折成两行）。 */
-const shortCode = computed(() => {
-  const code = project.current?.project_code ?? ''
-  return code.length > 12 ? code.slice(0, 12) : code
-})
+/** 收起时显示的项目编码（最多 10 个字符，窄栏里折成两行，每行 5 个）。 */
+const shortCode = computed(() => (project.current?.project_code ?? '').slice(0, 10))
 const collapsedTitle = computed(() => {
   const p = project.current
   if (p) return `${p.project_name}（${p.project_code}）· 点击切换项目`
@@ -124,7 +121,7 @@ async function choose(id: string) {
         >
           <span
             v-if="project.current"
-            class="line-clamp-2 text-center font-mono text-[9px] leading-tight font-semibold break-all text-foreground"
+            class="line-clamp-2 text-center font-mono text-2xs leading-tight font-semibold break-all text-foreground"
             data-testid="project-current-code"
           >{{ shortCode }}</span>
           <FolderKanbanIcon v-else class="size-4 text-muted-foreground" />

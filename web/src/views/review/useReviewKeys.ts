@@ -20,6 +20,8 @@
 
 import { useEventListener } from '@vueuse/core'
 
+import { isEditable } from '@/lib/utils'
+
 export interface RejectPanelKeys {
   isOpen(): boolean
   /** 这个元素是不是驳回说明框。 */
@@ -52,19 +54,6 @@ export interface ReviewKeyHandlers {
   toggleSide(): void
   /** Esc（面板没开时）要做的事（退出对比、收回多选）；没有要做的返回 null（不拦截）。 */
   escape(): (() => void) | null
-}
-
-/** 焦点在可以输入文字的地方（输入框、文本框、下拉框、可编辑区域）。 */
-export function isEditable(el: EventTarget | null): boolean {
-  if (!(el instanceof HTMLElement)) return false
-  if (el.isContentEditable) return true
-  const tag = el.tagName
-  if (tag === 'TEXTAREA' || tag === 'SELECT') return true
-  if (tag === 'INPUT') {
-    const type = (el as HTMLInputElement).type
-    return !['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file'].includes(type)
-  }
-  return false
 }
 
 /** 按 Enter、空格会"点"它的元素（按钮、链接、勾选框）。 */

@@ -1,9 +1,9 @@
 // 把元素的 title 换成和 Tooltip 组件一样的气泡。
 //
 // 原生的 title 提示要停一秒多才出来，样式跟系统走，在客户端的 WebView 里有时不出现。各处照常写 title，这里在
-// document 上统一接管：鼠标移到带 title 的元素上时先把 title 摘下（不让原生提示出来），停 300 ms 显示气泡；移开时
-// 放回去（期间 Vue 改了 title 就用新的）。气泡不接收鼠标事件，按下鼠标、按键、滚动时收起（title 等移开再放回，
-// 免得原生提示接着冒出来）。
+// document 上统一接管：鼠标移到带 title 的元素上时先把 title 换成空的（不让原生提示出来，祖先的也不出来），停 300 ms
+// 显示气泡；移开时还是空的才放回去（期间 Vue 改了 title 就用新的，去掉了就不放回）。气泡不接收鼠标事件，按下鼠标、
+// 按键、滚动时收起（title 等移开再放回，免得原生提示接着冒出来）。
 
 const DELAY = 300
 const GAP = 6
@@ -46,14 +46,15 @@ function hide() {
 
 function release() {
   hide()
-  if (current && !current.hasAttribute('title')) current.setAttribute('title', saved)
+  if (current?.getAttribute('title') === '') current.setAttribute('title', saved)
   current = null
 }
 
 function onOver(e: PointerEvent) {
   const target = e.target as Element | null
   const el = target?.closest<HTMLElement>('[title]')
-  // 还在当前元素里面（它的 title 已经摘下了），除非移到了它里面另一个带 title 的元素上。
+  // 还在当前元素里面（它的 title 是空的，closest 找到的就是它），除非移到了它里面另一个带 title 的元素上。
+  if (current && el === current) return
   if (current && target && current.contains(target) && !(el && current.contains(el))) return
   if (!el) return release()
   release()
@@ -61,7 +62,7 @@ function onOver(e: PointerEvent) {
   if (!text) return
   current = el
   saved = el.getAttribute('title') ?? ''
-  el.removeAttribute('title')
+  el.setAttribute('title', '')
   timer = window.setTimeout(show, DELAY)
 }
 

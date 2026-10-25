@@ -28,6 +28,6 @@ const forwardedProps = useForwardProps(delegatedProps)
     )"
   >
     <slot />
-    <ChevronRightIcon class="cn-rtl-flip ml-auto" />
+    <ChevronRightIcon class="ml-auto" />
   </ContextMenuSubTrigger>
 </template>

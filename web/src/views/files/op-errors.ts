@@ -33,20 +33,16 @@ export function opError(e: unknown, ctx: OpContext): OpError {
         title: ctx.kind === 'folder' ? '文件夹里有已归档的文件，不能删除' : '有已归档的文件，不能删除',
         detail: `${e.message}。不要这一件了请先到「归类」里撤销归档，再回来删除`,
       }
-    case 'folder_archived':
-      // M9：碰到了封存的文件夹，server 的 message 写明了是哪个文件夹、归档成了哪一件、该怎么办。
-      return { title: e.message }
     case 'tree_full':
       return {
         title: '这一层的子文件夹数量已到上限',
         detail: '每个文件夹下最多 99999 个子文件夹，删除的也占编号。请换一个上级文件夹。',
       }
-    case 'invalid_input':
-      // 名字不合法（含 Windows 保留名）：server 的 message 写明了是哪一条。
-      return { title: e.message }
     case 'not_found':
       return { title: `${what}已不存在（可能刚被别人删除或移动），列表已刷新`, detail: e.message }
     default:
+      // folder_archived（M9：碰到了封存的文件夹，写明了是哪个文件夹、归档成了哪一件、该怎么办）、invalid_input（名字
+      // 不合法，含 Windows 保留名，写明了是哪一条）：用 server 的 message。
       return { title: e.message }
   }
 }

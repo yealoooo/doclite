@@ -5,7 +5,7 @@
 // - 每个节点只采用最新一次请求的结果；`reset` 之后丢弃之前发出的请求的结果；
 // - 第一次加载还在路上时收到了这个节点的事件（`refresh`）：加载完成后再补刷一次（路上那份可能是事件之前的）；
 // - 节点已不存在（`source.isGone(err)`，例如 404）时从树上去掉它；
-// - `refresh(ids)` 只重新加载已经加载过的那些（SSE 事件）；`refreshAll()` 重新加载全部已加载的。
+// - `refresh(ids)` 只重新加载已经加载过的那些（SSE 事件）；`refreshShown()` 只重新加载看得到的（resync、重连后）。
 //
 //   const tree = useLazyTree<Node, Result>({ fetch, children, updateSelf, isLeaf, isGone, label })
 //   tree.reset(rootNode)
@@ -48,6 +48,8 @@ export function useLazyTree<N extends { id: string }, R>(source: LazyTreeSource<
   const firstLoads = new Map<string, Promise<unknown>>()
   /** 第一次加载还在路上时收到了它的事件：加载完成后再补刷一次。 */
   const dirtyLoads = new Set<string>()
+  /** 收起时留着的旧子节点（refreshShown 的 keepHidden）：再展开时重新取。 */
+  const stale = new Set<string>()
   let seq = 0
 
   function reset(root: N) {
@@ -59,6 +61,7 @@ export function useLazyTree<N extends { id: string }, R>(source: LazyTreeSource<
     seqs.clear()
     firstLoads.clear()
     dirtyLoads.clear()
+    stale.clear()
     rootId.value = root.id
     nodes.set(root.id, root)
     expanded.value = [root.id]
@@ -74,6 +77,7 @@ export function useLazyTree<N extends { id: string }, R>(source: LazyTreeSource<
       id,
       children.map((c) => c.id),
     )
+    stale.delete(id)
     if (updateSelf) {
       const next = updateSelf(nodes.get(id))
       if (next) nodes.set(id, next)
@@ -161,11 +165,6 @@ export function useLazyTree<N extends { id: string }, R>(source: LazyTreeSource<
     await Promise.all(targets.map((id) => load(id).catch(() => null)))
   }
 
-  /** 重新加载所有已加载的节点（resync、重连后）；`except` 同上。 */
-  async function refreshAll(except?: string | null) {
-    await refresh([...childIds.keys()], except)
-  }
-
   /** 看得到的展开节点：根，以及从根一路展开下来的节点（祖先有收起的不算）。 */
   function shownExpanded(): Set<string> {
     const root = rootId.value
@@ -189,18 +188,21 @@ export function useLazyTree<N extends { id: string }, R>(source: LazyTreeSource<
   /**
    * 只刷新看得到的部分（M3-5 审查：事件放大）：`targets`（不给是全部已加载的）里看得到的展开节点重新加载；
    * 收起的（或祖先收起了、看不到的）已加载节点丢掉子节点，下次展开时重新取，不为它们发请求。
-   * 第一次加载还在路上、看得到的，等它回来后补刷一次。
+   * `keepHidden`：收起的不丢，留着旧的子节点（文件夹树要看收起的节点下面有没有修改中的），记成过期，展开时重新取。
+   * `except` 是调用方自己会重新加载的。第一次加载还在路上、看得到的，等它回来后补刷一次。
    */
-  async function refreshShown(targets?: Iterable<string>) {
+  async function refreshShown(targets?: Iterable<string>, opts: { except?: string | null; keepHidden?: boolean } = {}) {
     const shown = shownExpanded()
     const want = targets ? new Set(targets) : new Set(childIds.keys())
     const reload: string[] = []
     for (const id of want) {
+      if (id === opts.except) continue
       if (!childIds.has(id)) {
         if (loading.has(id) && shown.has(id)) dirtyLoads.add(id)
         continue
       }
       if (shown.has(id)) reload.push(id)
+      else if (opts.keepHidden) stale.add(id)
       else childIds.delete(id)
     }
     await Promise.all(reload.map((id) => load(id).catch(() => null)))
@@ -241,8 +243,12 @@ export function useLazyTree<N extends { id: string }, R>(source: LazyTreeSource<
     return `/${names.join('/')}`
   }
 
-  // 展开了还没加载的节点：加载它的子节点。
-  watch(expanded, (list) => list.forEach(ensureLoaded))
+  // 展开了还没加载的节点：加载它的子节点；过期的、看得到了的重新加载。
+  watch(expanded, (list) => {
+    list.forEach(ensureLoaded)
+    if (!stale.size) return
+    for (const id of shownExpanded()) if (stale.delete(id)) void load(id).catch(() => null)
+  })
 
   return {
     nodes,
@@ -257,7 +263,6 @@ export function useLazyTree<N extends { id: string }, R>(source: LazyTreeSource<
     ensureLoaded,
     revealChain,
     refresh,
-    refreshAll,
     shownExpanded,
     refreshShown,
     patch,

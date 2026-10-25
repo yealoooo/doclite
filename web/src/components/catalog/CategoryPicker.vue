@@ -16,6 +16,7 @@
 import { computed, ref, watch } from 'vue'
 
 import type { ArchiveCategory } from '@/api/types'
+import ErrorState from '@/components/app/ErrorState.vue'
 import CategoryTree from '@/components/catalog/CategoryTree.vue'
 import { Button } from '@/components/ui/button'
 import {
@@ -87,30 +88,33 @@ const selected = computed<PickedCategory | null>(() => {
 })
 
 let openSeq = 0
+/** 打开时（和失败后重试）加载归类树，定位到 initialId。 */
+async function load() {
+  const my = ++openSeq
+  state.value = 'loading'
+  settled.value = false
+  selectedId.value = null
+  try {
+    const root = await tree.init(props.projectId)
+    if (my !== openSeq || !root) return
+    state.value = 'ready'
+    if (props.initialId && props.initialId !== root.id) {
+      const node = await tree.reveal(props.initialId).catch(() => null)
+      if (my !== openSeq) return
+      if (node) {
+        selectedId.value = node.id
+        if (!tree.expanded.value.includes(node.id)) tree.expanded.value = [...tree.expanded.value, node.id]
+      }
+    } else if (props.allowTop) selectedId.value = root.id
+    if (my === openSeq) settled.value = true
+  } catch {
+    if (my === openSeq) state.value = 'error'
+  }
+}
 watch(
   open,
-  async (v) => {
-    if (!v) return
-    const my = ++openSeq
-    state.value = 'loading'
-    settled.value = false
-    selectedId.value = null
-    try {
-      const root = await tree.init(props.projectId)
-      if (my !== openSeq || !root) return
-      state.value = 'ready'
-      if (props.initialId && props.initialId !== root.id) {
-        const node = await tree.reveal(props.initialId).catch(() => null)
-        if (my !== openSeq) return
-        if (node) {
-          selectedId.value = node.id
-          if (!tree.expanded.value.includes(node.id)) tree.expanded.value = [...tree.expanded.value, node.id]
-        }
-      } else if (props.allowTop) selectedId.value = root.id
-      if (my === openSeq) settled.value = true
-    } catch {
-      if (my === openSeq) state.value = 'error'
-    }
+  (v) => {
+    if (v) void load()
   },
   { immediate: true },
 )
@@ -141,7 +145,7 @@ function onActivate(id: string) {
       </DialogHeader>
 
       <div class="h-80 overflow-auto rounded-lg border bg-background p-1.5">
-        <p v-if="state === 'error'" class="p-3 text-sm text-destructive">归类树加载失败，请关掉重试</p>
+        <ErrorState v-if="state === 'error'" class="h-full" message="归类树加载失败" @retry="load" />
         <template v-else>
           <button
             v-if="props.allowTop && tree.rootId.value"

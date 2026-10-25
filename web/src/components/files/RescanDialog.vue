@@ -22,7 +22,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { CLIENT_TOO_OLD, isShell, SHELL_ONLY, shellHas } from '@/lib/client'
 import { formatDateTime } from '@/lib/format'
-import { formatBytes } from '@/lib/files'
+import { formatBytes, reviewStatusOf } from '@/lib/files'
 import {
   describeRescanError,
   findRescan,
@@ -274,7 +274,7 @@ const coverNote = computed(() => {
         <CheckCircle2Icon class="mt-0.5 size-4 shrink-0 text-ok" />
         <div class="min-w-0 space-y-0.5">
           <div class="font-medium text-ok" data-testid="rescan-result-title">
-            已重扫：现在是 v{{ done.result.version_no }}，{{ done.result.review_status === 'pending' ? '待审核' : '待分配' }}（第 {{ done.result.review_round }} 轮）
+            已重扫：现在是 v{{ done.result.version_no }}，{{ reviewStatusOf(done.result.review_status).label }}（第 {{ done.result.review_round }} 轮）
           </div>
           <div class="text-foreground/85" data-testid="rescan-reassign">{{ reassignText(done.result, lastReject) }}</div>
           <div class="truncate text-xs text-muted-foreground" :title="done.localName">

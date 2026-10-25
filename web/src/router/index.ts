@@ -67,7 +67,7 @@ const router = createRouter({
           component: () => import('@/views/files/FilesView.vue'),
           meta: { requiresMenu: true },
         },
-        // M1-13：扫描上传（热文件夹和上传队列只在壳里；浏览器里引导到文件目录上传）。
+        // M1-13：扫描上传（热文件夹和上传队列只在壳里；浏览器里只提示"请在客户端中使用"）。
         {
           path: 'scan',
           component: () => import('@/views/scan/ScanView.vue'),

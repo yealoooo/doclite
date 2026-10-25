@@ -45,6 +45,7 @@ import {
   getCatalogPlacements,
   getCatalogSettings,
   listArchiveItems,
+  listModifyingItems,
   lockArchiveItems,
   MAX_ARCHIVE_FOLDERS,
   MAX_ITEMS_PAGE,
@@ -59,12 +60,14 @@ import type {
   CatalogSettings,
   FileEntry,
   FolderArchive,
+  ModifyingItem,
   MyProject,
   ProjectEvent,
   SubfolderEntry,
   UpdatedArchiveCategory,
 } from '@/api/types'
 import ConfirmDialog from '@/components/app/ConfirmDialog.vue'
+import ErrorState from '@/components/app/ErrorState.vue'
 import CategoryPicker, { type PickedCategory } from '@/components/catalog/CategoryPicker.vue'
 import CategoryTree from '@/components/catalog/CategoryTree.vue'
 import UnsealDialog from '@/components/catalog/UnsealDialog.vue'
@@ -79,6 +82,7 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import PageHeader from '@/components/app/PageHeader.vue'
 import StreamStatus from '@/components/app/StreamStatus.vue'
 import { useCategoryTree } from '@/composables/useCategoryTree'
 import { useEventBatch, useProjectStream } from '@/composables/useProjectStream'
@@ -104,7 +108,6 @@ import { folderDrag, isFolderDrag } from './drag'
 import FolderPane from './FolderPane.vue'
 import ItemDetail from './ItemDetail.vue'
 import ItemList from './ItemList.vue'
-import { loadModifyingItems, type ModifyingItem } from './modifying'
 import { useCategoryOps } from './useCategoryOps'
 import ModifyingDialog from './ModifyingDialog.vue'
 import ResealDialog from './ResealDialog.vue'
@@ -345,31 +348,11 @@ function patchRow(it: ArchiveItem) {
     void loadList()
     return
   }
-  const row: ArchiveItemSummary = {
-    id: it.id,
-    category_id: it.category_id,
-    item_no: it.item_no,
-    archive_no: it.archive_no,
-    title: it.title,
-    status: it.status,
-    row_version: it.row_version,
-    page_count: it.page_count,
-    page_counts: it.page_counts,
-    locked_at: it.locked_at,
-    new_version_after_lock: it.new_version_after_lock,
-    updated_at: it.updated_at,
-    source_folder_id: it.source_folder_id,
-    source_folder_name: it.source_folder_name,
-    source_folder_path: it.source_folder_path,
-    source_folder_deleted: it.source_folder_deleted,
-    source_status: it.source_status,
-    unsealed_by: it.unsealed_by,
-    unsealed_by_name: it.unsealed_by_name,
-    unsealed_at: it.unsealed_at,
-    unseal_reason: it.unseal_reason,
-  }
+  // 详情是摘要的超集：按列表行有的字段从详情里取。
+  const row: Record<string, unknown> = { ...old }
+  for (const k of Object.keys(old)) row[k] = it[k as keyof ArchiveItem]
   const next = [...items.value]
-  next[i] = row
+  next[i] = row as unknown as ArchiveItemSummary
   // 改了件号：按件号重新排。
   if (old.item_no !== it.item_no) next.sort((a, b) => a.item_no - b.item_no || (a.id < b.id ? -1 : 1))
   items.value = next
@@ -395,12 +378,7 @@ function openItem(id: string) {
   void go(categoryQuery.value, id)
 }
 
-function onDetailLoaded(it: ArchiveItem) {
-  detailItem.value = it
-  patchRow(it)
-  syncTreePath(it)
-}
-
+/** 详情取到了、改过了：更新列表里这一行和树上的路径。 */
 function onDetailChanged(it: ArchiveItem) {
   detailItem.value = it
   patchRow(it)
@@ -497,12 +475,10 @@ function setPaneFolder(id: string | null) {
   void setQuery({ folder: id })
 }
 
-/** 归档要放到的节点：右边选中的节点（不能是根）。 */
-const archiveTargetNode = computed(() => (opNode.value ? opNode.value : null))
 const midTip = computed(() => {
   if (!leftSelected.value.length) return '左边选文件夹（只能整个文件夹）'
-  if (!archiveTargetNode.value) return '右边先选一个节点'
-  return `放到「${archiveTargetNode.value.category_name}」`
+  if (!opNode.value) return '右边先选一个节点'
+  return `放到「${opNode.value.category_name}」`
 })
 
 const archive = reactive({ open: false, categoryId: null as string | null, label: '', folderIds: [] as string[] })
@@ -524,7 +500,7 @@ function openArchive(categoryId: string, folderIds: string[]) {
 }
 
 function archiveSelected() {
-  const node = archiveTargetNode.value
+  const node = opNode.value
   if (!node || !leftSelected.value.length) return
   openArchive(node.id, leftSelected.value.map((f) => f.id))
 }
@@ -633,7 +609,8 @@ function openFiles(folderId: string) {
   void router.push({ path: '/files', query: { folder: folderId } })
 }
 
-// "修改中 n 件"
+// "修改中 n 件"（GET archive-items:modifying，最多 500 件，按解除封存的时间倒序）：进入页面、catalog.changed /
+// folders.changed（去抖后）、自己解除封存、重新归档、撤销归档之后重取。
 const modifyingItems = ref<ModifyingItem[]>([])
 /** 修改中的真实件数（清单最多 500 件）。 */
 const modifyingTotal = ref(0)
@@ -644,7 +621,7 @@ async function loadModifying() {
   if (!pid) return
   const my = ++modifyingSeq
   try {
-    const list = await loadModifyingItems(pid)
+    const list = await listModifyingItems(pid, HANDLE_ALL)
     if (my === modifyingSeq && project.currentId === pid) {
       modifyingItems.value = list.items
       modifyingTotal.value = list.total
@@ -837,8 +814,11 @@ const pendingFolderIds = new Set<string>()
 let pendingFolderIdsUnknown = false
 /** item_ids 为空或没带的事件（只有节点变了）里的 category_ids。 */
 const pendingStructCats = new Set<string>()
-/** 同时最多跑一轮；跑的过程中新来的事件并到下一轮（useEventBatch）。 */
-const batch = useEventBatch(applyOnce)
+/**
+ * 同时最多跑一轮；跑的过程中新来的事件并到下一轮（useEventBatch）。连续不断（上传、批量审核期间）时最多等 3 秒，
+ * 和 /files、/review-assign 一样。
+ */
+const batch = useEventBatch(applyOnce, { burstMaxWaitMs: 3000 })
 
 function onEvent(e: ProjectEvent) {
   if (e.type === 'resync') pendingFull = true
@@ -942,7 +922,9 @@ async function applyOnce() {
     tasks.push(detailRef.value.refresh())
   }
   if (listAffected) tasks.push(loadList())
-  else if (cur && fileIds.size && items.value.some((i) => i.page_count > 0)) tasks.push(refreshListIfFilesShown(fileIds))
+  else if (cur && fileIds.size && items.value.some((i) => i.page_count > 0 && (!fileFolders || fileFolders.has(i.source_folder_id))))
+    // 件的文件都在它的来源文件夹里：事件带了文件夹时，只在列表里有件来自这些文件夹时才去查。
+    tasks.push(refreshListIfFilesShown(fileIds))
   await Promise.all(tasks)
 }
 
@@ -1062,37 +1044,39 @@ const templateHint = computed(() => {
     :data-dirty="detailDirty ? 'true' : undefined"
     :data-modifying="modifyingTotal"
   >
-    <header class="flex h-12 shrink-0 items-center gap-3 border-b px-4">
-      <h1 class="shrink-0 text-base font-semibold tracking-tight text-foreground">归类</h1>
-      <span
-        v-if="settings"
-        class="hidden min-w-0 truncate border-l pl-3 text-xs text-muted-foreground xl:inline"
-        :title="templateHint"
-        data-testid="catalog-template"
-      >档号：{{ templateLabel }}</span>
-      <button
-        v-if="modifyingTotal"
-        type="button"
-        class="flex shrink-0 items-center gap-1 rounded-full bg-modifying-soft px-2.5 py-0.5 text-xs text-modifying ring-1 ring-modifying/30 ring-inset hover:bg-modifying-soft/70"
-        title="点开看是哪几件"
-        data-testid="modifying-chip"
-        :data-count="modifyingTotal"
-        @click="modifyingOpen = true"
-      >
-        <PencilLineIcon class="size-3.5" />修改中 {{ modifyingTotal }} 件，改完记得重新归档 ›
-      </button>
-      <div class="flex-1" />
-      <StreamStatus v-if="project.current" :state="stream.state.value" />
-      <Button
-        v-if="project.current && treeState === 'ready'"
-        variant="outline"
-        size="sm"
-        data-testid="renumber-project"
-        @click="askRenumber(null)"
-      >
-        <RefreshCwIcon />按新模板重新生成档号…
-      </Button>
-    </header>
+    <PageHeader dense>
+      <template #meta>
+        <span
+          v-if="settings"
+          class="hidden min-w-0 truncate border-l pl-3 text-xs text-muted-foreground xl:inline"
+          :title="templateHint"
+          data-testid="catalog-template"
+        >档号：{{ templateLabel }}</span>
+        <button
+          v-if="modifyingTotal"
+          type="button"
+          class="flex shrink-0 items-center gap-1 rounded-full bg-modifying-soft px-2.5 py-0.5 text-xs text-modifying ring-1 ring-modifying/30 ring-inset hover:bg-modifying-soft/70"
+          title="点开看是哪几件"
+          data-testid="modifying-chip"
+          :data-count="modifyingTotal"
+          @click="modifyingOpen = true"
+        >
+          <PencilLineIcon class="size-3.5" />修改中 {{ modifyingTotal }} 件，改完记得重新归档 ›
+        </button>
+      </template>
+      <template #actions>
+        <StreamStatus v-if="project.current" :state="stream.state.value" />
+        <Button
+          v-if="project.current && treeState === 'ready'"
+          variant="outline"
+          size="sm"
+          data-testid="renumber-project"
+          @click="askRenumber(null)"
+        >
+          <RefreshCwIcon />按新模板重新生成档号…
+        </Button>
+      </template>
+    </PageHeader>
 
     <div v-if="!project.current" class="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
       <span v-if="project.state === 'loading' || project.state === 'idle'" class="flex items-center gap-2">
@@ -1135,7 +1119,7 @@ const templateHint = computed(() => {
         <Button
           size="sm"
           class="w-full"
-          :disabled="!leftSelected.length || !archiveTargetNode"
+          :disabled="!leftSelected.length || !opNode"
           data-testid="archive-button"
           @click="archiveSelected"
         >
@@ -1300,7 +1284,7 @@ const templateHint = computed(() => {
               :item-no-width="itemNoWidth"
               :refresh-token="detailRefresh"
               :category-label="detailCategoryLabel"
-              @loaded="onDetailLoaded"
+              @loaded="onDetailChanged"
               @changed="onDetailChanged"
               @moved="onDetailMoved"
               @gone="onDetailGone"
@@ -1357,10 +1341,7 @@ const templateHint = computed(() => {
               <div v-if="listState === 'loading' && !items.length" class="flex flex-1 items-center justify-center gap-2 text-xs text-muted-foreground">
                 <LoaderCircleIcon class="size-3.5 animate-spin" />正在加载…
               </div>
-              <div v-else-if="listState === 'error' && !items.length" class="flex flex-1 flex-col items-center justify-center gap-2 text-xs">
-                <p class="text-destructive">{{ listError }}</p>
-                <Button variant="outline" size="xs" @click="loadList">重试</Button>
-              </div>
+              <ErrorState v-else-if="listState === 'error' && !items.length" class="flex-1" :message="listError" @retry="loadList" />
               <div
                 v-else-if="listState === 'ready' && !items.length"
                 class="flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center text-xs text-muted-foreground"

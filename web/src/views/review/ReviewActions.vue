@@ -21,6 +21,7 @@ import type { MyReviewItem } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { formatDateTime } from '@/lib/format'
 import { OTHER_REJECT_REASON, rejectReasonLabel } from '@/lib/reject-reasons'
+import { CONTROL_EXCEPT_NEWLINE } from '@/lib/validate'
 
 const props = defineProps<{
   item: MyReviewItem | null
@@ -130,16 +131,12 @@ function focusComment() {
   commentEl.value?.focus()
 }
 
-// 控制字符：和 server 一致（Rust 的 char::is_control，即 C0、DEL、C1，去掉换行 \n、回车 \r、制表符 \t）。
-// eslint-disable-next-line no-control-regex
-const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/
-
 function validate(): string | null {
   if (selected.value.length === 0) return '至少选一个驳回原因'
   const text = comment.value.trim()
   if (needsComment.value && !text) return '选了“其他”要写说明'
   if (Array.from(text).length > props.commentMax) return `说明最多 ${props.commentMax} 个字（现在 ${Array.from(text).length} 个）`
-  if (CONTROL_CHARS.test(text)) return '说明里不能有控制字符'
+  if (CONTROL_EXCEPT_NEWLINE.test(text)) return '说明里不能有控制字符'
   return null
 }
 

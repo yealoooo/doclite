@@ -168,7 +168,7 @@ export function useFolderBrowser(opts: FolderBrowserOptions) {
     if (!cur) {
       if (state.value === 'loading') staleWhileOpening = true
       if (folderIds) void tree.refresh(folderIds, null)
-      else void tree.refreshAll()
+      else void tree.refreshShown()
       return false
     }
     const affected =
@@ -178,7 +178,7 @@ export function useFolderBrowser(opts: FolderBrowserOptions) {
       (!!fileIds?.size && !!children.value?.files.some((f) => fileIds.has(f.file_id)))
     // 当前文件夹由 reload 重新加载（它同时更新树上这一层），树上不重复请求。
     if (folderIds) void tree.refresh(folderIds, affected ? cur.id : null)
-    else void tree.refreshAll(cur.id)
+    else void tree.refreshShown(cur.id)
     if (affected) void reload()
     if (!folderIds || crumbs.value.some((c) => folderIds.has(c.id))) void reloadCrumb()
     return affected
