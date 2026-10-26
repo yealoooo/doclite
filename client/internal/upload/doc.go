@@ -7,7 +7,7 @@
 //   - hotfolder.go 热文件夹：fsnotify 只重新列出有事件的目录，加定时全量扫描兜底，写完判定（settle.go）后进队列；
 //   - walk.go      列目录的规则（热文件夹和上传按钮选的文件夹共用）；
 //   - rescan.go    重扫件：不进队列，一次一个；
-//   - cover.go     封面：Go 解码 JPEG、PNG、TIFF，先按 2ⁿ 取平均缩小、转正（tiles.Shrink），再缩到长边 400 的 JPEG；
+//   - cover.go     封面：Go 解码 JPEG、PNG、TIFF、BMP、GIF、WebP，先按 2ⁿ 取平均缩小、转正（tiles.Shrink），再缩到长边 400 的 JPEG；
 //   - api.go       发给 server 的请求（和页面共用会话：同一个 Cookie 罐和请求头，见 [Client]）。
 //
 // 纯逻辑（自然顺序、忽略规则、写完判定、重试间隔、multipart 字段顺序、封面尺寸）有单元测试；

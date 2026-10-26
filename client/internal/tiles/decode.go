@@ -120,7 +120,9 @@ func pixels(info imagehdr.Info) int64 {
 // 解码出来的每像素字节数按 Go 的解码器：JPEG 灰度 1、彩色 YCbCr 最多 3；PNG 灰度 1（16 位 2）、调色板 1、其余 RGBA 4
 // （16 位 8）；TIFF 黑白和灰度 1（16 位 2）、彩色 RGBA 4（16 位 RGBA64 8），条带缓冲是 样本数 × 位数 ÷ 8。JPEG 压缩的
 // TIFF 也是这样：整张 RGBA 或 CMYK，加上一个条带的解码结果——最多是整张 YCbCr 每像素 3 字节，算在 raw 里；只有一个
-// 条带的 YCbCr、灰度直接用解码结果，更省。位深从 PNG 的 IHDR、TIFF 的第一个 IFD 读，读不出来按最大的估。
+// 条带的 YCbCr、灰度直接用解码结果，更省。位深从 PNG 的 IHDR、TIFF 的第一个 IFD 读，读不出来按最大的估。BMP 不超过
+// 8 位的（黑白、灰度一定是）是调色板 1，其余按 RGBA 4；GIF 是调色板 1；WebP 按无损的估：解码器内部每像素 4 字节（算在
+// raw 里）+ NRGBA 4（有损的 YCbCr 加透明度更少）。
 func decodeBytes(src *imgdecode.Source) (decoded, raw int64) {
 	info := src.Info
 	px := pixels(info)
@@ -159,6 +161,15 @@ func decodeBytes(src *imgdecode.Source) (decoded, raw int64) {
 		if info.ColorMode == imagehdr.ColorBW || info.ColorMode == imagehdr.ColorGray {
 			decoded = px * bytes
 		}
+	case imagehdr.BMP:
+		decoded = px * 4
+		if info.ColorMode == imagehdr.ColorBW || info.ColorMode == imagehdr.ColorGray {
+			decoded = px
+		}
+	case imagehdr.GIF:
+		decoded = px
+	case imagehdr.WebP:
+		decoded, raw = px*4, px*4
 	}
 	return decoded, raw
 }

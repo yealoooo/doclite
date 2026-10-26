@@ -231,11 +231,11 @@ func TestGenerateSmall(t *testing.T) {
 
 	// 认不出的文件：unsupported_format。
 	junk := filepath.Join(dir, "junk.bin")
-	if err := os.WriteFile(junk, []byte("GIF89a……"), 0o644); err != nil {
+	if err := os.WriteFile(junk, []byte("%PDF-1.7……"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := NewPlan(junk); !errors.As(err, &te) || te.Code != imgdecode.KindUnsupportedFormat {
-		t.Errorf("GIF 应为 unsupported_format，实际 %v", err)
+		t.Errorf("PDF 应为 unsupported_format，实际 %v", err)
 	}
 }
 

@@ -229,7 +229,7 @@ func TestUploadErrors(t *testing.T) {
 
 	big := append(append([]byte{}, jpg[:4]...), make([]byte, (1<<20)+1)...)
 	admin.Upload(f.ID, "big.jpg", big, nil).ExpectError(413, "payload_too_large")
-	admin.Upload(f.ID, "a.gif", append([]byte("GIF89a"), make([]byte, 100)...), nil).ExpectError(415, "unsupported_media_type")
+	admin.Upload(f.ID, "a.heic", append([]byte("\x00\x00\x00\x18ftypheic"), make([]byte, 100)...), nil).ExpectError(415, "unsupported_media_type")
 	admin.Upload(f.ID, "a.jpg", jpg[:20], nil).ExpectError(400, "invalid_image")
 	admin.Upload(f.ID, "a.tif", sampleBytes(t, "tiff-multipage-2p.tif"), nil).ExpectError(400, "invalid_image")
 	admin.UploadParts(f.ID, name, textPart("content_sha256", strings.Repeat("0", 64)), filePart("file", jpg)).

@@ -28,8 +28,9 @@ func TestExportRunAndDownload(t *testing.T) {
 	// 著录项：目录.xlsx 的列。
 	e.cat.setSettings(map[string]any{"item_fields": []any{map[string]any{"key": "resp", "label": "责任者", "type": "text"}}})
 
-	// 上传样本（常见扫描格式；带透明的 PNG 在 PDF 里要转换）。
-	samples := []string{"jpeg-rgb.jpg", "png-alpha.png", "tiff-lzw-rgb.tif", "tiff-g4-1bit.tif", "jpeg-gray.jpg"}
+	// 上传样本（常见扫描格式；带透明的 PNG、BMP、GIF、WebP 在 PDF 里要转换）。
+	samples := []string{"jpeg-rgb.jpg", "png-alpha.png", "tiff-lzw-rgb.tif", "tiff-g4-1bit.tif", "jpeg-gray.jpg",
+		"bmp-gray4.bmp", "gif-single.gif", "webp-lossy-alpha.webp"}
 	sha := map[uuid.UUID]string{}
 	var ids []uuid.UUID
 	for i, name := range samples {
@@ -64,12 +65,12 @@ func TestExportRunAndDownload(t *testing.T) {
 		return b
 	}
 	p := Decode[precheckResult](e.mgr.Post(e.url("/export-tasks:precheck"), body("pdf")).Expect(http.StatusOK))
-	if p.ItemCount != 2 || p.ReadyItemCount != 2 || p.ReadyPageCount != 5 || len(p.NotReady) != 0 {
+	if p.ItemCount != 2 || p.ReadyItemCount != 2 || p.ReadyPageCount != 8 || len(p.NotReady) != 0 {
 		t.Fatalf("预检：%+v", p)
 	}
 	pdf := e.createTask(body("pdf"))
 	images := e.createTask(body("images"))
-	if pdf.Status != "queued" || pdf.ItemCount != 2 || pdf.PageCount != 5 || pdf.ProgressTotal != 5 || pdf.Attempts != 0 ||
+	if pdf.Status != "queued" || pdf.ItemCount != 2 || pdf.PageCount != 8 || pdf.ProgressTotal != 8 || pdf.Attempts != 0 ||
 		pdf.MaxAttempts != 3 || !pdf.OnlyApproved || pdf.OnlyReady || !pdf.RequireLockedItem || pdf.CleaningUp ||
 		len(pdf.ScopeCategories) != 1 || strings.Join(pdf.ScopeCategories[0].CategoryNames, "/") != "全宗/文书/2025 年/永久/办公室" ||
 		pdf.CreatedBy != e.mgrID || pdf.CreatedByName == nil || pdf.ExportFormat != "pdf" {
@@ -80,7 +81,7 @@ func TestExportRunAndDownload(t *testing.T) {
 	pdf = e.waitDone(pdf.ID)
 	images = e.waitDone(images.ID)
 	for _, tk := range []exportTask{pdf, images} {
-		if tk.ProgressDone != 5 || tk.Attempts != 1 || tk.ErrorMessage != nil || tk.OutputSize == nil || *tk.OutputSize <= 0 ||
+		if tk.ProgressDone != 8 || tk.Attempts != 1 || tk.ErrorMessage != nil || tk.OutputSize == nil || *tk.OutputSize <= 0 ||
 			tk.ExpiresAt == nil || tk.Expired || tk.StartedAt == nil || tk.FinishedAt == nil || tk.CleaningUp {
 			t.Fatalf("完成的任务：%+v", tk)
 		}
@@ -107,7 +108,7 @@ func TestExportRunAndDownload(t *testing.T) {
 
 	// 明细：按件、页，分页走完一样。
 	rows := e.files(pdf.ID, 2)
-	if len(rows) != 5 {
+	if len(rows) != 8 {
 		t.Fatalf("明细 %d 页", len(rows))
 	}
 	want := []struct {
@@ -115,7 +116,8 @@ func TestExportRunAndDownload(t *testing.T) {
 		seq  int
 		page int
 		id   uuid.UUID
-	}{{no1, 1, 1, ids[0]}, {no1, 1, 2, ids[1]}, {no2, 2, 1, ids[2]}, {no2, 2, 2, ids[3]}, {no2, 2, 3, ids[4]}}
+	}{{no1, 1, 1, ids[0]}, {no1, 1, 2, ids[1]}, {no2, 2, 1, ids[2]}, {no2, 2, 2, ids[3]}, {no2, 2, 3, ids[4]},
+		{no2, 2, 4, ids[5]}, {no2, 2, 5, ids[6]}, {no2, 2, 6, ids[7]}}
 	for i, r := range rows {
 		w := want[i]
 		if str(r.ArchiveNo) != w.no || r.Seq != w.seq || r.PageNo != w.page || r.FileID != w.id || r.VersionNo != 1 ||
@@ -142,7 +144,7 @@ func TestExportRunAndDownload(t *testing.T) {
 		}
 		entries, names := zipEntries(t, data)
 		manifest := manifestRows(t, entries["清单.csv"])
-		if len(manifest) != 6 || strings.Join(manifest[0], ",") != "档号,页号,zip 内文件名,file_id,snapshot_id,版本号,sha256,原文件名,审核状态" {
+		if len(manifest) != 9 || strings.Join(manifest[0], ",") != "档号,页号,zip 内文件名,file_id,snapshot_id,版本号,sha256,原文件名,审核状态" {
 			t.Fatalf("清单：%v", manifest)
 		}
 		if _, ok := entries["目录.xlsx"]; !ok {
@@ -152,7 +154,8 @@ func TestExportRunAndDownload(t *testing.T) {
 			m := manifest[i+1]
 			zipName := str(r.ArchiveNo) + ".pdf"
 			if tk.ExportFormat == "images" {
-				ext := map[string]string{"image/jpeg": "jpg", "image/png": "png", "image/tiff": "tif"}[r.MimeType]
+				ext := map[string]string{"image/jpeg": "jpg", "image/png": "png", "image/tiff": "tif",
+					"image/bmp": "bmp", "image/gif": "gif", "image/webp": "webp"}[r.MimeType]
 				zipName = str(r.ArchiveNo) + "/" + "000" + strconv.Itoa(r.PageNo) + "." + ext
 				sum := sha256.Sum256(entries[zipName])
 				if hex.EncodeToString(sum[:]) != r.ContentSHA256 {
@@ -196,8 +199,8 @@ func TestExportRunAndDownload(t *testing.T) {
 		exportLogs[0].Detail["version_no"] != float64(1) || exportLogs[0].Detail["snapshot_id"] != rows[1].SnapshotID.String() {
 		t.Errorf("export 日志：%+v", exportLogs)
 	}
-	if n := QueryValue[int](e.Env, `SELECT count(*) FROM file_logs WHERE action = 'export'`); n != 10 {
-		t.Errorf("export 日志 %d 条，期望 10", n)
+	if n := QueryValue[int](e.Env, `SELECT count(*) FROM file_logs WHERE action = 'export'`); n != 16 {
+		t.Errorf("export 日志 %d 条，期望 16", n)
 	}
 	// 导出物的 key。
 	key := QueryValue[string](e.Env, `SELECT output_key FROM export_tasks WHERE id = $1`, pdf.ID)
@@ -264,7 +267,7 @@ collect:
 	}
 	e.mgr.Get("/api/export-tasks/"+images.ID.String()+"/download").ExpectError(http.StatusConflict, "invalid_state")
 	// 明细、任务永久保留。
-	if got := e.files(images.ID, 500); len(got) != 5 {
+	if got := e.files(images.ID, 500); len(got) != 8 {
 		t.Errorf("清理后明细 %d 页", len(got))
 	}
 	// 没过期的照样能下载。

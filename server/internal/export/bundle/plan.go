@@ -92,7 +92,7 @@ type raster struct {
 // analyze 读文件头，定下这一页怎么写进 PDF。ra 是整个原图（导出时是临时文件，Inspect 时是按范围读的数据源）。
 // inspect 为 true 时只做只看文件头就能做的检查（不扫描 PackBits 条带、PNG 只看 IDAT 之前的块和文件末尾）。
 func analyze(ra io.ReaderAt, page *Page, opts Options, inspect bool) (*pagePlan, error) {
-	head := make([]byte, min(page.Size, 8))
+	head := make([]byte, min(page.Size, 12))
 	if err := readFull(ra, head, 0); err != nil {
 		return nil, err
 	}
@@ -113,6 +113,8 @@ func analyze(ra io.ReaderAt, page *Page, opts Options, inspect bool) (*pagePlan,
 		plan, err = analyzePNG(ra, page.Size, opts, inspect)
 	case imagehdr.TIFF:
 		plan, err = analyzeTIFF(ra, page.Size, opts, inspect)
+	case imagehdr.BMP, imagehdr.GIF, imagehdr.WebP:
+		plan, err = analyzeDecoded(ra, page.Size, format, info)
 	}
 	if err != nil {
 		return nil, err

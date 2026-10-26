@@ -45,7 +45,7 @@
 
 | 想试 | 用哪里 |
 |---|---|
-| 上传 | 文件目录里新建一个文件夹，用"上传文件 / 上传文件夹"；客户端的"扫描上传"页选一个本机目录当热文件夹，往里放 JPEG、PNG、TIFF。样本在 `server/testdata/samples/`（`tiff-multipage-2p.tif` 是故意会被拒的多页 TIFF）；同样内容的图在项目里只入库一次 |
+| 上传 | 文件目录里新建一个文件夹，用"上传文件 / 上传文件夹"；客户端的"扫描上传"页选一个本机目录当热文件夹，往里放 JPEG、PNG、TIFF、BMP、GIF、WebP。样本在 `server/testdata/samples/`（名字里带 `multipage` 的是故意会被拒的多页 TIFF、多帧 GIF、动画 WebP）；同样内容的图在项目里只入库一次 |
 | 浏览、看原图 | 「2025 文书档案」下的盒 WS-2025-001（5 个子文件夹 17 页）、盒 WS-2025-002（3 个子文件夹、「附件（含下级）」和盒里直接放的「盒内目录.png」，19 页）：合成的 A4 扫描页，「2025年第一季度办公会议纪要」第 4 页 DPI 不足，「差旅费报销管理办法」第 2 页没有封面。「格式样本」：JPEG（彩色、灰度、EXIF 方向 6）、PNG（1 位、带透明）、TIFF（G4、LZW、无压缩）各一张，没有封面 |
 | 审核分配 | demo_manager → 审核分配：盒 002 和「格式样本」共 27 页待分配 |
 | 审核 | demo_reviewer → 我的审核：盒 001 还有 5 页待审（「2025年第一季度办公会议纪要」2 页、「关于申请购置档案密集架的请示」3 页）；键盘 A 通过、R 驳回 |
@@ -247,7 +247,7 @@ DOCLITE_BACKGROUND=1 client/bin/Doclite.app/Contents/MacOS/Doclite --smoke
 | `DOCLITE_SMOKE_CACHE` | img_cache、tiles 两步：`cold`（默认，先清空自检的缓存，要求全部下载、现切）或 `warm`（要求全部命中；先跑一次 cold） |
 | `DOCLITE_SMOKE_IMG_PROJECT`、`_IMG_FOLDER`、`_IMG_COUNT` | img_cache 一步取哪个项目、文件夹（从项目根起，`/` 分隔）的前几个文件（默认从根起按层找第一个有封面的文件夹、8 个；演示数据里是「盒 WS-2025-002」的那 1 页散页，要多几张可以指定 `2025 文书档案/盒 WS-2025-001/办公室2024年度工作总结`） |
 | `DOCLITE_SMOKE_TILES_PROJECT`、`_TILES_FOLDER`、`_TILES_FILES` | tiles、viewer 两步：默认找文件名含 g4、lzw 的 TIFF；`_TILES_FILES` 指定文件夹里的几个文件（逗号分隔，第一个给 viewer 看，含 JPEG 压缩 TIFF 的列表见 roadmap M6-3b） |
-| `DOCLITE_SMOKE_FLOW_SAMPLES` | 设了才跑主流程五步（M6-4）：本机样本文件夹（单页 JPEG、PNG、TIFF，按文件名取前 2 × COUNT 个）。壳复制一份、每个文件写进本次独有的注释（内容不重复）：壳里上传（`pick_and_enqueue_upload` 用复制的文件夹代替系统对话框）→ 热文件夹（`hotfolder_pick_dir` 用准备好的空文件夹，壳再往里放文件）→ 分给自己、在查看器里看原图、逐页通过 → 把这两个文件夹整个归档、锁定 → 导出，下载地址经 `open_external` 交给壳（自检里不打开系统浏览器），壳用 HTTP 下载核对 zip。账号要有扫描、审核分配、审核、归类、导出菜单（admin）；server 要在执行导出。每次在项目里留下一个「<FOLDER>/自检 <时间>」文件夹和两件锁定的条目 |
+| `DOCLITE_SMOKE_FLOW_SAMPLES` | 设了才跑主流程五步（M6-4）：本机样本文件夹（单页 JPEG、PNG、TIFF、BMP、GIF、WebP，按文件名取前 2 × COUNT 个）。壳复制一份、每个文件写进本次独有的注释（内容不重复）：壳里上传（`pick_and_enqueue_upload` 用复制的文件夹代替系统对话框）→ 热文件夹（`hotfolder_pick_dir` 用准备好的空文件夹，壳再往里放文件）→ 分给自己、在查看器里看原图、逐页通过 → 把这两个文件夹整个归档、锁定 → 导出，下载地址经 `open_external` 交给壳（自检里不打开系统浏览器），壳用 HTTP 下载核对 zip。账号要有扫描、审核分配、审核、归类、导出菜单（admin）；server 要在执行导出。每次在项目里留下一个「<FOLDER>/自检 <时间>」文件夹和两件锁定的条目 |
 | `DOCLITE_SMOKE_FLOW_PROJECT`、`_FOLDER`、`_COUNT`、`_FORMAT` | 主流程的项目（默认第一个能进的）、上级文件夹（默认「客户端自检」）、两种上传各几个（默认 3）、导出格式（`pdf` 默认或 `images`）。归类节点按档号模板用到的层级找或建：全宗 `ZJ`「客户端自检」/ `WS` / `2026` / `Y` / `ZJ` |
 
 其他环境变量：`DOCLITE_DATA_DIR` 换数据目录（默认 `~/Library/Application Support/Doclite/`、`%LOCALAPPDATA%\Doclite\`；自检用其中的 `smoke/`）；`DOCLITE_BACKGROUND=1` 不抢焦点（开发、测试用）；`DOCLITE_LOG_LEVEL=debug`；`DOCLITE_LOG_STDERR=1` 日志同时写到标准错误。删掉数据目录里的 `upload-queue.db` 就是重置上传队列。

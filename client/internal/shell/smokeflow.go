@@ -3,7 +3,7 @@ package shell
 // M6-4：`--smoke` 的主流程（web/src/lib/smoke-flow.ts）：壳里上传、热文件夹、审核看大图、归类、导出下载。只在自检进程里，
 // 设置了 DOCLITE_SMOKE_FLOW_SAMPLES 才跑：
 //
-//	DOCLITE_SMOKE_FLOW_SAMPLES  本机的样本文件夹（单页的 JPEG、PNG、TIFF，按文件名取前 2 × COUNT 个）
+//	DOCLITE_SMOKE_FLOW_SAMPLES  本机的样本文件夹（单页的 JPEG、PNG、TIFF、BMP、GIF、WebP，按文件名取前 2 × COUNT 个）
 //	DOCLITE_SMOKE_FLOW_PROJECT  项目编码；不设时取第一个能进的项目
 //	DOCLITE_SMOKE_FLOW_FOLDER   放自检文件夹的上级（从项目根起，/ 分隔，没有就建），默认「客户端自检」
 //	DOCLITE_SMOKE_FLOW_COUNT    壳里上传、热文件夹各传几个，默认 3（1–20）
@@ -207,7 +207,7 @@ func (r *smokeRun) flowPrepare() (*FlowPrepared, error) {
 		return nil, proxy.InvalidRequest(err.Error())
 	}
 	if len(samples) < 2*cfg.Count {
-		return nil, proxy.InvalidRequest(fmt.Sprintf("%s 里只有 %d 个 JPEG、PNG、TIFF，要 %d 个", smokeFlowSamplesEnv, len(samples), 2*cfg.Count))
+		return nil, proxy.InvalidRequest(fmt.Sprintf("%s 里只有 %d 个支持的图片，要 %d 个", smokeFlowSamplesEnv, len(samples), 2*cfg.Count))
 	}
 	run := "自检 " + time.Now().Format("20060102-150405")
 	dir := filepath.Join(r.s.cfg.DataDir, "flow", run)
@@ -372,7 +372,7 @@ func copyUnique(src, dir, marker string) (string, error) {
 }
 
 // withMarker 往图片里写一段注释：JPEG 在 SOI 后插 COM 段，PNG 在 IHDR 后插 tEXt 块，TIFF 加在文件末尾（不在任何
-// IFD 引用的范围里）。像素不变。
+// IFD 引用的范围里），BMP、GIF、WebP 也加在末尾（像素数据、结尾标记、RIFF 块之后，解码器不看）。像素不变。
 func withMarker(data []byte, marker string) ([]byte, error) {
 	switch {
 	case len(data) > 4 && data[0] == 0xFF && data[1] == 0xD8:
@@ -388,8 +388,10 @@ func withMarker(data []byte, marker string) ([]byte, error) {
 		chunk = append(chunk, body...)
 		chunk = binary.BigEndian.AppendUint32(chunk, crc32.ChecksumIEEE(body))
 		return append(append(append([]byte{}, data[:33]...), chunk...), data[33:]...), nil
-	case len(data) > 8 && (bytes.Equal(data[:4], []byte("II*\x00")) || bytes.Equal(data[:4], []byte("MM\x00*"))):
+	case len(data) > 8 && (bytes.Equal(data[:4], []byte("II*\x00")) || bytes.Equal(data[:4], []byte("MM\x00*"))),
+		len(data) > 12 && (bytes.HasPrefix(data, []byte("BM")) || bytes.HasPrefix(data, []byte("GIF8")) ||
+			bytes.HasPrefix(data, []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WEBP"))):
 		return append(append([]byte{}, data...), marker...), nil
 	}
-	return nil, errors.New("不是 JPEG、PNG、TIFF")
+	return nil, errors.New("不是 JPEG、PNG、TIFF、BMP、GIF、WebP")
 }

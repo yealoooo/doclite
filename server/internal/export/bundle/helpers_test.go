@@ -34,6 +34,12 @@ func mimeOf(name string) string {
 		return "image/jpeg"
 	case ".png":
 		return "image/png"
+	case ".bmp":
+		return "image/bmp"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
 	}
 	return "image/tiff"
 }

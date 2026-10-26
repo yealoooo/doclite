@@ -134,7 +134,7 @@ func TestErrors(t *testing.T) {
 		ms := newMemSource()
 		p := ms.addSample(t, 1, "jpeg-gray.jpg")
 		unknownMIME := p
-		unknownMIME.MIME = "image/gif"
+		unknownMIME.MIME = "image/heic"
 		for name, job := range map[string]*Job{
 			"没有条目":     {Format: FormatPDF},
 			"格式不认识":    {Format: "ofd", Items: []Item{testItem("A", p)}},

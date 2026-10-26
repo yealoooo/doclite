@@ -1,10 +1,11 @@
-// Package imgdecode 把本机的一张图片（JPEG、PNG、经典 TIFF）整张解码成 image.Image，封面（internal/upload）和
-// 切块（internal/tiles）共用这一份：
+// Package imgdecode 把本机的一张图片（JPEG、PNG、经典 TIFF、BMP、GIF、WebP）整张解码成 image.Image，封面
+// （internal/upload）和切块（internal/tiles）共用这一份：
 //
 //   - [Open] 读文件头（internal/imagehdr，和 server 的那份同步的规则：格式、宽高、方向；多页 TIFF 拒绝）；
 //   - [Source.Decode] 整张解码：JPEG 用 image/jpeg，PNG 用 image/png；TIFF 先看压缩方式，JPEG 压缩的（7，以及能
 //     定位到完整 JPEG 的旧式 6）由这个包按条带或分块交给 image/jpeg 再拼成整张（tiffjpeg.go），其余交给
-//     golang.org/x/image/tiff；
+//     golang.org/x/image/tiff；BMP 用 golang.org/x/image/bmp，GIF 用 image/gif（只解第一帧，多帧的读文件头时已经拒绝），
+//     WebP 用 golang.org/x/image/webp（M11-7）；
 //   - 解出来的是文件里存的方向（没转正），宽高和文件头一致；方向的换算见 orient.go。
 //
 // 不缩放、不合成背景（调用方的事）；整张解码要多少内存由调用方按文件头估算、决定解不解。
@@ -16,12 +17,15 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/gif"
 	"image/jpeg"
 	"image/png"
 	"io"
 	"os"
 
+	"golang.org/x/image/bmp"
 	"golang.org/x/image/tiff"
+	"golang.org/x/image/webp"
 
 	"doclite/client/internal/imagehdr"
 )
@@ -30,8 +34,8 @@ import (
 type Kind string
 
 const (
-	KindUnsupportedFormat Kind = "unsupported_format" // 不是 JPEG、PNG、经典 TIFF
-	KindUnsupported       Kind = "unsupported"        // 格式认得，但这种写法解不了（多页 TIFF、12 位 JPEG……）
+	KindUnsupportedFormat Kind = "unsupported_format" // 不是 JPEG、PNG、经典 TIFF、BMP、GIF、WebP
+	KindUnsupported       Kind = "unsupported"        // 格式认得，但这种写法解不了（多页 TIFF、多帧 GIF、12 位 JPEG……）
 	KindCorrupt           Kind = "corrupt"            // 文件坏了
 	KindTooLarge          Kind = "too_large"          // 尺寸超过上限
 	KindIO                Kind = "io"                 // 读本机文件出错（不是文件本身的问题）
@@ -110,6 +114,12 @@ func (s *Source) Decode(ctx context.Context) (img image.Image, err error) {
 		img, err = png.Decode(bufio.NewReaderSize(r, 256<<10))
 	case imagehdr.TIFF:
 		img, err = decodeTIFF(ctx, r, s.Size)
+	case imagehdr.BMP:
+		img, err = bmp.Decode(bufio.NewReaderSize(r, 256<<10))
+	case imagehdr.GIF:
+		img, err = gif.Decode(bufio.NewReaderSize(r, 256<<10))
+	case imagehdr.WebP:
+		img, err = webp.Decode(bufio.NewReaderSize(r, 256<<10))
 	default:
 		return nil, errorf(KindUnsupportedFormat, "不支持的格式 %s", s.Info.Format)
 	}
@@ -135,7 +145,7 @@ func classify(ctx context.Context, err error) error {
 	var ju jpeg.UnsupportedError
 	var pu png.UnsupportedError
 	var tu tiff.UnsupportedError
-	if errors.As(err, &ju) || errors.As(err, &pu) || errors.As(err, &tu) {
+	if errors.As(err, &ju) || errors.As(err, &pu) || errors.As(err, &tu) || errors.Is(err, bmp.ErrUnsupported) {
 		return errorf(KindUnsupported, "解不了这种写法：%v", err)
 	}
 	return errorf(KindCorrupt, "解码失败：%v", err)

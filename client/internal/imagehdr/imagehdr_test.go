@@ -390,8 +390,6 @@ func TestParseErrors(t *testing.T) {
 		kind error
 	}{
 		// 不支持的格式（415）。
-		{"GIF", []byte("GIF89a\x01\x00\x01\x00"), ErrUnsupported},
-		{"BMP", []byte("BM\x00\x00\x00\x00\x00\x00"), ErrUnsupported},
 		{"PDF", []byte("%PDF-1.7\n"), ErrUnsupported},
 		{"文本", []byte("hello"), ErrUnsupported},
 		{"BigTIFF 小端", []byte("II+\x00\x08\x00\x00\x00\x10\x00\x00\x00"), ErrUnsupported},
@@ -476,7 +474,8 @@ func TestReadErrors(t *testing.T) {
 }
 
 func TestFormatAndStoredSize(t *testing.T) {
-	for f, want := range map[Format][2]string{JPEG: {"image/jpeg", "jpg"}, PNG: {"image/png", "png"}, TIFF: {"image/tiff", "tif"}} {
+	for f, want := range map[Format][2]string{JPEG: {"image/jpeg", "jpg"}, PNG: {"image/png", "png"}, TIFF: {"image/tiff", "tif"},
+		BMP: {"image/bmp", "bmp"}, GIF: {"image/gif", "gif"}, WebP: {"image/webp", "webp"}} {
 		if f.MIME() != want[0] || f.Ext() != want[1] {
 			t.Errorf("%s：%s %s", f, f.MIME(), f.Ext())
 		}

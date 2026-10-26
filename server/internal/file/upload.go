@@ -62,8 +62,8 @@ type DuplicateDetails struct {
 	FileName   string `json:"file_name"`
 }
 
-// ObjectKeys 是一个版本的对象 key（硬性规则 7）：`<path_prefix><project_code>/<file_id>/v<no>.<jpg|png|tif>`，
-// 封面 `v<no>.cover.jpg`。
+// ObjectKeys 是一个版本的对象 key（硬性规则 7）：
+// `<path_prefix><project_code>/<file_id>/v<no>.<jpg|png|tif|bmp|gif|webp>`，封面 `v<no>.cover.jpg`。
 type ObjectKeys struct {
 	Original string
 	Cover    string

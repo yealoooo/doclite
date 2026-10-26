@@ -2,13 +2,18 @@ package bundle
 
 import (
 	"bytes"
+	"encoding/hex"
 	"image"
 	"image/color"
+	_ "image/gif"
 	"image/png"
 	"math"
+	"strings"
 	"testing"
 
+	_ "golang.org/x/image/bmp"
 	"golang.org/x/image/tiff"
+	_ "golang.org/x/image/webp"
 )
 
 // 常见扫描格式：原样嵌入的核对嵌入的字节等于原图里的压缩数据，转换的解出 PDF 里的图像和原图逐像素比较。
@@ -465,5 +470,94 @@ func TestDPIPerAxis(t *testing.T) {
 		if x, y := chooseDPI(c.x, c.y); x != c.wantX || y != c.wantY {
 			t.Errorf("chooseDPI(%v, %v) = %v, %v，应该是 %v, %v", c.x, c.y, x, y, c.wantX, c.wantY)
 		}
+	}
+}
+
+// BMP、GIF、WebP：一律转换，解出 PDF 里的图像和 Go 解码器给的原图逐像素比较（调色板查表后比较颜色；透明度和 SMask
+// 比较，颜色只比不透明的像素）。
+func TestDecodedFormats(t *testing.T) {
+	cases := []struct {
+		file     string
+		dpi      float64 // 页面按这个 DPI 算（没写时按 300）
+		bpc      float64
+		indexed  bool
+		hasAlpha bool
+	}{
+		{"bmp-rgb24.bmp", 7874 * 0.0254, 8, false, false},
+		{"bmp-1bit.bmp", 11811 * 0.0254, 1, true, false},
+		{"bmp-gray4.bmp", 5905 * 0.0254, 4, true, false},
+		{"gif-single.gif", 300, 4, true, false},
+		{"webp-lossy.webp", 300, 8, false, false},
+		{"webp-lossy-alpha.webp", 300, 8, false, true},
+		{"webp-lossless-alpha.webp", 300, 8, false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.file, func(t *testing.T) {
+			ref, _, err := image.Decode(bytes.NewReader(sample(t, c.file)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			src := newMemSource()
+			d := pdfOf(t, Options{}, src, src.addSample(t, 1, c.file))
+			pg := onePage(t, d)
+			assertBox(t, pg, 40*72/c.dpi, 56*72/c.dpi)
+			img := onlyImage(t, pg)
+			assertFills(t, img, pg)
+			if img.dict["BitsPerComponent"] != c.bpc {
+				t.Fatalf("位深是 %v，应该是 %v", img.dict["BitsPerComponent"], c.bpc)
+			}
+			var lookup []byte
+			if cs, ok := d.resolve(img.dict["ColorSpace"]).([]any); ok {
+				if cs[0] != pdfName("Indexed") {
+					t.Fatalf("颜色空间是 %v", cs)
+				}
+				if lookup, err = hex.DecodeString(strings.TrimPrefix(cs[3].(string), "hex:")); err != nil {
+					t.Fatal(err)
+				}
+			} else if img.dict["ColorSpace"] != pdfName("DeviceRGB") {
+				t.Fatalf("颜色空间是 %v", img.dict["ColorSpace"])
+			}
+			if (lookup != nil) != c.indexed {
+				t.Fatalf("Indexed：%v，应该 %v", lookup != nil, c.indexed)
+			}
+			colors := decodeImage(t, d, img.dict, img.data)
+			var alphas [][]uint32
+			if sm, ok := img.dict["SMask"]; ok != c.hasAlpha {
+				t.Fatalf("SMask：%v，应该 %v", ok, c.hasAlpha)
+			} else if ok {
+				smask := d.resolve(sm).(*pdfStream)
+				alphas = decodeImage(t, d, smask.dict, smask.data)
+			}
+			translucent := 0
+			for y := range 56 {
+				for x := range 40 {
+					want := color.NRGBAModel.Convert(ref.At(x, y)).(color.NRGBA)
+					a := uint32(255)
+					if alphas != nil {
+						a = alphas[y][x]
+					}
+					if a != uint32(want.A) {
+						t.Fatalf("(%d,%d) 的透明度是 %d，原图是 %d", x, y, a, want.A)
+					}
+					if a != 255 {
+						translucent++
+						continue
+					}
+					var got [3]uint32
+					if lookup != nil {
+						i := colors[y][x]
+						got = [3]uint32{uint32(lookup[3*i]), uint32(lookup[3*i+1]), uint32(lookup[3*i+2])}
+					} else {
+						copy(got[:], colors[y][3*x:3*x+3])
+					}
+					if got != [3]uint32{uint32(want.R), uint32(want.G), uint32(want.B)} {
+						t.Fatalf("(%d,%d) 的像素是 %v，原图是 %v", x, y, got, want)
+					}
+				}
+			}
+			if c.hasAlpha && translucent == 0 {
+				t.Fatal("样本里没有透明的像素，测不出 SMask")
+			}
+		})
 	}
 }

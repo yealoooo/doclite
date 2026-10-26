@@ -490,3 +490,18 @@
 - **没做（用户 2026-10-26：情况不多，先不考虑）：** PDF 导出前的临时盘检查仍按"最大一件"算，没改成"最大一页"。
 
 合并后完整测试通过（API 测试 469 秒）。web 已重新打包，client 已重新编译。
+
+### [x] M11-7 上传支持 BMP、GIF、WebP（用户 2026-10-26）
+- **做法：**
+  - 文件头（`server/internal/platform/imagehdr`，客户端 `client/internal/imagehdr` 同步）：按魔数认 BMP（`BM`）、GIF（`GIF87a`/`GIF89a`）、WebP（`RIFF????WEBP`），新文件 `bmp.go`、`gif.go`、`webp.go`。宽高；DPI 只有 BMP 有（像素/米四舍五入，0 算没写）；颜色：BMP（≤ 8 位）、GIF 是调色板，调色板全是灰色按单通道算（1 位 bw、其余 gray），否则 color，WebP 都是 color；方向都按 1。mime `image/bmp`、`image/gif`、`image/webp`，key 扩展名 bmp、gif、webp（硬性规则 7）；`mime_type` 没有 CHECK，不改表。
+  - 拒收：多帧 GIF（沿块数到第二个图像）、动画 WebP（VP8X 的动画标记、ANIM/ANMF 块）按多页（400，提示保存成单张）；Go 解码不了的写法 `ParseUpload` 按 `ErrUnsupportedEncoding` 拒（和 `x/image/bmp` 的 decodeConfig 一一对应）：BMP 文件头不是 40/108/124 字节（OS/2 等）、平面数不是 1、RLE / 位域（掩码不是默认 BGRA 的）/ 内嵌 JPEG、PNG、每像素不是 1/2/4/8/24/32 位、调色板项数超过位深、像素数据不紧跟在头和调色板后面；GIF 第一帧没占满画布；WebP 透明度标记和 ALPH 对不上、ALPH 配无损、ALPH 压缩方式不是 0/1。其余结构问题（没有调色板、LZW 码长不对、帧超出画布、VP8 不是关键帧、图像和画布尺寸不一致……）是 `invalid_image`。
+  - 导出（`internal/export/bundle/decoded.go`）：三种都不能原样放，一律转换——整张解码（`x/image/bmp`、`image/gif`、`x/image/webp`），调色板仍是 Indexed（位深按项数取 1/2/4/8），其余 8 位 RGB（有损 WebP 的 YCbCr 按 `color.YCbCrToRGB`），有透明时和 PNG 一样写 8 位 SMask；受 `ConvertMemoryLimit`（BMP 按 4 字节/像素、调色板 1；GIF 1；WebP 有损 3、无损 8）。只看文件头就判"不支持"的和上传一致；原图包原样带 .bmp/.gif/.webp。
+  - 客户端：`imgdecode` 解三种（封面、切块共用），切块内存估算加三种；上传、热文件夹、重扫的扩展名和系统对话框过滤加 .bmp .gif .webp；原图缓存扩展名；`smokeflow` 的加注释也认三种。web 只有审核详情的格式名（BMP、GIF、WebP）。
+  - 样本：两边 `testdata/samples` 各加 9 个 40×56 的小文件（BMP 24 位 / 1 位 / 4 位灰，GIF 单帧 / 两帧，WebP 有损 / 有损带透明 / 无损带透明 / 动画，共约 11 KB，ImageMagick 7 + libwebp 生成，命令写在 README）；encoding 夹具加 8 个（reject-bmp-rle8、-rgb565、-os2，reject-gif-partial-frame，reject-webp-alpha-flag，accept-bmp-bitfields-v4、-topdown，accept-gif-gray）。
+- **测试：** imagehdr 两边（样本表、`TestParseNewFormats`、`TestParseNewFormatErrors`、`TestParseUploadNewFormats`、夹具）；bundle 的 `TestDecodedFormats`（PDF 里的像素和解码器逐像素比较、SMask）、`TestUploadCheckMatchesExport` 覆盖新格式且对上传通过的真的转换一次；API：`TestUploadRareEncodings`（三种的宽高、DPI、颜色、mime、key，多帧 / 动画拒收）、`TestExportRunAndDownload`（加 BMP、GIF、WebP 各一页，PDF 和原图包）；客户端封面（`TestCoverSamples`）、切块（`TestTilesBMPGIFWebP`）、扩展名、上传前检查。
+- **验收清单：** FILE-26（准备样本的脚本加了 `formats/`）；FILE-08、FILE-21 的提示原文跟着改了。
+- **须知：**
+  - web 的产物包在 worktree 里重新打过（版本仍是 0.1.0）；`web/release/` 不提交，合并后在主目录 `cd web && npm run release` 覆盖同版本的包，客户端再按 WEB_VERSION 取。
+  - 32 位 BMP 用 V4/V5 文件头时 `x/image/bmp` 按文件里的 alpha 解；有的软件把 alpha 全写成 0，这种图看图和导出都会是全透明（铺白后是白页），和解码器的行为一致，没有特别处理。
+  - GIF、WebP 的 DPI 为空，导出 PDF 按 300 DPI 算页面尺寸。
+- **遗留：** 热文件夹的"写完判定"只查 JPEG、PNG 的文件尾，BMP、GIF、WebP 和 TIFF 一样不查；项目的"扫描参数建议"里的格式仍只有 JPEG、PNG、TIFF（不在这次范围）。

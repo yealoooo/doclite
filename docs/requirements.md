@@ -51,12 +51,12 @@
 4. **只能整个文件夹归档。** 件记住来源文件夹（`archive_items.source_folder_id`，一个文件夹只对应一件）；页 = 归档时文件夹里的文件，挂接只存 file_id、不存快照；归类员永远看到最新快照。归类树这边不能单独挂页、移页、排页序【用户 2026-10-19，取代 2026-10-14 Q3、Q4 的按页挂接和待归类池】。
 5. **审核记下审的快照，但不锁定。** 审后仍可编辑（插件阶段），状态不变。
 6. **导出只从归类发起。** 范围是归类节点或条目，只含已归类文件；"只导出审核通过的"每次勾选。
-7. **S3 key 按 ID。** `<path_prefix><project_code>/<file_id>/v<no>.<jpg|png|tif>`（按文件头格式），封面 `v<no>.cover.jpg`；移动时 key 不变。
+7. **S3 key 按 ID。** `<path_prefix><project_code>/<file_id>/v<no>.<jpg|png|tif|bmp|gif|webp>`（按文件头格式；bmp、gif、webp 是 2026-10-26 加的），封面 `v<no>.cover.jpg`；移动时 key 不变。
 8. **树用 parent_id + path_code。** 每层 5 位数字加点（`00001.00003.`），字节序比较；编码由父节点 last_child_no 原子分配、不回收；移动前按前缀判环。
 9. **软删除。** 只写 deleted_at，不做回收站；文件操作写 file_logs，其他写 audit_logs。
 10. **权限只到菜单级。** 接口声明菜单码，中间件校验，无权 403；角色全局，进项目靠项目授权，admin 进所有项目。
 11. **server 不做图像处理。** 只读文件头，不解码、不修改、不 OCR、不分析；封面由客户端生成（长边 400 的 JPEG），server 只校验。只约束 server，壳可以解码。
-    - **唯一例外**【用户 2026-10-15】：导出 PDF 时，能原样嵌入的页原样嵌入；放不进的（带透明的 PNG、隔行 PNG、TIFF 分平面、少见压缩）由 server 无损转换，像素不变。只在导出模块。
+    - **唯一例外**【用户 2026-10-15】：导出 PDF 时，能原样嵌入的页原样嵌入；放不进的（带透明的 PNG、隔行 PNG、TIFF 分平面、少见压缩，BMP、GIF、WebP 全部）由 server 无损转换，像素不变。只在导出模块。
 12. **server 不缓存图片。** 工作站用预签名 URL 直连 S3，签名时间按天取整；本机缓存由壳按 file_id + snapshot_id 存。
 13. **后台任务在 server 进程内**，background_jobs + `FOR UPDATE SKIP LOCKED` 领取；v1 只有导出和存储迁移（M7-2，用户 2026-10-16）。
 14. **大文件流式。** 上传边写临时文件边算 sha256，不把请求体读进内存。
@@ -228,7 +228,7 @@
 - **流程**：原图流式写临时文件并算 sha（超限 413 `payload_too_large`，不符 400 `checksum_mismatch`）→ 读文件头 → 校验封面 → 预判重复 → 事务外传原图和封面到默认存储 → 短事务加锁、复查重、写 files / 快照 v1 original / folder_files unassigned / upload 日志 → 删临时文件 → 发 `files.changed`。
   - 收完请求体后"传 S3 → 写库 → 发事件"必须做完，不受客户端断开影响。业务错误要读完剩余请求体再返回。请求体空闲 60 秒按 400。
   - 写库失败留下的对象只记警告。对象带 `Cache-Control: private, max-age=<预签名有效期>, immutable`，元数据存原始文件名。临时文件总要删，启动时清残留（可简化：原版为多实例共用临时目录做了文件锁）。
-- **文件头**（不解码像素）：按魔数只收 JPEG、PNG、TIFF；其他（含 BigTIFF）415 `unsupported_media_type`；空、截断、读不出 400 `invalid_image`。读宽高、DPI（四舍五入；没写为空，显示"未知"）、颜色模式（调色板 color，1 位 bw，单通道 gray，其余 color）、方向（JPEG 看 EXIF，TIFF 看 Orientation，PNG 不看；5–8 交换宽高，存转正后的）。多页 TIFF 拒绝（400，提示拆页）；像素 > `MAX_IMAGE_PIXELS`（3 亿）400。（可简化：原版对畸形 JPEG/EXIF 容错很细，常见文件即可，但壳读方向要和 server 一致。）
+- **文件头**（不解码像素）：按魔数只收 JPEG、PNG、TIFF、BMP（`BM`）、GIF（`GIF87a`/`GIF89a`）、WebP（`RIFF????WEBP`）【BMP、GIF、WebP 用户 2026-10-26 加】；其他（含 BigTIFF、HEIC）415 `unsupported_media_type`；空、截断、读不出 400 `invalid_image`。读宽高、DPI（四舍五入；没写为空，显示"未知"；BMP 看像素/米，0 算没写；GIF、WebP 没有 DPI）、颜色模式（调色板 color，1 位 bw，单通道 gray，其余 color；BMP（≤ 8 位）、GIF 只有调色板，调色板全是灰色时按单通道算——1 位 bw、其余 gray，否则 color；WebP 都是 color）、方向（JPEG 看 EXIF，TIFF 看 Orientation，PNG、BMP、GIF、WebP 不看；5–8 交换宽高，存转正后的）。多页 TIFF、多帧 GIF、动画 WebP 拒绝（400，提示拆页或保存成单张）；BMP、GIF、WebP 里 Go 解码不了的写法上传时按文件头拒绝（400，提示换个保存格式重扫）：BMP 的 OS/2 和少见版本文件头、RLE / 位域 / 内嵌 JPEG 或 PNG、16 位，GIF 第一帧没有占满画布，WebP 透明度标记和数据对不上；像素 > `MAX_IMAGE_PIXELS`（3 亿）400。（可简化：原版对畸形 JPEG/EXIF 容错很细，常见文件即可，但壳读方向要和 server 一致。）
 - **封面**【用户 2026-09-28】：JPEG，长边 400（不放大），质量约 75，按转正后的方向、不带 EXIF 方向，透明铺白。只由客户端（壳）本机生成【M10-2：浏览器只是开发工具，浏览器上传和前端生成封面的代码已删】；生成不了就不带。server 校验：≤ 256 KiB、是 JPEG 有 SOF、以 `FF D9` 结尾、长边 ≤ 400 且 ≤ 原图、方向 2–8 拒绝、横竖一致、短边比例差 ≤ 1 像素；不合规 400 `invalid_cover`（什么都没写），客户端去掉封面重传：**封面可以缺，不能因封面丢页**。
 - **查重**【用户 2026-09-27】：同项目未删除文件当前版本 sha 相同 → 409 `duplicate_content`（details 带已有文件位置）；别的项目不算。**先判断断网重试**：同文件夹有 upload_name 和 sha 都相同的文件 → 200 返回已有文件。没有"仍然上传"，要保留同内容用复制。壳的预检 `files:check {file_name, sha256, size}` → `{duplicate, already_uploaded, final_name}`。
 - **响应** 201：file_id、snapshot_id、folder_file_id、file_name、renamed、sort_no、version_no、宽高、dpi、color_mode、file_size、has_cover、warnings（`low_dpi` < 200、`dpi_unknown`）。
@@ -358,11 +358,11 @@
 
 **冻结**【Q4】：点导出那一刻在一致快照里定下条目、页和每页的最新快照（export_task_files），连同条目当时的档号、题名、著录、节点名称链、状态（原版存 job payload，写后不改、job 行永久保留【总控】）。之后的变化不影响这次导出，归入交付后变更。建任务不拿树锁。
 
-**导出物**【Q2、Q3】：一个 zip（不压缩、UTF-8 名、> 4 GB 可用）。PDF 每件 `<档号>.pdf` 平铺；原图包每件 `<档号>/0001.<jpg|tif|png>`（保留原格式）。都附 `目录.xlsx`（每件：序号、档号、题名、各著录项、页数、状态、分类路径；首行加粗冻结；全文本）和 `清单.csv`（UTF-8 BOM、CRLF；每页：档号、页号、zip 内文件名、file_id、snapshot_id、版本、sha256、原文件名、审核状态）——每页能反查的依据；原文件名以 `= + - @` 等开头加 `'`。
+**导出物**【Q2、Q3】：一个 zip（不压缩、UTF-8 名、> 4 GB 可用）。PDF 每件 `<档号>.pdf` 平铺；原图包每件 `<档号>/0001.<jpg|tif|png|bmp|gif|webp>`（保留原格式）。都附 `目录.xlsx`（每件：序号、档号、题名、各著录项、页数、状态、分类路径；首行加粗冻结；全文本）和 `清单.csv`（UTF-8 BOM、CRLF；每页：档号、页号、zip 内文件名、file_id、snapshot_id、版本、sha256、原文件名、审核状态）——每页能反查的依据；原文件名以 `= + - @` 等开头加 `'`。
 
 - 名字 = 档号：Windows 非法字符换 `_`；结尾点或空格加 `_`；保留名在第一个点前那段后加 `_`（`con.2025` → `con_.2025`）；重名（不分大小写）或撞目录、清单名时加 ` (2)`…
 - **PDF 1.7**：一页一图铺满；Title 题名、Subject 档号。尺寸 = 像素 × 72 / DPI，横纵分别算：100–2400 算合理，一个合理而另一个 ≥ 50 时各用各的（传真 204×98 不压扁），否则都用合理的那个，都不合理按 300【总控】。JPEG / TIFF 方向用变换转正。
-- **原样嵌入**【Q1】：JPEG → DCTDecode；PNG（不隔行无透明）→ Flate + 预测器；TIFF 无压缩、LZW、Deflate、PackBits、G3/G4、JPEG → 对应过滤器，多条带拼一页；调色板 → Indexed。**放不进的无损转换**（Flate，透明转 SMask）。（可简化：原版还处理了 16 位预测器、预乘 alpha、旧式 JPEG-in-TIFF、条带 > 1024、> 10 GB 等；重写保证常见扫描格式，罕见的无损转换，转不了按不支持报错。）
+- **原样嵌入**【Q1】：JPEG → DCTDecode；PNG（不隔行无透明）→ Flate + 预测器；TIFF 无压缩、LZW、Deflate、PackBits、G3/G4、JPEG → 对应过滤器，多条带拼一页；调色板 → Indexed。**放不进的无损转换**（Flate，透明转 SMask）：BMP、GIF、WebP 都要转换——整张解码（`x/image/bmp`、`image/gif`、`x/image/webp`），调色板仍是 Indexed，其余 8 位 RGB（有损 WebP 的 YCbCr 按标准公式转），受转换内存上限约束。（可简化：原版还处理了 16 位预测器、预乘 alpha、旧式 JPEG-in-TIFF、条带 > 1024、> 10 GB 等；重写保证常见扫描格式，罕见的无损转换，转不了按不支持报错。）
 - **出错**：任一页有问题（大小或 sha 不符、格式不符、损坏、不支持）整个导出失败、不跳过；再把剩下的页只看文件头查一遍，一次列出全部问题页（档号、页号、file_id、snapshot_id、原因），提示重扫或移出后重导；不重试。
 
 **执行**【Q7】：同时 ≤ 2 个（`JOB_CONCURRENCY`），其余排队；可重试的失败（S3、临时盘、写库）自动重试，一共最多执行 3 次（max_attempts），重试前等 30 秒 × 4^(n−1)（30 秒、2 分钟…，最多 1 小时），复用同一 job 行。一次一件一页，页从 S3 流式读到临时目录，zip 边生成边分片上传；开始前查临时盘（PDF 要最大一件原图 × 1.2）。进度按页、≤ 每秒一次。成功时每页一条 file_logs `export`，和任务 done 同一事务。导出物 key `<path_prefix>exports/<project_code>/<task_id>/export-<第几次>.zip`。
@@ -451,6 +451,7 @@
 - **2026-10-19（看板简化，Mockup `doclite-project/doclite-dashboard-redesign.html` v2）**：去掉矩阵、多色进度条和"待办"，只要简单的统计——一行五个数（已上传 → 审核通过 → 已归档 → 已锁定 → 可导出）+ 按文件夹的表（页数、审核通过、已归档、已锁定）；审核按页，归档、锁定、导出按件（页数做补充）；同意为此给 catalog-summary 加字段（不改表）。见 5.10。
 - **2026-10-25**：扫描参数建议、存储卡片用量（用户同意加字段）：项目设置加 `scan_hint`（JSON 里的键，不改表），`GET /api/projects` 每项带 `scan_hint`，扫描页热文件夹卡片显示；存储列表每项带 `snapshot_count`、`snapshot_bytes`，卡片显示用量。见 3.4、5.3、5.4、第 6 节 /scan 页。
 - **2026-10-25**：文件夹内调序、文件名搜索和排序（用户同意新增接口 `PUT folders/{id}/order`、`GET folders/{id}/search`，不改表）。见 5.5。
+- **2026-10-26**：上传加 BMP、GIF、WebP（M11-7），要能上传、在客户端看图（封面、切块）、导出 PDF；其余照旧——多页 TIFF、多帧 GIF、动画 WebP、少见编码（算术编码 JPEG、JPEG 2000 等）、HEIC 仍然拒收，新格式里 Go 解码不了的写法上传时就拒收。key 扩展名 bmp、gif、webp（硬性规则 7），不改表。见 5.6、5.11。
 
 ## 10. 总控代定的规则
 

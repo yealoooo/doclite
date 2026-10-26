@@ -23,7 +23,7 @@
   - HTTP：标准库 `net/http`（1.22 起的方法 + 路径路由），中间件自己写；日志 `log/slog`。
   - 数据库：`github.com/jackc/pgx/v5`（pgxpool），手写 SQL，不用 ORM。迁移：自己写一个小执行器，`embed` 迁移目录、按文件名顺序执行、记在 `schema_migrations` 表里，SQL 文件原样沿用。
   - 对象存储：`github.com/aws/aws-sdk-go-v2`（s3、分片上传）；预签名用 SDK 的 v4 签名器并**指定签名时间**（按天取整，硬性规则 12）。
-  - 其他：`golang.org/x/crypto/argon2`（密码）、`github.com/google/uuid`（UUIDv7 主键）、`github.com/xuri/excelize/v2`（导出的目录.xlsx）、标准库 `archive/zip`、`image/jpeg`、`image/png`、`golang.org/x/image/tiff`（只在导出 PDF 需要无损转换时解码）。PDF 自己写最小的写入器（为了原样嵌入压缩数据）。
+  - 其他：`golang.org/x/crypto/argon2`（密码）、`github.com/google/uuid`（UUIDv7 主键）、`github.com/xuri/excelize/v2`（导出的目录.xlsx）、标准库 `archive/zip`、`image/jpeg`、`image/png`、`golang.org/x/image/tiff`、`image/gif`、`golang.org/x/image/bmp`、`golang.org/x/image/webp`（只在导出 PDF 需要无损转换时解码）。PDF 自己写最小的写入器（为了原样嵌入压缩数据）。
   - 新加依赖要纯 Go（不要 cgo）、许可证宽松；在任务返回里列出来。
 - **数据库**：生产 PostgreSQL 18，开发用远程服务器上的 18.6（见"开发环境"），只用 16 也有的特性（主键由应用生成 UUIDv7）。
 - **存储**：只支持 S3 兼容存储，默认 SeaweedFS。
@@ -57,7 +57,7 @@ server/                 Go 模块 doclite/server（只提供 /api）
       s3/                   对象读写、分片上传、预签名
       events/               项目实时通道（SSE）
       jobs/                 后台任务执行器（导出、存储迁移）
-      imagehdr/             JPEG、PNG、TIFF 文件头解析（不解码像素；客户端有一份副本，改动两边同步）
+      imagehdr/             JPEG、PNG、TIFF、BMP、GIF、WebP 文件头解析（不解码像素；客户端有一份副本，改动两边同步）
       names/                文件名、Windows 保留名、编码等规则
       archiveno/            档号模板的解析和渲染（catalog、project 用）
       memo/                 进程内短时缓存（单飞 + TTL，键里带 events.Bus 的 Version；看板、审核计数用）
@@ -130,7 +130,7 @@ docs/
 4. **只能整个文件夹归档。** 条目记住来源文件夹（`archive_items.source_folder_id`，一个文件夹只对应一件）；`archive_item_files` 只存 file_id，不存快照。归类这边不能单独挂页、移页、排页序（用户 2026-10-19）。
 5. **审核记录审的是哪个快照，但不锁定。**
 6. **导出只从归类发起。** 只包含已归类的文件；"只导出审核通过的"由用户每次勾选。
-7. **S3 key 按 ID 生成**：`<path_prefix><project_code>/<file_id>/v<no>.<jpg|png|tif>`，封面 `v<no>.cover.jpg`。
+7. **S3 key 按 ID 生成**：`<path_prefix><project_code>/<file_id>/v<no>.<jpg|png|tif|bmp|gif|webp>`，封面 `v<no>.cover.jpg`。
 8. **树用 `parent_id` + `path_code`**：每层 5 位数字加一个点，按字节序比较（`COLLATE "C"`），编码由父节点 `last_child_no` 原子分配，不回收。
 9. **软删除。** 只写 `deleted_at`；文件的操作写 `file_logs`，其他变更写 `audit_logs`。
 10. **权限只到菜单级。** 每个接口声明自己需要的菜单码，中间件统一校验，无权 403；能进哪些项目由项目授权决定，admin 能进所有项目。

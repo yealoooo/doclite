@@ -25,12 +25,21 @@
 | `tiff-g4-1bit.tif` | TIFF | 2480×3508 | 300 | bw | 1 | 通过 | CCITT G4，1 位（WhiteIsZero），最常见的黑白扫描件 |
 | `tiff-jpeg-ycbcr.tif` | TIFF | 595×842 | 72 | color | 1 | 通过 | JPEG 压缩（Compression=7），YCbCr |
 | `tiff-multipage-2p.tif` | TIFF | 827×1169 | 100 | gray | 1 | 多页 | 两页，LZW，8 位灰度（WhiteIsZero）；上传应 400 并提示拆页 |
+| `bmp-rgb24.bmp` | BMP | 40×56 | 200 | color | 1 | 通过 | 24 位，BITMAPINFOHEADER，像素/米 7874（M11-7） |
+| `bmp-1bit.bmp` | BMP | 40×56 | 300 | bw | 1 | 通过 | 1 位，调色板是黑白两色 |
+| `bmp-gray4.bmp` | BMP | 40×56 | 150 | gray | 1 | 通过 | 4 位调色板，16 级灰 |
+| `gif-single.gif` | GIF | 40×56 | 0 | color | 1 | 通过 | 单帧，16 色调色板；GIF 没有 DPI |
+| `gif-multipage-2f.gif` | GIF | 40×56 | 0 | color | 1 | 多页 | 两帧的动画；上传应 400 并提示保存成单张 |
+| `webp-lossy.webp` | WebP | 40×56 | 0 | color | 1 | 通过 | 有损（VP8）；WebP 没有 DPI |
+| `webp-lossy-alpha.webp` | WebP | 40×56 | 0 | color | 1 | 通过 | 有损带透明（VP8X + ALPH + VP8） |
+| `webp-lossless-alpha.webp` | WebP | 40×56 | 0 | color | 1 | 通过 | 无损带透明（VP8L） |
+| `webp-multipage-anim.webp` | WebP | 40×56 | 0 | color | 1 | 多页 | 两帧的动画（VP8X + ANIM + ANMF）；上传应 400 并提示保存成单张 |
 
 总共约 3.8 MB。
 
 ## 怎么来的
 
-前 11 个由上一版的 `gen-samples` 生成（`../bak/doclite-v3/shell/src-tauri/examples/gen-samples.rs`，路径相对于仓库根目录；种子固定为 20261015，同样的参数输出同样的字节），按大小挑了不同的 DPI，让总量在几 MB 以内。bak 搬过目录，`cargo run` 可能因为编译缓存里的旧路径失败，这时直接运行已编译好的 `target/release/examples/gen-samples`（参数相同）：
+JPEG、PNG、TIFF 的前 11 个由上一版的 `gen-samples` 生成（`../bak/doclite-v3/shell/src-tauri/examples/gen-samples.rs`，路径相对于仓库根目录；种子固定为 20261015，同样的参数输出同样的字节），按大小挑了不同的 DPI，让总量在几 MB 以内。bak 搬过目录，`cargo run` 可能因为编译缓存里的旧路径失败，这时直接运行已编译好的 `target/release/examples/gen-samples`（参数相同）：
 
 ```sh
 cd ../bak/doclite-v3/shell/src-tauri
@@ -49,7 +58,26 @@ tiffutil -cat /tmp/mp/tiff-g4-1bit-p1.tif /tmp/mp/tiff-g4-1bit-p2.tif -out /tmp/
 tiffutil -lzw /tmp/mp/cat.tif -out tiff-multipage-2p.tif
 ```
 
-方向 6 的 TIFF、BigTIFF、截断、IFD 成环这类边界情况不放文件，在 imagehdr 的测试里用代码现场拼。
+BMP、GIF、WebP 的 9 个（M11-7，40×56 的小页面，共约 11 KB）用本机的 ImageMagick 7 和 libwebp（`cwebp`、`img2webp`）生成：
+
+```sh
+magick -size 40x56 xc:white -fill '#1f4e9c' -draw 'rectangle 0,0 39,7' -fill black -draw 'rectangle 2,10 9,17' \
+  -fill gray30 -draw 'rectangle 12,12 36,13' -draw 'rectangle 4,22 36,23' -draw 'rectangle 4,28 34,29' \
+  -draw 'rectangle 4,34 30,35' -fill '#cc2222' -draw 'circle 30,47 30,42' base.png
+magick base.png -fill '#2a8a2a' -draw 'rectangle 4,40 16,52' base2.png
+magick base.png -alpha set -channel A -fx 'j<8?0.4:(i>28&&j>40?0:1)' +channel alpha.png
+magick base.png -type TrueColor -density 200 -units PixelsPerInch BMP3:bmp-rgb24.bmp
+magick base.png -colorspace Gray -threshold 60% -type Bilevel -density 300 -units PixelsPerInch BMP3:bmp-1bit.bmp
+magick base.png -colorspace Gray -colors 16 -type Palette -density 150 -units PixelsPerInch BMP3:bmp-gray4.bmp
+magick base.png -colors 16 gif-single.gif
+magick -delay 50 base.png base2.png -loop 0 gif-multipage-2f.gif
+cwebp -quiet -q 80 base.png -o webp-lossy.webp
+cwebp -quiet -q 80 alpha.png -o webp-lossy-alpha.webp
+cwebp -quiet -lossless alpha.png -o webp-lossless-alpha.webp
+img2webp -loop 0 -lossy base.png base2.png -o webp-multipage-anim.webp
+```
+
+方向 6 的 TIFF、BigTIFF、截断、IFD 成环、少见写法的 BMP 这类边界情况不放文件，在 imagehdr 的测试里用代码现场拼。
 
 ## 改动时
 

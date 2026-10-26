@@ -65,7 +65,7 @@ func TestIgnoreRules(t *testing.T) {
 		}
 	}
 	for name, want := range map[string]bool{"a.JPG": true, "a.jpeg": true, "a.Tif": true, "a.tiff": true, "a.png": true,
-		"a.pdf": false, "a.jpg.part": false, "jpg": false} {
+		"a.BMP": true, "a.gif": true, "a.webp": true, "a.pdf": false, "a.heic": false, "a.jpg.part": false, "jpg": false} {
 		if SupportedImage(name) != want {
 			t.Errorf("SupportedImage(%q) 应为 %v", name, want)
 		}
@@ -238,6 +238,9 @@ func TestCheckEncoding(t *testing.T) {
 		{enc + "reject-jpeg-arith.jpg", "不支持的图片格式（算术编码的 JPEG），请换个保存格式重扫"},
 		{enc + "reject-tiff-jpeg2000.tif", "不支持的图片格式（JPEG 2000 压缩的 TIFF），请换个保存格式重扫"},
 		{enc + "accept-tiff-cmyk.tif", ""},
+		{enc + "reject-bmp-rle8.bmp", "不支持的图片格式（RLE 压缩的 BMP），请换个保存格式重扫"},
+		{enc + "accept-gif-gray.gif", ""},
+		{"../../testdata/samples/webp-lossy-alpha.webp", ""},
 		{"../../testdata/samples/tiff-jpeg-ycbcr.tif", ""},
 		{"../../testdata/samples/tiff-multipage-2p.tif", ""}, // 多页由 server 判断
 		{enc + "不存在.jpg", ""},

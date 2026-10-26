@@ -59,7 +59,7 @@ func smokeRescanConfig() SmokeRescan {
 // pickRescanDialog 用系统对话框选一个重扫件。取消时返回空。
 func (s *Shell) pickRescanDialog() (string, error) {
 	return s.openDialog().SetTitle("选择重扫件（一张）").CanChooseFiles(true).CanChooseDirectories(false).
-		ShowHiddenFiles(false).ResolvesAliases(true).AddFilter("图片（JPEG、PNG、TIFF）", imageFilter).
+		ShowHiddenFiles(false).ResolvesAliases(true).AddFilter("图片（JPEG、PNG、TIFF、BMP、GIF、WebP）", imageFilter).
 		PromptForSingleSelection()
 }
 

@@ -108,6 +108,9 @@ const formatName = computed(() => {
   if (m === 'image/jpeg') return 'JPEG'
   if (m === 'image/png') return 'PNG'
   if (m === 'image/tiff') return 'TIFF'
+  if (m === 'image/bmp') return 'BMP'
+  if (m === 'image/gif') return 'GIF'
+  if (m === 'image/webp') return 'WebP'
   return m || '—'
 })
 

@@ -24,7 +24,7 @@ import (
 //	├── tmp/                            下载、切块的临时文件（启动时清空）
 //	└── <file_id>/
 //	    ├── <snapshot_id>.cover.jpg     封面
-//	    ├── <snapshot_id>.original.<ext> 原图（jpg、png、tif，认不出的 bin）
+//	    ├── <snapshot_id>.original.<ext> 原图（jpg、png、tif、bmp、gif、webp，认不出的 bin）
 //	    └── <snapshot_id>.tiles/        原图分块：<级>/<x>_<y>.<jpg|png>，索引里算一项
 //
 // 按 snapshot_id 存（快照不会变，不需要失效）。索引是 JSON 加内存：每次写盘是整份重写，所以合并着写——存入、

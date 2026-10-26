@@ -9,9 +9,10 @@ import (
 const MaxDepth = 32
 
 // 只收这几种扩展名（和浏览器上传、server 收的格式一致；格式最终按文件头的魔数判断）。
-var supportedExts = map[string]bool{".jpg": true, ".jpeg": true, ".tif": true, ".tiff": true, ".png": true}
+var supportedExts = map[string]bool{".jpg": true, ".jpeg": true, ".tif": true, ".tiff": true, ".png": true,
+	".bmp": true, ".gif": true, ".webp": true}
 
-// SupportedImage：扩展名是 jpg、jpeg、tif、tiff、png（不分大小写）。
+// SupportedImage：扩展名是 jpg、jpeg、tif、tiff、png、bmp、gif、webp（不分大小写）。
 func SupportedImage(name string) bool {
 	return supportedExts[strings.ToLower(filepath.Ext(name))]
 }

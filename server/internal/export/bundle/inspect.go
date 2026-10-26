@@ -26,7 +26,7 @@ func Inspect(ctx context.Context, src PageSource, format Format, item Item, page
 	}
 	ra := &rangeReader{ctx: ctx, src: src, page: page, blocks: map[int64][]byte{}}
 	if format != FormatPDF {
-		head := make([]byte, min(page.Size, 8))
+		head := make([]byte, min(page.Size, 12))
 		if err := readFull(ra, head, 0); err != nil {
 			return wrap(err)
 		}

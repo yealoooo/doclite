@@ -186,7 +186,7 @@ def unique(b):  # 加一段注释：图片不变，内容和以前上传过的�
     if b[:4] == b'\x89PNG':  # PNG：在 IEND 前插 tEXt 块
         d = b'tEXtComment\x00' + t
         return b[:-12] + struct.pack('>I', len(d) - 4) + d + struct.pack('>I', zlib.crc32(d)) + b[-12:]
-    return b + t  # TIFF：末尾追加
+    return b + t  # TIFF、BMP、GIF、WebP：末尾追加
 
 def put(rel, sample=None, data=None, raw=False):
     p = os.path.join(out, rel)
@@ -221,6 +221,10 @@ put('reject/multipage-2p.tif', 'tiff-multipage-2p.tif', raw=True)
 for f in ['reject-jpeg-arith.jpg', 'reject-tiff-jpeg2000.tif']:
     put('reject/' + f, data=open(os.path.join(repo, 'web/scripts/samples/encoding', f), 'rb').read())
 put('reject/not-image.jpg', data=b'this is not an image\n')
+for s in ['bmp-rgb24.bmp', 'bmp-1bit.bmp', 'gif-single.gif', 'webp-lossy-alpha.webp']:
+    put('formats/' + s, s)
+for s in ['gif-multipage-2f.gif', 'webp-multipage-anim.webp']:
+    put('formats/' + s, s, raw=True)
 print('样本已生成：' + out)
 PY
 ```
@@ -239,6 +243,7 @@ PY
 | `project/` | `P_01.jpg` | PROJ-09 |
 | `migrate/` | `M_01.jpg` | STOR-08（可选） |
 | `reject/` | `multipage-2p.tif`（两页 TIFF）、`reject-jpeg-arith.jpg`（算术编码的 JPEG）、`reject-tiff-jpeg2000.tif`（JPEG 2000 压缩的 TIFF）、`not-image.jpg`（不是图片） | FILE-20、FILE-21 |
+| `formats/` | 40×56 的小页面：`bmp-rgb24.bmp`（24 位，200 dpi）、`bmp-1bit.bmp`（1 位，300 dpi）、`gif-single.gif`（单帧）、`webp-lossy-alpha.webp`（有损带透明），外加 `gif-multipage-2f.gif`（两帧动画）、`webp-multipage-anim.webp`（动画）两个会被拒的 | FILE-26 |
 
 ---
 
@@ -896,7 +901,7 @@ PY
   2. 在系统对话框里按 ⌘⇧G 输入 `~/doclite-acceptance`，回车，单击选中 `batch-A`，点 `打开`。
   3. 等几秒，进 `batch-A` 看。
 - 预期：
-  - 第 2 步：提示 `已加入上传队列：4 个文件，传到「验收-MMDD」`，说明里含 `跳过 1 个`（原因是 `不支持的文件类型（只收 jpg、jpeg、tif、tiff、png）`，指 `readme.txt`）。
+  - 第 2 步：提示 `已加入上传队列：4 个文件，传到「验收-MMDD」`，说明里含 `跳过 1 个`（原因是 `不支持的文件类型（只收 jpg、jpeg、tif、tiff、png、bmp、gif、webp）`，指 `readme.txt`）。
   - 第 3 步：
     - `验收-MMDD` 下面出现 `batch-A`，里面有 `vol-1`（`P01.jpg`、`P02.jpg`）和 `vol-2`（`P03.jpg`、`P04.jpg`）。
     - 没有 `readme.txt`，也没有 `.DS_Store`。
@@ -1051,7 +1056,7 @@ PY
 - 预期：都是失败，原因如下：
   - `reject-jpeg-arith.jpg`：`不支持的图片格式（算术编码的 JPEG），请换个保存格式重扫`
   - `reject-tiff-jpeg2000.tif`：`不支持的图片格式（JPEG 2000 压缩的 TIFF），请换个保存格式重扫`
-  - `not-image.jpg`：含 `只接受 JPEG、PNG 和 TIFF`
+  - `not-image.jpg`：含 `只接受 JPEG、PNG、TIFF、BMP、GIF 和 WebP`
 
 ### FILE-22 搜索文件名
 - 端：客户端｜账号：demo_scanner｜只读
@@ -1110,6 +1115,26 @@ PY
 - 预期：
   - 第 2 步：按钮是灰的，悬停显示 `这个文件夹已归档并封存：要修改先解除封存（可以重扫、看图、改备注）`。
   - 第 3 步：菜单里的 `移到第…页` 是灰的。
+
+### FILE-26 BMP、GIF、WebP 的上传、封面和看原图
+- 端：客户端｜账号：demo_scanner｜改数据
+- 数据：`~/doclite-acceptance/formats/` 的 6 个文件
+- 步骤：
+  1. 在 `验收-MMDD` 里新建 `格式`，进去。
+  2. 点 `上传文件`，按 ⌘⇧G 输入 `~/doclite-acceptance/formats`，回车，⌘A 全选，点 `打开`。
+  3. 点提示里的 `查看`，等几秒。
+  4. 回 `文件目录` → `验收-MMDD/格式`，依次单击 4 个文件，看右侧详情面板的 `规格`。
+  5. 右键 `bmp-rgb24.bmp`，选 `查看原图`，等原图出来；点 `下一个` 依次看另外 3 个；按 Esc。
+- 预期：
+  - 第 2 步：系统对话框里 6 个文件都能选（文件类型是 `图片（JPEG、PNG、TIFF、BMP、GIF、WebP）`）；提示 `已加入上传队列：6 个文件，传到「格式」`。
+  - 第 3 步：
+    - `bmp-rgb24.bmp`、`bmp-1bit.bmp`、`gif-single.gif`、`webp-lossy-alpha.webp` 变成 `✓ 已入库`；后两个带 `DPI 未知`。
+    - `gif-multipage-2f.gif` 失败，原因 `这是多帧（动画）GIF，不支持，请保存成单张图片再上传`；`webp-multipage-anim.webp` 失败，原因 `这是动画 WebP，不支持，请保存成单张图片再上传`。
+  - 第 4 步：
+    - `格式` 里只有 4 个文件，都有封面（不是 `无封面` 占位；WebP 透明的部分是白的）。
+    - `规格`：`bmp-rgb24.bmp` 是 `image/bmp`、`40×56 · 200 dpi · 彩色`；`bmp-1bit.bmp` 是 `40×56 · 300 dpi · 黑白`；`gif-single.gif` 是 `image/gif`、`40×56 · DPI 未知 · 彩色`；`webp-lossy-alpha.webp` 是 `image/webp`、`40×56 · DPI 未知 · 彩色`。
+  - 第 5 步：4 张都能显示原图（状态栏原图出来后显示 `原图 · <x> 秒`），不出现 `看不了原图，只显示封面`；有的话记下文件名和提示原文。
+- 说明：导出 PDF 时这三种格式都要由服务端转换（PDF 不能原样放），由 API 测试覆盖（`TestExportRunAndDownload` 里有 BMP、GIF、WebP 各一页）；想在界面上看，可以把 `格式` 文件夹归档成一件、锁定后在 `导出` 里导出 PDF，4 页都应在 PDF 里，透明的地方是白的。
 
 ---
 
@@ -2710,6 +2735,7 @@ DEMO-A 里的「验收-MMDD」文件夹、归类树的「验收-MMDD 全宗」�
 | FILE-23 | 移到第…页（调顺序） |  |  |
 | FILE-24 | 排列方式；不按扫描顺序时不能调顺序 |  |  |
 | FILE-25 | 封存的文件夹不能调顺序 |  |  |
+| FILE-26 | BMP、GIF、WebP 的上传、封面和看原图 |  |  |
 | SCAN-01 | 扫描上传页 |  |  |
 | SCAN-02 | 选监控目录（系统对话框） |  |  |
 | SCAN-03 | 选目标文件夹，并在里面新建文件夹 |  |  |

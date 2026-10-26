@@ -352,14 +352,20 @@ func extOf(mime string) string {
 		return "png"
 	case "image/tiff":
 		return "tif"
+	case "image/bmp":
+		return "bmp"
+	case "image/gif":
+		return "gif"
+	case "image/webp":
+		return "webp"
 	}
 	return "bin"
 }
 
-// contentTypeOf 是原图响应的 Content-Type：只认三种，其他一律 application/octet-stream。
+// contentTypeOf 是原图响应的 Content-Type：只认上传收的六种，其他一律 application/octet-stream。
 func contentTypeOf(mime string) string {
 	switch mime {
-	case "image/jpeg", "image/png", "image/tiff":
+	case "image/jpeg", "image/png", "image/tiff", "image/bmp", "image/gif", "image/webp":
 		return mime
 	}
 	return "application/octet-stream"

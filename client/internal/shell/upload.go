@@ -219,7 +219,7 @@ type PickResult struct {
 }
 
 // imageFilter 是系统对话框的文件类型。
-const imageFilter = "*.jpg;*.jpeg;*.tif;*.tiff;*.png"
+const imageFilter = "*.jpg;*.jpeg;*.tif;*.tiff;*.png;*.bmp;*.gif;*.webp"
 
 // openDialog 建一个系统的打开对话框；主窗口看得见时挂在主窗口上。
 func (s *Shell) openDialog() *application.OpenFileDialogStruct {
@@ -241,7 +241,7 @@ func (s *Shell) pickForUpload(mode string) ([]string, error) {
 		return []string{dir}, nil
 	}
 	return d.SetTitle("选择要上传的图片").CanChooseFiles(true).CanChooseDirectories(false).
-		AddFilter("图片（JPEG、PNG、TIFF）", imageFilter).PromptForMultipleSelection()
+		AddFilter("图片（JPEG、PNG、TIFF、BMP、GIF、WebP）", imageFilter).PromptForMultipleSelection()
 }
 
 // collectFiles：选的文件（传到所选文件夹本身）。不支持的扩展名、读不了的放进 skipped。
@@ -250,7 +250,7 @@ func collectFiles(paths []string) ([]upload.LocalFile, []upload.Skipped) {
 	skipped := []upload.Skipped{}
 	for _, p := range paths {
 		if !upload.SupportedImage(p) {
-			skipped = append(skipped, upload.Skipped{Path: p, Reason: "不支持的文件类型（只收 jpg、jpeg、tif、tiff、png）"})
+			skipped = append(skipped, upload.Skipped{Path: p, Reason: "不支持的文件类型（只收 jpg、jpeg、tif、tiff、png、bmp、gif、webp）"})
 			continue
 		}
 		st, err := os.Stat(p)
@@ -270,7 +270,7 @@ func collectFolder(root string) ([]upload.LocalFile, []upload.Skipped) {
 	skipped := []upload.Skipped{}
 	bad := upload.WalkImages(root, filepath.Base(filepath.Clean(root)), 1, nil, func(f upload.LocalFile) {
 		if !upload.SupportedImage(f.Path) {
-			skipped = append(skipped, upload.Skipped{Path: f.Path, Reason: "不支持的文件类型（只收 jpg、jpeg、tif、tiff、png）"})
+			skipped = append(skipped, upload.Skipped{Path: f.Path, Reason: "不支持的文件类型（只收 jpg、jpeg、tif、tiff、png、bmp、gif、webp）"})
 			return
 		}
 		files = append(files, f)

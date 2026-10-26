@@ -3,7 +3,8 @@
 //
 // zip（不压缩、UTF-8 名、超过 4 GB 时 Go 自动用 zip64）里的条目：
 //   - PDF：每件一个 `<名字>.pdf`（平铺），然后 `清单.csv`、`目录.xlsx`；
-//   - 原图包：每件一个文件夹 `<名字>/`，里面 `0001.<jpg|png|tif>`……（字节原样拷贝），然后 `清单.csv`、`目录.xlsx`。
+//   - 原图包：每件一个文件夹 `<名字>/`，里面 `0001.<jpg|png|tif|bmp|gif|webp>`……（字节原样拷贝），然后 `清单.csv`、
+//     `目录.xlsx`。
 //
 // `<名字>` 一般就是档号，规则见 [ItemNames]。
 //
@@ -12,7 +13,7 @@
 // 临时文件在 Options.TmpDir 下的 `export-*` 目录里，成功、出错、取消时都删掉。
 //
 // PDF 的规则：页面尺寸见 plan.go，方向和写法见 pdf.go，各格式原样嵌入还是转换见 jpeg.go、png.go、tiff.go、
-// tiffjpeg.go、tiffconv.go。硬性规则 11 的例外（server 解码像素，只在转换时）只在这个包里。
+// tiffjpeg.go、tiffconv.go，BMP、GIF、WebP 一律转换（decoded.go）。硬性规则 11 的例外（server 解码像素，只在转换时）只在这个包里。
 package bundle
 
 import (
@@ -68,7 +69,7 @@ type Page struct {
 	VersionNo  int
 	SHA256     [32]byte
 	Size       int64
-	// MIME 是快照的 mime_type：image/jpeg、image/png、image/tiff。
+	// MIME 是快照的 mime_type：image/jpeg、image/png、image/tiff、image/bmp、image/gif、image/webp。
 	MIME string
 	// UploadName 是原文件名（清单.csv 里的"原文件名"）。
 	UploadName string
@@ -373,11 +374,11 @@ func (g *generator) imagesPage(dir string, page *Page) error {
 	defer rc.Close()
 	// 扩展名按文件头取：先看开头几个字节，和 mime 对不上算 Integrity。
 	br := bufio.NewReaderSize(&sourceReader{r: rc}, 64<<10)
-	head, err := br.Peek(8)
+	head, err := br.Peek(12) // WebP 要 12 字节（RIFF、长度、WEBP）
 	if err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
-	if len(head) < 8 && int64(len(head)) < page.Size {
+	if len(head) < 12 && int64(len(head)) < page.Size {
 		return sourceErr("读原图失败", fmt.Errorf("只读到 %d 字节，快照记的是 %d 字节", len(head), page.Size))
 	}
 	format, err := checkMagic(head, page.MIME)

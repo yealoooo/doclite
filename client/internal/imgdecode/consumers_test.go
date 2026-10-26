@@ -4,10 +4,16 @@ import (
 	"bytes"
 	"context"
 	"image"
+	_ "image/gif"
 	"image/jpeg"
+	_ "image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/webp"
 
 	"doclite/client/internal/imgdecode"
 	"doclite/client/internal/tiles"
@@ -79,4 +85,65 @@ func TestCoverAndTilesJPEGTIFF(t *testing.T) {
 			imgdecode.CompareColors(t, got, c.ref)
 		})
 	}
+}
+
+// BMP、GIF、WebP（M11-7）：经这个包解码、切块，最高一级（40×56 只有一块）和解码器直接解出的原图比较平均颜色；块的颜色
+// 跟着文件头的颜色模式走（1 位黑白 → 1 位 PNG，灰度 → 灰度 JPEG）。带透明的块铺了白底，只看能切出来。
+func TestTilesBMPGIFWebP(t *testing.T) {
+	for _, c := range []struct {
+		file   string
+		mode   tiles.Mode
+		format string
+	}{
+		{"bmp-rgb24.bmp", tiles.ModeRGB, "jpg"},
+		{"bmp-1bit.bmp", tiles.ModeBilevel, "png"},
+		{"bmp-gray4.bmp", tiles.ModeGray, "jpg"},
+		{"gif-single.gif", tiles.ModeRGB, "jpg"},
+		{"webp-lossy.webp", tiles.ModeRGB, "jpg"},
+		{"webp-lossy-alpha.webp", tiles.ModeRGB, "jpg"},
+		{"webp-lossless-alpha.webp", tiles.ModeRGB, "jpg"},
+	} {
+		t.Run(c.file, func(t *testing.T) {
+			path := filepath.Join("../../testdata/samples", c.file)
+			plan, err := tiles.NewPlan(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.Mode != c.mode || plan.Format != c.format || plan.Width != 40 || plan.Height != 56 {
+				t.Fatalf("计划不对：%+v", plan)
+			}
+			out := t.TempDir()
+			if _, err := plan.Generate(context.Background(), out, tiles.Options{}); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(out, tiles.TilePath(6, 0, 0, c.format)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _, err := image.Decode(bytes.NewReader(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if b := got.Bounds(); b.Dx() != 40 || b.Dy() != 56 {
+				t.Fatalf("块是 %v，应为 40×56", b)
+			}
+			if strings.Contains(c.file, "alpha") {
+				return
+			}
+			ref, _, err := image.Decode(bytes.NewReader(readFile(t, path)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			imgdecode.CompareColors(t, got, ref)
+		})
+	}
+}
+
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

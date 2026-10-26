@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/jpeg"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"doclite/client/internal/imagehdr"
@@ -55,7 +56,8 @@ func boxLuma(img image.Image, b image.Rectangle, fx, fy float64) int {
 }
 
 // 封面尺寸：长边 400、不放大、短边按比例；方向 6 的 JPEG 转正后是竖的；透明铺白；JPEG 压缩的 TIFF 也有封面（颜色的
-// 比较见 imgdecode 的 consumers_test.go）；多页 TIFF 不带封面。转正、铺白和切块是同一套代码（tiles 的 TestOrientation）。
+// 比较见 imgdecode 的 consumers_test.go）；BMP、GIF、WebP 也有封面；多页 TIFF、多帧 GIF、动画 WebP 不带封面。转正、铺白
+// 和切块是同一套代码（tiles 的 TestOrientation）。
 func TestCoverSamples(t *testing.T) {
 	cases := []struct {
 		file string
@@ -73,6 +75,15 @@ func TestCoverSamples(t *testing.T) {
 		{"tiff-none-gray8.tif", 595, 842, true},
 		{"tiff-jpeg-ycbcr.tif", 595, 842, true},
 		{"tiff-multipage-2p.tif", 827, 1169, false},
+		{"bmp-rgb24.bmp", 40, 56, true},
+		{"bmp-1bit.bmp", 40, 56, true},
+		{"bmp-gray4.bmp", 40, 56, true},
+		{"gif-single.gif", 40, 56, true},
+		{"webp-lossy.webp", 40, 56, true},
+		{"webp-lossy-alpha.webp", 40, 56, true},
+		{"webp-lossless-alpha.webp", 40, 56, true},
+		{"gif-multipage-2f.gif", 40, 56, false},
+		{"webp-multipage-anim.webp", 40, 56, false},
 	}
 	for _, c := range cases {
 		t.Run(c.file, func(t *testing.T) {
@@ -87,8 +98,11 @@ func TestCoverSamples(t *testing.T) {
 				t.Fatalf("没有生成封面：%s", cv.Reason)
 			}
 			img := checkCover(t, cv.Data, c.w, c.h)
-			// 样本左上角有一块深色的"方向块"（约在宽 7%–18%、高 4%–8% 处），右下角是空白：转正后的封面左上角那块
-			// 应该比右下角暗得多。
+			// 样本左上角有一块深色的"方向块"（约在宽 7%–18%、高 4%–8% 处；BMP、GIF、WebP 的小样本是顶上的蓝条），右下角
+			// 是空白：转正后的封面左上角那块应该比右下角暗得多。带透明的 WebP 顶上是半透明的（铺白后变浅），不比。
+			if strings.Contains(c.file, "alpha.webp") {
+				return
+			}
 			b := img.Bounds()
 			if tl, br := boxLuma(img, b, 0.10, 0.05), boxLuma(img, b, 0.90, 0.95); tl > br-100 {
 				t.Errorf("方向不对：左上角亮度 %d，右下角 %d", tl, br)

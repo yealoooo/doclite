@@ -28,6 +28,9 @@ import (
 //   - 旧式 LZW（第一个条带以 00 01 开头）；
 //   - 无压缩、LZW、Deflate、PackBits：预测器不是 1、2（浮点预测 3）；1、2、4 位的样本用了水平差分预测器，或者分平面存、
 //     带额外通道（要转换，但转换只支持 8、16 位）；分块的一行不是整字节。
+//
+// BMP、GIF、WebP（M11-7）导出时都要整张解码再转换（golang.org/x/image/bmp、image/gif、golang.org/x/image/webp），
+// 这里拒绝的是这几个解码器解不了的写法，读文件头时顺便判断（header.reject，规则见 bmp.go、gif.go、webp.go）。
 
 // encodingErr 是给扫描员看的提示（server 原样放进 400 invalid_image 的 message，网页显示"图片不合规：…"）。
 func encodingErr(reason string) *Error {
@@ -42,6 +45,10 @@ func checkEncoding(h *header) error {
 		}
 	case TIFF:
 		return checkTIFF(h)
+	case BMP, GIF, WebP:
+		if h.reject != "" {
+			return encodingErr(h.reject)
+		}
 	}
 	return nil
 }

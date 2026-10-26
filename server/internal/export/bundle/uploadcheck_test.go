@@ -2,6 +2,7 @@ package bundle
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -16,6 +17,8 @@ import (
 //
 // 文件：常见样本、这个包的夹具（tiff-jpeg-cmyk、-gray、-rgb-ids、ojpeg 四个和客户端 internal/imgdecode/testdata 里的
 // 相同）、imagehdr 的罕见编码夹具（reject-*、accept-*，生成方法见 platform/imagehdr/encoding_test.go）。
+//
+// BMP、GIF、WebP 导出时都要整张解码，上传通过的还要真的转换一次（解码器解得了才算"导出做得了"）。
 func TestUploadCheckMatchesExport(t *testing.T) {
 	dirs := []string{
 		filepath.Join("..", "..", "..", "testdata", "samples"),
@@ -31,7 +34,8 @@ func TestUploadCheckMatchesExport(t *testing.T) {
 		}
 		for _, e := range entries {
 			ext := filepath.Ext(e.Name())
-			if ext != ".jpg" && ext != ".png" && ext != ".tif" {
+			decoded := ext == ".bmp" || ext == ".gif" || ext == ".webp"
+			if ext != ".jpg" && ext != ".png" && ext != ".tif" && !decoded {
 				continue
 			}
 			n++
@@ -46,7 +50,10 @@ func TestUploadCheckMatchesExport(t *testing.T) {
 				continue
 			}
 			page := Page{Size: int64(len(data)), MIME: mimeOf(e.Name())}
-			_, exErr := analyze(bytes.NewReader(data), &page, opts, false)
+			plan, exErr := analyze(bytes.NewReader(data), &page, opts, false)
+			if exErr == nil && decoded {
+				_, exErr = plan.convert.decode(context.Background())
+			}
 			var p *problem
 			unsupported := errors.As(exErr, &p) && p.kind == KindUnsupported ||
 				errors.Is(exErr, imagehdr.ErrUnsupported) || errors.Is(exErr, imagehdr.ErrMultiPage)

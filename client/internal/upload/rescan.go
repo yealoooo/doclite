@@ -20,7 +20,7 @@ import (
 // 给页面的提示（和 web/src/lib/rescan.ts 一样）。
 const (
 	MsgIncomplete = "选的文件不完整或还在写入，请等扫描软件写完再选"
-	MsgExtension  = "只能选 jpg、jpeg、tif、tiff、png 的图片"
+	MsgExtension  = "只能选 jpg、jpeg、tif、tiff、png、bmp、gif、webp 的图片"
 	msgChanged    = "选的文件在上传时被改动了，请等扫描软件写完再选"
 	msgUnreadable = "读不了选的文件"
 )

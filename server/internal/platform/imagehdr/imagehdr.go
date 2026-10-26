@@ -1,4 +1,4 @@
-// Package imagehdr 读 JPEG、PNG、TIFF 的文件头，不解码像素（requirements 5.6"文件头"，硬性规则 11）。
+// Package imagehdr 读 JPEG、PNG、TIFF、BMP、GIF、WebP 的文件头，不解码像素（requirements 5.6"文件头"，硬性规则 11）。
 //
 // **这个包有两份**（M7-5：server、web、client 三个模块代码上互不依赖，requirements 1.3）：这一份是 server 的
 // （server/internal/platform/imagehdr），另一份在桌面客户端的 client/internal/imagehdr。两份的代码、测试和夹具
@@ -7,23 +7,30 @@
 //
 // server 上传时用它读格式、宽高、DPI、颜色模式、方向，并拒绝多页 TIFF 和超过像素上限的图；桌面客户端生成封面前
 // 也用它（另一份）读方向，两份同步时两边对同一个文件得出的方向一致。上传（server 和客户端上传前的检查）用
-// [ParseUpload]，另外拒绝导出 PDF 做不了的罕见编码（M7-3，encoding.go）。
+// [ParseUpload]，另外拒绝导出 PDF 做不了的罕见编码（M7-3，encoding.go）和 Go 解码不了的 BMP、GIF、WebP 写法
+// （M11-7，bmp.go、gif.go、webp.go）。
 //
 // 规则：
-//   - 格式按文件开头的魔数识别（不看扩展名）：JPEG `FF D8 FF`，PNG 8 字节签名，经典 TIFF `II*\0` / `MM\0*`。
-//     其他格式（包括 BigTIFF、GIF、BMP、WebP、PDF）是 [ErrUnsupported]；空文件、比魔数还短但开头对得上的是
-//     [ErrInvalid]（截断）。
+//   - 格式按文件开头的魔数识别（不看扩展名）：JPEG `FF D8 FF`，PNG 8 字节签名，经典 TIFF `II*\0` / `MM\0*`，
+//     BMP `BM`，GIF `GIF87a` / `GIF89a`，WebP `RIFF????WEBP`（M11-7，用户 2026-10-26）。其他格式（包括 BigTIFF、
+//     HEIC、PDF）是 [ErrUnsupported]；空文件、比魔数还短但开头对得上的是 [ErrInvalid]（截断）。
 //   - JPEG：读到第一个 SOF 为止，取 SOF 的宽高、精度、分量数；APP0 的 JFIF 密度；APP1 的 EXIF（只读 IFD0 的
 //     Orientation、XResolution、ResolutionUnit）。取第一个以 `Exif\0\0` 开头、结构读得下去的 APP1，读不下去的跳过；
 //     EXIF 坏了只当没有 EXIF，不拒绝图片。标记前的 FF 填充可以有，标记段之间的其他多余字节不支持（算读不出来）。
 //   - PNG：IHDR 的宽高、位深、颜色类型；IDAT 之前的 pHYs。PNG 不看方向。
 //   - TIFF：第一个 IFD 的宽高、BitsPerSample、SamplesPerPixel、PhotometricInterpretation、ExtraSamples、
 //     XResolution、ResolutionUnit、Orientation；再沿 IFD 链往后看，有不是缩略图的 IFD 就是多页（[ErrMultiPage]）。
+//   - BMP：文件头和 DIB 头的宽高（高为负表示从上往下存）、位深、压缩方式、横向的像素/米；位深不超过 8 时看调色板。
+//   - GIF：逻辑画布的宽高；沿块往后数图像，第二个图像就是多帧（动画，[ErrMultiPage]）。
+//   - WebP：VP8（有损）、VP8L（无损）的宽高，VP8X（扩展）的画布宽高；动画（VP8X 的动画标记、ANIM / ANMF 块）是
+//     [ErrMultiPage]。
 //   - DPI（四舍五入，0 表示未知）：JPEG 先看 JFIF（单位是英寸或厘米、密度不为 0），没有再看 EXIF；PNG 看 pHYs
-//     （单位是米时）；TIFF 和 EXIF 看 XResolution 和 ResolutionUnit（没写单位按英寸，单位是"无"算未知）。
+//     （单位是米时）；TIFF 和 EXIF 看 XResolution 和 ResolutionUnit（没写单位按英寸，单位是"无"算未知）；BMP 看
+//     横向的像素/米（0 算没写）；GIF、WebP 没有 DPI。
 //   - 颜色模式（按这个顺序）：调色板（PNG 颜色类型 3、TIFF Photometric=3）→ color；1 位 → bw；单通道（包括带
-//     alpha 的）→ gray；其余（包括 CMYK）→ color。JPEG 的分量数不是 1、3、4 时为空。
-//   - 方向：JPEG 看 EXIF，TIFF 看 Orientation，PNG 不看；不在 1–8 里的值按 1。方向是 5–8 时交换宽高，
+//     alpha 的）→ gray；其余（包括 CMYK）→ color。JPEG 的分量数不是 1、3、4 时为空。BMP（不超过 8 位）、GIF
+//     只有调色板：调色板全是灰色（R=G=B）时按单通道算（1 位 bw，其余 gray），否则 color；WebP 都是 color。
+//   - 方向：JPEG 看 EXIF，TIFF 看 Orientation，PNG、BMP、GIF、WebP 不看；不在 1–8 里的值按 1。方向是 5–8 时交换宽高，
 //     [Info] 的宽高是转正后的。
 //   - 宽或高为 0 是 [ErrInvalid]；宽或高超过 int32、像素总数超过上限是 [ErrTooLarge]。
 //
@@ -50,6 +57,9 @@ const (
 	JPEG Format = "jpeg"
 	PNG  Format = "png"
 	TIFF Format = "tiff" // 只有经典 TIFF，不支持 BigTIFF。
+	BMP  Format = "bmp"
+	GIF  Format = "gif"  // 只收单帧
+	WebP Format = "webp" // 只收单帧（不是动画）
 )
 
 // MIME 是 `file_snapshots.mime_type`，也是传 S3 时的 Content-Type。
@@ -61,11 +71,17 @@ func (f Format) MIME() string {
 		return "image/png"
 	case TIFF:
 		return "image/tiff"
+	case BMP:
+		return "image/bmp"
+	case GIF:
+		return "image/gif"
+	case WebP:
+		return "image/webp"
 	}
 	return ""
 }
 
-// Ext 是 S3 key 的扩展名（硬性规则 7）：jpg、png、tif，不用原文件的扩展名。
+// Ext 是 S3 key 的扩展名（硬性规则 7）：jpg、png、tif、bmp、gif、webp，不用原文件的扩展名。
 func (f Format) Ext() string {
 	switch f {
 	case JPEG:
@@ -74,6 +90,12 @@ func (f Format) Ext() string {
 		return "png"
 	case TIFF:
 		return "tif"
+	case BMP:
+		return "bmp"
+	case GIF:
+		return "gif"
+	case WebP:
+		return "webp"
 	}
 	return ""
 }
@@ -87,6 +109,12 @@ func (f Format) label() string {
 		return "PNG"
 	case TIFF:
 		return "TIFF"
+	case BMP:
+		return "BMP"
+	case GIF:
+		return "GIF"
+	case WebP:
+		return "WebP"
 	}
 	return string(f)
 }
@@ -109,7 +137,7 @@ type Info struct {
 	DPI int
 	// ColorMode 为空表示不知道（JPEG 的分量数不是 1、3、4 这种少见的情况）。
 	ColorMode ColorMode
-	// Orientation 是 EXIF / TIFF 的方向，1–8；没写、不认识的值、PNG 都是 1。
+	// Orientation 是 EXIF / TIFF 的方向，1–8；没写、不认识的值、PNG、BMP、GIF、WebP 都是 1。
 	Orientation int
 }
 
@@ -123,16 +151,17 @@ func (i Info) StoredSize() (width, height int) {
 
 // 错误的类别。用 errors.Is 判断；*Error 的 Error() 是给用户看的说明。
 var (
-	// ErrUnsupported：不是 JPEG、PNG、经典 TIFF（server 返回 415 unsupported_media_type）。
+	// ErrUnsupported：不是 JPEG、PNG、经典 TIFF、BMP、GIF、WebP（server 返回 415 unsupported_media_type）。
 	ErrUnsupported = errors.New("不支持的图片格式")
 	// ErrInvalid：空文件、截断、结构读不下去、宽高为 0（400 invalid_image）。
 	ErrInvalid = errors.New("图片文件头读不出来")
-	// ErrMultiPage：多页 TIFF（400 invalid_image，提示先拆页）。
-	ErrMultiPage = errors.New("多页 TIFF")
+	// ErrMultiPage：多页 TIFF、多帧 GIF、动画 WebP（400 invalid_image，提示先拆页或保存成单张）。
+	ErrMultiPage = errors.New("多页图片")
 	// ErrTooLarge：宽高超出 int32、像素总数超过上限（400 invalid_image）。
 	ErrTooLarge = errors.New("图片尺寸超过上限")
 	// ErrUnsupportedEncoding：格式认得，但编码方式导出 PDF 时既不能原样嵌入、也转换不了（算术编码的 JPEG、
-	// JPEG 2000 压缩的 TIFF……，见 encoding.go）。只有 [ParseUpload] 返回它（400 invalid_image，提示换个保存格式重扫）。
+	// JPEG 2000 压缩的 TIFF……，见 encoding.go；Go 解码不了的 BMP、GIF、WebP 写法，见 bmp.go、gif.go、webp.go）。
+	// 只有 [ParseUpload] 返回它（400 invalid_image，提示换个保存格式重扫）。
 	ErrUnsupportedEncoding = errors.New("不支持的图片编码")
 )
 
@@ -202,6 +231,12 @@ func parse(r io.ReaderAt, size int64, maxPixels int64) (Info, *header, error) {
 		h, err = readPNG(s)
 	case TIFF:
 		h, err = readTIFF(s)
+	case BMP:
+		h, err = readBMP(s)
+	case GIF:
+		h, err = readGIF(s)
+	case WebP:
+		h, err = readWebP(s)
 	}
 	if err != nil {
 		var e *Error
@@ -227,17 +262,25 @@ type header struct {
 	channels      int  // 颜色通道数，不含 alpha；0 表示不知道
 	orientation   int  // 文件里写的方向；0 表示没写
 	dpi           int  // 已按格式的规则换算好；0 表示未知
-	multiPage     bool // TIFF 第一个 IFD 之后还有不是缩略图的 IFD
+	multiPage     bool // TIFF 第一个 IFD 之后还有不是缩略图的 IFD；GIF 有第二帧；WebP 是动画
 
 	// 给 [ParseUpload] 查编码方式用的：JPEG 的 SOF 标记和分量数（不限于 1、3、4），TIFF 的结构和第一个 IFD。
 	sof   byte
 	comps int
 	tiff  *tiffBlock
 	ifd0  ifd
+	// reject 是 BMP、GIF、WebP 读文件头时顺便判断出的"Go 解码不了"的写法（给 [ParseUpload] 用，空串表示能解）。
+	reject string
 }
 
 func judge(h header, maxPixels int64) (Info, error) {
 	if h.multiPage {
+		switch h.format {
+		case GIF:
+			return Info{}, newErr(ErrMultiPage, "这是多帧（动画）GIF，不支持，请保存成单张图片再上传")
+		case WebP:
+			return Info{}, newErr(ErrMultiPage, "这是动画 WebP，不支持，请保存成单张图片再上传")
+		}
 		return Info{}, newErr(ErrMultiPage, "这是多页 TIFF，不支持，请先拆成单页再上传")
 	}
 	w, ht := h.width, h.height
@@ -359,6 +402,11 @@ var (
 	magicTIFFBE    = []byte("MM\x00*")
 	magicBigTIFFLE = []byte("II+\x00")
 	magicBigTIFFBE = []byte("MM\x00+")
+	magicBMP       = []byte("BM")
+	magicGIF87     = []byte("GIF87a")
+	magicGIF89     = []byte("GIF89a")
+	magicRIFF      = []byte("RIFF") // WebP：RIFF、4 字节长度、WEBP
+	magicWebP      = []byte("WEBP")
 )
 
 var supported = []struct {
@@ -369,6 +417,9 @@ var supported = []struct {
 	{magicPNG, PNG},
 	{magicTIFFLE, TIFF},
 	{magicTIFFBE, TIFF},
+	{magicBMP, BMP},
+	{magicGIF87, GIF},
+	{magicGIF89, GIF},
 }
 
 func hasPrefix(b, prefix []byte) bool {
@@ -379,20 +430,26 @@ func detect(s *source) (Format, error) {
 	if s.size == 0 {
 		return "", invalidf("文件是空的")
 	}
-	head := s.head[:min(len(s.head), 8)]
+	head := s.head[:min(len(s.head), 12)]
 	for _, m := range supported {
 		if hasPrefix(head, m.magic) {
 			return m.format, nil
 		}
 	}
-	if hasPrefix(head, magicBigTIFFLE) || hasPrefix(head, magicBigTIFFBE) {
-		return "", newErr(ErrUnsupported, "不支持 BigTIFF，只接受 JPEG、PNG 和经典 TIFF")
+	if hasPrefix(head, magicRIFF) && len(head) >= 12 && hasPrefix(head[8:], magicWebP) {
+		return WebP, nil
 	}
-	// 比魔数还短，但开头对得上：是被截断的 JPEG、PNG 或 TIFF。
+	if hasPrefix(head, magicBigTIFFLE) || hasPrefix(head, magicBigTIFFBE) {
+		return "", newErr(ErrUnsupported, "不支持 BigTIFF，只接受 JPEG、PNG、经典 TIFF、BMP、GIF 和 WebP")
+	}
+	// 比魔数还短，但开头对得上：是被截断的 JPEG、PNG、TIFF、BMP、GIF 或 WebP。
 	for _, m := range supported {
 		if len(head) < len(m.magic) && hasPrefix(m.magic, head) {
 			return "", invalidf("文件只有 %d 字节，不完整", len(head))
 		}
 	}
-	return "", newErr(ErrUnsupported, "不支持这种格式，只接受 JPEG、PNG 和 TIFF（按文件开头的字节判断，不看扩展名）")
+	if len(head) < 12 && (hasPrefix(head, magicRIFF) || hasPrefix(magicRIFF, head)) {
+		return "", invalidf("文件只有 %d 字节，不完整", len(head))
+	}
+	return "", newErr(ErrUnsupported, "不支持这种格式，只接受 JPEG、PNG、TIFF、BMP、GIF 和 WebP（按文件开头的字节判断，不看扩展名）")
 }

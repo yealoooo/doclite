@@ -71,7 +71,7 @@ func validateJob(job *Job) *Error {
 }
 
 func formatOfMIME(mime string) imagehdr.Format {
-	for _, f := range []imagehdr.Format{imagehdr.JPEG, imagehdr.PNG, imagehdr.TIFF} {
+	for _, f := range []imagehdr.Format{imagehdr.JPEG, imagehdr.PNG, imagehdr.TIFF, imagehdr.BMP, imagehdr.GIF, imagehdr.WebP} {
 		if f.MIME() == mime {
 			return f
 		}
@@ -79,7 +79,7 @@ func formatOfMIME(mime string) imagehdr.Format {
 	return ""
 }
 
-// 魔数（和 imagehdr 的识别一致）。
+// 魔数（和 imagehdr 的识别一致；WebP 是 `RIFF????WEBP`，在 checkMagic 里另外判断）。
 var magics = []struct {
 	magic  string
 	format imagehdr.Format
@@ -88,18 +88,29 @@ var magics = []struct {
 	{"\x89PNG\r\n\x1a\n", imagehdr.PNG},
 	{"II*\x00", imagehdr.TIFF},
 	{"MM\x00*", imagehdr.TIFF},
+	{"BM", imagehdr.BMP},
+	{"GIF87a", imagehdr.GIF},
+	{"GIF89a", imagehdr.GIF},
 }
 
 // checkMagic 按文件开头的字节认格式，和快照的 mime 对不上算 Integrity（不是同一个文件了）。
 func checkMagic(head []byte, mime string) (imagehdr.Format, error) {
 	want := formatOfMIME(mime)
+	got := imagehdr.Format("")
 	for _, m := range magics {
 		if strings.HasPrefix(string(head), m.magic) {
-			if m.format != want {
-				return "", integrityf("文件开头是 %s，快照记的是 %s", strings.ToUpper(string(m.format)), mime)
-			}
-			return m.format, nil
+			got = m.format
+			break
 		}
 	}
-	return "", integrityf("文件开头不是 JPEG、PNG、TIFF，快照记的是 %s", mime)
+	if len(head) >= 12 && string(head[0:4]) == "RIFF" && string(head[8:12]) == "WEBP" {
+		got = imagehdr.WebP
+	}
+	switch {
+	case got == "":
+		return "", integrityf("文件开头不是 JPEG、PNG、TIFF、BMP、GIF、WebP，快照记的是 %s", mime)
+	case got != want:
+		return "", integrityf("文件开头是 %s，快照记的是 %s", strings.ToUpper(string(got)), mime)
+	}
+	return got, nil
 }
