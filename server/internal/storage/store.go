@@ -103,8 +103,8 @@ type snapshotTotal struct {
 	Bytes int64
 }
 
-// snapshotTotals：各存储的快照用量，一次分组查询；id 不为 nil 时只算这一个。file_snapshots 上没有带 file_size 的
-// 索引，要读整张表（存储页很少打开，可以接受）。没有快照的存储不在结果里。
+// snapshotTotals：各存储的快照用量，一次分组查询；id 不为 nil 时只算这一个。走迁移 0008 的
+// (storage_profile_id) INCLUDE (file_size) 索引，不读表。没有快照的存储不在结果里。
 func snapshotTotals(ctx context.Context, q db.Querier, id *uuid.UUID) (map[uuid.UUID]snapshotTotal, error) {
 	rows, err := q.Query(ctx, `SELECT storage_profile_id, count(*), COALESCE(sum(file_size), 0)::bigint
 FROM file_snapshots WHERE $1::uuid IS NULL OR storage_profile_id = $1

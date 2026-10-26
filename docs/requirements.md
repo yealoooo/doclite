@@ -73,6 +73,7 @@
 - **`0005_perf_indexes.sql`（M10-1，只加索引）**：`archive_item_files (project_id, file_id) INCLUDE (archive_item_id)`（看板按项目取挂接）、`file_reviews (project_id, reviewer_id) INCLUDE (file_id) WHERE status = 'open'`（可以分配的人、改派列表按项目取进行中的分配）。
 - **`0006_drop_plugins_menu.sql`（M10-7）**：删掉菜单 `system.plugins`（只有占位页），角色授权随外键级联删除。
 - **`0007_modifying_audit_indexes.sql`（M11-1，只加索引，用户 2026-10-25 同意）**：`archive_items (project_id, unsealed_at DESC NULLS LAST, id) WHERE source_status = 'modifying' AND deleted_at IS NULL`（修改中的件）、`audit_logs USING brin (created_at)`（审计日志按时间筛选，直接按 created_at 过滤）。
+- **`0008_snapshot_usage_index.sql`（M11-6，只加索引，用户 2026-10-26 同意）**：`file_snapshots (storage_profile_id) INCLUDE (file_size)`（存储用量只读索引，不扫整张快照表）。
 - 参考 SQL：`/Users/yanlong/project/doclite-project/bak/doclite-v3/docs/sql/key-queries.sql`（查重、path_code 分配、移动、分配、通过、软删除、导出预检、任务领取等）。
 - 0001 中 `cover_key` 注释"WebP、server 生成"已过时。预留不写：快照类型 auto/edit/restore、案卷（volume）、page_label、pdf_ocr/ofd、ocr_results。
 
@@ -193,7 +194,7 @@
 ### 5.4 存储配置（M0）
 
 - 界面 /system/storage：卡片列表、新增编辑、测试连接、设默认、删除。
-- **用量**（M11-5，2026-10-25）：列表（以及 GET {id}、新建、修改、设默认的响应）每个存储带 `snapshot_count`、`snapshot_bytes`：`file_snapshots` 里 storage_profile_id 是它的全部行数和 file_size 之和（恢复、复制的快照指向已有对象也照算，不算封面），列表一次分组查询；没有覆盖 file_size 的索引，要读整张快照表（页面很少打开）。卡片上有快照时显示"已用 1.62 TB（按快照统计）· 812,344 个快照"，没有时"还没有文件"。`in_use` 不变。
+- **用量**（M11-5，2026-10-25）：列表（以及 GET {id}、新建、修改、设默认的响应）每个存储带 `snapshot_count`、`snapshot_bytes`：`file_snapshots` 里 storage_profile_id 是它的全部行数和 file_size 之和（恢复、复制的快照指向已有对象也照算，不算封面），列表一次分组查询，走迁移 0008 的索引。卡片上有快照时显示"已用 1.62 TB（按快照统计）· 812,344 个快照"，没有时"还没有文件"。`in_use` 不变。
 - 字段见建表 SQL：endpoint 是 server 访问地址，public_endpoint 是工作站访问地址（预签名按它签，空时同 endpoint）；path_prefix 默认 `doclite/`；url_expire_hours 1–168，默认 24。
 - secret_key 用 `MASTER_KEY`（32 字节 base64，缺了不启动）AES-256-GCM 加密，绑定行 id，任何输出都不含它；解不开 → 500 `secret_unreadable`，界面提示重填。PATCH 不传或空串 = 不改。
 - 首次启动无存储配置时用 `S3_*` 环境变量登记默认的"SeaweedFS（随系统部署）"。
